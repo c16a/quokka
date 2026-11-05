@@ -2,9 +2,10 @@
 //! and removed. These changes only touch the queue, never the files on disk.
 
 use eframe::egui;
+use player_core::MediaItem;
 
 use crate::format;
-use crate::playback::Playback;
+use crate::playback::{Playback, QueueRequest};
 
 /// Height of a queue row's content.
 const ROW_HEIGHT: f32 = 52.0;
@@ -229,4 +230,30 @@ fn draw_close(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
     let stroke = egui::Stroke::new(1.5, color);
     painter.line_segment([c + egui::vec2(-r, -r), c + egui::vec2(r, r)], stroke);
     painter.line_segment([c + egui::vec2(r, -r), c + egui::vec2(-r, r)], stroke);
+}
+
+/// The right-click menu for a track: play it next, or add it to the end of the queue.
+pub fn track_menu(ui: &mut egui::Ui, queue: &mut Vec<QueueRequest>, track: &MediaItem) {
+    ui.set_min_width(180.0);
+    ui.spacing_mut().item_spacing.y = 4.0;
+    if menu_row(ui, "Play next") {
+        queue.push(QueueRequest::PlayNext(track.clone()));
+        ui.close();
+    }
+    if menu_row(ui, "Add to queue") {
+        queue.push(QueueRequest::AddToQueue(track.clone()));
+        ui.close();
+    }
+}
+
+/// One full-width entry in a menu, with its label inset from the left edge. Returns true when
+/// it was clicked.
+fn menu_row(ui: &mut egui::Ui, label: &str) -> bool {
+    let width = ui.available_width();
+    ui.spacing_mut().button_padding = egui::vec2(14.0, 6.0);
+    ui.add_sized(
+        [width, 32.0],
+        egui::Button::new((label.to_owned(), egui::Atom::grow())).corner_radius(6.0),
+    )
+    .clicked()
 }

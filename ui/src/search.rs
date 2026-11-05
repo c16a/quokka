@@ -4,6 +4,7 @@ use player_core::{Library, MediaItem};
 use crate::albums::{self, AlbumsView, PlayRequest, TILE_GAP};
 use crate::format;
 use crate::playback::QueueRequest;
+use crate::queue;
 
 /// Most songs listed for one search.
 const SONG_LIMIT: usize = 200;
@@ -153,16 +154,7 @@ impl SearchView {
                         if response.double_clicked() {
                             outcome.play = Some(play_from(library, song));
                         }
-                        response.context_menu(|ui| {
-                            if ui.button("Play next").clicked() {
-                                queue.push(QueueRequest::PlayNext(song.clone()));
-                                ui.close();
-                            }
-                            if ui.button("Add to queue").clicked() {
-                                queue.push(QueueRequest::AddToQueue(song.clone()));
-                                ui.close();
-                            }
-                        });
+                        response.context_menu(|ui| queue::track_menu(ui, queue, song));
                     }
                 }
             });

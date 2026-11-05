@@ -5,6 +5,7 @@ use player_core::{AlbumSummary, FavoriteKind, Library, MediaItem};
 
 use crate::format;
 use crate::playback::QueueRequest;
+use crate::queue;
 
 /// Height of a track row's content. Vertical padding comes from the row's frame.
 const TRACK_ROW_HEIGHT: f32 = 52.0;
@@ -339,16 +340,7 @@ impl AlbumsView {
                             index: n,
                         });
                     }
-                    response.context_menu(|ui| {
-                        if ui.button("Play next").clicked() {
-                            queue.push(QueueRequest::PlayNext(track.clone()));
-                            ui.close();
-                        }
-                        if ui.button("Add to queue").clicked() {
-                            queue.push(QueueRequest::AddToQueue(track.clone()));
-                            ui.close();
-                        }
-                    });
+                    response.context_menu(|ui| queue::track_menu(ui, queue, track));
                 }
             });
         (play, back)
