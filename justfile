@@ -42,7 +42,5 @@ cross target:
 
 # Cross-compile for every supported target (Apple Silicon macOS, not Intel).
 cross-all:
-    just cross x86_64-unknown-linux-gnu
-    just cross aarch64-unknown-linux-gnu
     just cross x86_64-pc-windows-gnu
     just cross aarch64-apple-darwin
