@@ -178,7 +178,6 @@ impl AlbumsView {
                 });
             });
         });
-        ui.separator();
 
         // Solid scroll bars take their own width, so they don't cover the track durations.
         ui.style_mut().spacing.scroll = egui::style::ScrollStyle::solid();

@@ -273,17 +273,46 @@ impl eframe::App for App {
         }
 
         let mut next_tab = self.tab;
+        // The sidebar fill is a shade apart from the main pane, and runs the full window height.
+        let panel = ui.visuals().panel_fill;
+        let sidebar_fill = if ui.visuals().dark_mode {
+            panel.gamma_multiply(1.25)
+        } else {
+            panel.lerp_to_gamma(egui::Color32::WHITE, 0.6)
+        };
+        let highlight = if ui.visuals().dark_mode {
+            sidebar_fill.gamma_multiply(1.5)
+        } else {
+            sidebar_fill.lerp_to_gamma(egui::Color32::BLACK, 0.06)
+        };
         egui::Panel::left("sidebar")
             .default_size(180.0)
             .resizable(false)
+            .show_separator_line(false)
+            .frame(
+                egui::Frame::new()
+                    .fill(sidebar_fill)
+                    .inner_margin(egui::Margin::symmetric(10, 12)),
+            )
             .show(ui, |ui| {
-                ui.add_space(12.0);
+                ui.spacing_mut().item_spacing.y = 4.0;
+                ui.spacing_mut().button_padding = egui::vec2(12.0, 8.0);
+                // Buttons grow when hovered by default, which made the items jump under the pointer.
+                let widgets = &mut ui.style_mut().visuals.widgets;
+                widgets.inactive.expansion = 0.0;
+                widgets.hovered.expansion = 0.0;
+                widgets.active.expansion = 0.0;
                 for (tab, label) in [
                     (Tab::Albums, "Albums"),
                     (Tab::Movies, "Movies"),
                     (Tab::Settings, "Settings"),
                 ] {
-                    if ui.selectable_label(self.tab == tab, label).clicked() {
+                    let selected = self.tab == tab;
+                    let width = ui.available_width();
+                    if ui
+                        .add_sized([width, 34.0], sidebar_item(selected, label, highlight))
+                        .clicked()
+                    {
                         next_tab = tab;
                     }
                 }
@@ -360,4 +389,18 @@ impl eframe::App for App {
             None => {}
         }
     }
+}
+
+/// A sidebar entry: label on the left, with a background only slightly different from the
+/// sidebar when it is the selected one.
+fn sidebar_item(selected: bool, label: &str, highlight: egui::Color32) -> egui::Button<'static> {
+    let fill = if selected {
+        highlight
+    } else {
+        egui::Color32::TRANSPARENT
+    };
+    egui::Button::new((label.to_owned(), egui::Atom::grow()))
+        .fill(fill)
+        .stroke(egui::Stroke::NONE)
+        .corner_radius(6.0)
 }
