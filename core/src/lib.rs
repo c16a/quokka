@@ -124,6 +124,17 @@ impl Library {
         scan::scan(&mut self.conn, root)
     }
 
+    /// Remove every file under `root` from the library. Nothing on disk is touched.
+    pub fn forget_root(&self, root: &Path) -> Result<usize> {
+        let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+        let prefix = root.to_string_lossy().into_owned();
+        let upper_bound = format!("{prefix}\u{10FFFF}");
+        Ok(self.conn.execute(
+            "DELETE FROM media WHERE path >= ?1 AND path < ?2",
+            params![prefix, upper_bound],
+        )?)
+    }
+
     /// Number of indexed files.
     pub fn count(&self) -> Result<i64> {
         Ok(self

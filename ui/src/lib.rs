@@ -6,7 +6,8 @@ mod movies;
 mod playback;
 mod settings_view;
 
-use std::path::{Path, PathBuf};
+use std::collections::VecDeque;
+use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -30,6 +31,7 @@ enum Tab {
     Settings,
 }
 
+/// The outcome of scanning one folder.
 type ScanResult = Result<ScanStats, String>;
 
 /// How long the library must stay quiet after a file change before rescanning.
@@ -43,8 +45,12 @@ struct App {
     albums: albums::AlbumsView,
     movies: movies::MoviesView,
     playback: Playback,
-    /// Set while a background scan is running.
-    scan: Option<Receiver<ScanResult>>,
+    /// The folder being scanned now, and the channel its result arrives on.
+    scan: Option<(PathBuf, Receiver<ScanResult>)>,
+    /// Folders waiting to be scanned. Each folder is scanned on its own, one after another.
+    queue: VecDeque<PathBuf>,
+    /// One line per folder scanned in the current run.
+    report: Vec<String>,
     /// Watches the library folder. Dropping it stops the watch.
     watcher: Option<notify::RecommendedWatcher>,
     change_tx: Sender<()>,
@@ -92,7 +98,7 @@ fn preference(theme: Theme) -> egui::ThemePreference {
 impl App {
     fn new(ctx: egui::Context, paths: Paths, settings: Settings, library: Library) -> Self {
         ctx.set_theme(preference(settings.theme));
-        let tab = if settings.library_root.is_some() {
+        let tab = if !settings.library_roots.is_empty() {
             Tab::Albums
         } else {
             Tab::Settings
@@ -107,6 +113,8 @@ impl App {
             movies: Default::default(),
             playback: Playback::new(),
             scan: None,
+            queue: VecDeque::new(),
+            report: Vec::new(),
             watcher: None,
             change_tx,
             changes,
@@ -114,12 +122,12 @@ impl App {
             status: String::new(),
         };
         app.reload_views();
-        match app.settings.library_root.clone() {
-            Some(root) => {
-                app.watch(&ctx, &root);
-                app.start_scan(&ctx, root);
-            }
-            None => app.status = "Choose your library folder to get started.".into(),
+        if app.settings.library_roots.is_empty() {
+            app.status = "Add a folder to get started.".into();
+        } else {
+            app.watch(&ctx);
+            let roots = app.settings.library_roots.clone();
+            app.enqueue(&ctx, roots);
         }
         app
     }
@@ -129,29 +137,61 @@ impl App {
         self.movies.reload(&self.library);
     }
 
-    /// Scan `root` on a worker thread. The worker opens its own connection,
-    /// so the UI stays responsive while files are read.
-    fn start_scan(&mut self, ctx: &egui::Context, root: PathBuf) {
+    /// Add folders to the scan queue. Each folder is scanned on its own. A folder that is
+    /// already queued or being scanned is skipped.
+    fn enqueue(&mut self, ctx: &egui::Context, roots: Vec<PathBuf>) {
+        let idle = self.scan.is_none() && self.queue.is_empty();
+        for root in roots {
+            let running = self.scan.as_ref().is_some_and(|(r, _)| *r == root);
+            if !running && !self.queue.contains(&root) {
+                self.queue.push_back(root);
+            }
+        }
+        if idle {
+            self.report.clear();
+        }
+        self.start_next(ctx);
+    }
+
+    /// Start scanning the next queued folder on a worker thread. The worker opens its own
+    /// connection, so the UI stays responsive while files are read.
+    fn start_next(&mut self, ctx: &egui::Context) {
         if self.scan.is_some() {
             return;
         }
+        let Some(root) = self.queue.pop_front() else {
+            return;
+        };
         let (tx, rx) = mpsc::channel();
         let db = self.paths.db.clone();
         let ctx = ctx.clone();
-        let status_root = root.clone();
+        let job = root.clone();
         thread::spawn(move || {
             let result = Library::open(&db)
-                .and_then(|mut lib| lib.scan(&root))
+                .and_then(|mut lib| lib.scan(&job))
                 .map_err(|e| e.to_string());
             let _ = tx.send(result);
             ctx.request_repaint();
         });
-        self.scan = Some(rx);
-        self.status = format!("Scanning {}…", status_root.display());
+        let more = match self.queue.len() {
+            0 => String::new(),
+            n => format!(" ({n} more queued)"),
+        };
+        self.status = format!("Scanning {}{more}…", root.display());
+        self.scan = Some((root, rx));
     }
 
-    /// Watch `root` for changes. A change schedules a rescan after a short quiet period.
-    fn watch(&mut self, ctx: &egui::Context, root: &Path) {
+    /// Save the folder list and watch all of its folders again.
+    fn save_and_watch(&mut self, ctx: &egui::Context) {
+        if let Err(e) = self.settings.save(&self.paths.settings) {
+            self.status = format!("Could not save settings: {e}");
+        }
+        self.watch(ctx);
+    }
+
+    /// Watch every folder for changes. A change schedules a rescan after a short quiet period.
+    fn watch(&mut self, ctx: &egui::Context) {
+        let roots = self.settings.library_roots.clone();
         let tx = self.change_tx.clone();
         let ctx = ctx.clone();
         let watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
@@ -162,13 +202,17 @@ impl App {
                 let _ = tx.send(());
                 ctx.request_repaint();
             }
-        })
-        .and_then(|mut watcher| {
-            watcher.watch(root, RecursiveMode::Recursive)?;
-            Ok(watcher)
         });
-        // If the folder can't be watched, the library still updates at startup and on Rescan.
-        self.watcher = watcher.ok();
+        self.watcher = match watcher {
+            Ok(mut watcher) => {
+                // A folder that can't be watched is still scanned at startup and on Rescan.
+                for root in &roots {
+                    let _ = watcher.watch(root, RecursiveMode::Recursive);
+                }
+                Some(watcher)
+            }
+            Err(_) => None,
+        };
     }
 
     /// Start a rescan once the library has been quiet for `RESCAN_DELAY`.
@@ -182,43 +226,44 @@ impl App {
         let now = Instant::now();
         if now < at {
             ctx.request_repaint_after(at - now);
-        } else if self.scan.is_none() {
+        } else if self.scan.is_none() && self.queue.is_empty() {
             self.rescan_at = None;
-            if let Some(root) = self.settings.library_root.clone() {
-                self.start_scan(ctx, root);
-            }
+            let roots = self.settings.library_roots.clone();
+            self.enqueue(ctx, roots);
         }
     }
 
-    fn poll_scan(&mut self) {
-        let Some(rx) = &self.scan else {
+    fn poll_scan(&mut self, ctx: &egui::Context) {
+        let Some((root, rx)) = self.scan.as_ref() else {
             return;
         };
-        match rx.try_recv() {
-            Ok(Ok(stats)) => {
-                self.status = format!(
-                    "Scan complete: {} added or changed, {} unchanged, {} removed.",
-                    stats.indexed, stats.unchanged, stats.removed
-                );
-                self.scan = None;
-                self.reload_views();
-            }
-            Ok(Err(message)) => {
-                self.status = format!("Scan failed: {message}");
-                self.scan = None;
-            }
-            Err(TryRecvError::Empty) => {}
-            Err(TryRecvError::Disconnected) => {
-                self.status = "Scan stopped unexpectedly.".into();
-                self.scan = None;
-            }
+        let result = match rx.try_recv() {
+            Ok(result) => result,
+            Err(TryRecvError::Empty) => return,
+            Err(TryRecvError::Disconnected) => Err("the scan stopped unexpectedly".to_string()),
+        };
+        let name = root.display().to_string();
+        self.scan = None;
+        let line = match result {
+            Ok(stats) => format!(
+                "{name}: {} added or changed, {} unchanged, {} removed.",
+                stats.indexed, stats.unchanged, stats.removed
+            ),
+            // One unreadable folder (for example an unplugged drive) doesn't stop the others.
+            Err(e) => format!("{name}: could not be scanned ({e})."),
+        };
+        self.report.push(line);
+        self.reload_views();
+        if self.queue.is_empty() {
+            self.status = self.report.join("\n");
         }
+        self.start_next(ctx);
     }
 }
 
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        self.poll_scan();
+        self.poll_scan(ui.ctx());
         self.handle_changes(ui.ctx());
         self.playback.advance_if_finished();
         let ctx = ui.ctx().clone();
@@ -275,20 +320,35 @@ impl eframe::App for App {
         }
 
         match action {
-            Some(settings_view::Action::ChooseFolder(root)) => {
-                self.settings.library_root = Some(root.clone());
-                match self.settings.save(&self.paths.settings) {
-                    Ok(()) => {
-                        self.watch(&ctx, &root);
-                        self.start_scan(&ctx, root);
-                    }
-                    Err(e) => self.status = format!("Could not save settings: {e}"),
+            Some(settings_view::Action::AddFolder(folder)) => {
+                if self.settings.library_roots.contains(&folder) {
+                    self.status = format!("{} is already in the library.", folder.display());
+                } else {
+                    self.settings.library_roots.push(folder.clone());
+                    self.save_and_watch(&ctx);
+                    self.enqueue(&ctx, vec![folder]);
                 }
             }
-            Some(settings_view::Action::Rescan) => {
-                if let Some(root) = self.settings.library_root.clone() {
-                    self.start_scan(&ctx, root);
+            Some(settings_view::Action::RemoveFolder(i)) => {
+                if i < self.settings.library_roots.len() && self.scan.is_none() {
+                    let root = self.settings.library_roots.remove(i);
+                    self.queue.retain(|queued| *queued != root);
+                    self.status = match self.library.forget_root(&root) {
+                        Ok(removed) => format!("Removed {} ({removed} files).", root.display()),
+                        Err(e) => format!("Could not remove {}: {e}", root.display()),
+                    };
+                    self.reload_views();
+                    self.save_and_watch(&ctx);
                 }
+            }
+            Some(settings_view::Action::RescanFolder(i)) => {
+                if let Some(root) = self.settings.library_roots.get(i).cloned() {
+                    self.enqueue(&ctx, vec![root]);
+                }
+            }
+            Some(settings_view::Action::RescanAll) => {
+                let roots = self.settings.library_roots.clone();
+                self.enqueue(&ctx, roots);
             }
             Some(settings_view::Action::SetTheme(theme)) => {
                 self.settings.theme = theme;

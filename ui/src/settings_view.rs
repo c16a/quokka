@@ -5,13 +5,16 @@ use player_core::{Settings, Theme};
 
 /// Something the user asked for on the Settings screen.
 pub enum Action {
-    ChooseFolder(PathBuf),
-    Rescan,
+    AddFolder(PathBuf),
+    /// The index into `Settings::library_roots`.
+    RemoveFolder(usize),
+    RescanFolder(usize),
+    RescanAll,
     SetTheme(Theme),
 }
 
 /// Settings screen. Returns the action the user chose this frame, if any.
-/// `status` is the latest message from the app, such as a scan result or an error.
+/// `status` is the latest message from the app: the folder being scanned, or the results.
 pub fn show(ui: &mut egui::Ui, settings: &Settings, busy: bool, status: &str) -> Option<Action> {
     let mut action = None;
 
@@ -21,28 +24,35 @@ pub fn show(ui: &mut egui::Ui, settings: &Settings, busy: bool, status: &str) ->
         ui.weak(status);
     }
     ui.add_space(4.0);
-    ui.label("Folder to scan for audio and video files:");
-    match &settings.library_root {
-        Some(root) => {
-            ui.monospace(root.display().to_string());
-        }
-        None => {
-            ui.weak("Not set");
-        }
-    }
-    ui.add_space(12.0);
+    ui.label("Folders scanned for audio and video files:");
+    ui.add_space(4.0);
 
     ui.add_enabled_ui(!busy, |ui| {
+        if settings.library_roots.is_empty() {
+            ui.weak("No folders yet.");
+        }
+        for (i, root) in settings.library_roots.iter().enumerate() {
+            ui.horizontal(|ui| {
+                ui.monospace(root.display().to_string());
+                if ui.button("Rescan").clicked() {
+                    action = Some(Action::RescanFolder(i));
+                }
+                if ui.button("Remove").clicked() {
+                    action = Some(Action::RemoveFolder(i));
+                }
+            });
+        }
+        ui.add_space(8.0);
         ui.horizontal(|ui| {
-            if ui.button("Choose folder…").clicked()
+            if ui.button("Add folder…").clicked()
                 && let Some(folder) = rfd::FileDialog::new()
-                    .set_title("Choose your library folder")
+                    .set_title("Choose a folder for your library")
                     .pick_folder()
             {
-                action = Some(Action::ChooseFolder(folder));
+                action = Some(Action::AddFolder(folder));
             }
-            if settings.library_root.is_some() && ui.button("Rescan").clicked() {
-                action = Some(Action::Rescan);
+            if !settings.library_roots.is_empty() && ui.button("Rescan all").clicked() {
+                action = Some(Action::RescanAll);
             }
         });
     });

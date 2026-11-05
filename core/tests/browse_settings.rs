@@ -35,9 +35,31 @@ fn settings_round_trip_and_default_when_missing() {
     assert_eq!(Settings::load(&path).unwrap(), Settings::default());
 
     let settings = Settings {
-        library_root: Some(dir.path().join("music")),
+        library_roots: vec![dir.path().join("music"), dir.path().join("films")],
+        legacy_root: None,
         theme: Theme::Dark,
     };
     settings.save(&path).unwrap();
     assert_eq!(Settings::load(&path).unwrap(), settings);
+}
+
+#[test]
+fn single_folder_from_older_settings_is_migrated() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    std::fs::write(&path, r#"{ "library_root": "/music", "theme": "dark" }"#).unwrap();
+
+    let settings = Settings::load(&path).unwrap();
+    assert_eq!(
+        settings.library_roots,
+        vec![std::path::PathBuf::from("/music")]
+    );
+    assert_eq!(settings.legacy_root, None);
+    assert_eq!(settings.theme, Theme::Dark);
+
+    // Saving writes the list, not the old single folder.
+    settings.save(&path).unwrap();
+    let saved = std::fs::read_to_string(&path).unwrap();
+    assert!(saved.contains("library_roots"));
+    assert!(!saved.contains("library_root\""));
 }
