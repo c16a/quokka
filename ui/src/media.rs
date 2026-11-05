@@ -11,6 +11,8 @@ use souvlaki::{
     SeekDirection,
 };
 
+use player_core::MediaItem;
+
 use crate::format;
 use crate::playback::Playback;
 
@@ -112,11 +114,12 @@ impl Media {
                 .duration_ms
                 .and_then(|ms| u64::try_from(ms).ok())
                 .map(Duration::from_millis);
+            let cover = cover_file(&item);
             let _ = self.controls.set_metadata(MediaMetadata {
                 title: Some(&title),
                 album: item.album.as_deref(),
                 artist,
-                cover_url: None,
+                cover_url: cover.as_deref(),
                 duration,
             });
         }
@@ -131,4 +134,13 @@ impl Media {
         self.shown = Some((id, state));
         self.sent_at = Some(Instant::now());
     }
+}
+
+/// Write the track's embedded cover to a temporary file, and return its `file://` URL. The
+/// system reads the cover from there. `None` when the track has no cover or it can't be written.
+fn cover_file(item: &MediaItem) -> Option<String> {
+    let bytes = player_core::read_cover(&item.path)?;
+    let path = std::env::temp_dir().join(format!("player-cover-{}", item.id));
+    std::fs::write(&path, bytes).ok()?;
+    Some(format!("file://{}", path.display()))
 }

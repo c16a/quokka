@@ -44,7 +44,11 @@ fn open_output() -> Result<MixerDeviceSink> {
     let mut last_error = String::from("no audio output device found");
     for device in devices {
         match DeviceSinkBuilder::from_device(device).and_then(|b| b.open_stream()) {
-            Ok(sink) => return Ok(sink),
+            Ok(mut sink) => {
+                // Quitting the app is the normal way to stop audio, so rodio's warning about it is noise.
+                sink.log_on_drop(false);
+                return Ok(sink);
+            }
             Err(e) => last_error = e.to_string(),
         }
     }
