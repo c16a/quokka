@@ -12,6 +12,7 @@ pub enum Action {
     RescanAll,
     SetTheme(Theme),
     SetReplayGain(ReplayGainMode),
+    SetLyricsOnline(bool),
 }
 
 /// Settings screen. Returns the action the user chose this frame, if any.
@@ -63,11 +64,17 @@ pub fn show(ui: &mut egui::Ui, settings: &Settings, busy: bool, status: &str) ->
     ui.add_space(4.0);
     ui.label("Theme:");
     let mut theme = settings.theme;
-    ui.horizontal(|ui| {
-        ui.selectable_value(&mut theme, Theme::System, "System");
-        ui.selectable_value(&mut theme, Theme::Light, "Light");
-        ui.selectable_value(&mut theme, Theme::Dark, "Dark");
-    });
+    egui::ComboBox::from_id_salt("theme")
+        .selected_text(match theme {
+            Theme::System => "System",
+            Theme::Light => "Light",
+            Theme::Dark => "Dark",
+        })
+        .show_ui(ui, |ui| {
+            ui.selectable_value(&mut theme, Theme::System, "System");
+            ui.selectable_value(&mut theme, Theme::Light, "Light");
+            ui.selectable_value(&mut theme, Theme::Dark, "Dark");
+        });
     if theme != settings.theme {
         action = Some(Action::SetTheme(theme));
     }
@@ -78,14 +85,37 @@ pub fn show(ui: &mut egui::Ui, settings: &Settings, busy: bool, status: &str) ->
     ui.label("ReplayGain, which levels tracks using the loudness tags in each file:");
     ui.add_space(4.0);
     let mut mode = settings.replay_gain;
-    ui.horizontal(|ui| {
-        ui.selectable_value(&mut mode, ReplayGainMode::Off, "Off");
-        ui.selectable_value(&mut mode, ReplayGainMode::Track, "Track");
-        ui.selectable_value(&mut mode, ReplayGainMode::Album, "Album");
-    });
+    egui::ComboBox::from_id_salt("replay_gain")
+        .selected_text(match mode {
+            ReplayGainMode::Off => "Off",
+            ReplayGainMode::Track => "Track",
+            ReplayGainMode::Album => "Album",
+        })
+        .show_ui(ui, |ui| {
+            ui.selectable_value(&mut mode, ReplayGainMode::Off, "Off");
+            ui.selectable_value(&mut mode, ReplayGainMode::Track, "Track");
+            ui.selectable_value(&mut mode, ReplayGainMode::Album, "Album");
+        });
     if mode != settings.replay_gain {
         action = Some(Action::SetReplayGain(mode));
     }
+
+    ui.add_space(24.0);
+    ui.heading("Lyrics");
+    ui.add_space(4.0);
+    ui.label("Look up synced lyrics on lrclib.net:");
+    ui.add_space(4.0);
+    let mut online = settings.lyrics_online;
+    egui::ComboBox::from_id_salt("lyrics_online")
+        .selected_text(if online { "On" } else { "Off" })
+        .show_ui(ui, |ui| {
+            ui.selectable_value(&mut online, false, "Off");
+            ui.selectable_value(&mut online, true, "On");
+        });
+    if online != settings.lyrics_online {
+        action = Some(Action::SetLyricsOnline(online));
+    }
+    ui.weak("For tracks with no .lrc file beside them. Sends each track's title, artist, album and length to lrclib.net. Lyrics found are cached in the library. A .lrc file always takes priority.");
 
     action
 }

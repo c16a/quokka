@@ -3,7 +3,7 @@ use rusqlite::Connection;
 use crate::Result;
 
 /// Bump when the schema changes and add a matching migration step below.
-const SCHEMA_VERSION: i64 = 6;
+const SCHEMA_VERSION: i64 = 7;
 
 /// Per-connection settings and schema migration.
 pub(crate) fn configure(conn: &Connection) -> Result<()> {
@@ -31,6 +31,9 @@ pub(crate) fn configure(conn: &Connection) -> Result<()> {
     }
     if version < 6 {
         conn.execute_batch(SCHEMA_V6)?;
+    }
+    if version < 7 {
+        conn.execute_batch(SCHEMA_V7)?;
     }
     if version != SCHEMA_VERSION {
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
@@ -148,4 +151,13 @@ CREATE TABLE play_history (
     played_at INTEGER NOT NULL
 );
 CREATE INDEX play_history_by_media ON play_history(media_id);
+";
+
+/// Lyrics looked up online, cached per track. `text` is NULL when the lookup found nothing.
+const SCHEMA_V7: &str = "
+CREATE TABLE lyrics (
+    media_id INTEGER PRIMARY KEY REFERENCES media(id) ON DELETE CASCADE,
+    text     TEXT,
+    fetched  INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+);
 ";

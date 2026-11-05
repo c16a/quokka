@@ -9,6 +9,7 @@ mod db;
 mod details;
 mod favorites;
 mod history;
+mod lyrics;
 mod metadata;
 mod playlist;
 mod replaygain;
@@ -26,6 +27,10 @@ pub use browse::{AlbumFilter, AlbumSort, AlbumSummary};
 pub use details::{TrackDetails, track_details};
 pub use favorites::FavoriteKind;
 pub use history::Recent;
+pub use lyrics::{
+    LyricLine, Lyrics, LyricsQuery, RemoteLyrics, best_lyrics, fetch_lyrics, lyrics_from_text,
+    parse_lrc, sidecar_lyrics,
+};
 pub use playlist::PlaylistSummary;
 pub use replaygain::replay_gain_factor;
 pub use scan::ScanStats;

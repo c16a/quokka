@@ -41,6 +41,9 @@ pub struct Settings {
     pub theme: Theme,
     #[serde(default)]
     pub replay_gain: ReplayGainMode,
+    /// Whether to look up lyrics on lrclib.net for tracks with no `.lrc` file. Off until the user turns it on.
+    #[serde(default)]
+    pub lyrics_online: bool,
 }
 
 impl Settings {

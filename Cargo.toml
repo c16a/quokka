@@ -29,6 +29,7 @@ serde_json = { version = "1.0.154", default-features = false, features = ["std"]
 symphonia-adapter-opus-rs = { version = "0.1.1" }
 tempfile = { version = "3.27.0", default-features = false, features = ["getrandom"] }
 thiserror = { version = "2.0.21", default-features = false, features = ["std"] }
+ureq = { version = "3.4.0", default-features = false, features = ["rustls", "gzip"] }
 walkdir = { version = "2.5.0", default-features = false }
 player-core = { path = "core" }
 player-playback = { path = "playback" }

@@ -207,6 +207,14 @@ impl App {
         self.session_saved = Some(self.playback.session());
     }
 
+    /// Turn lookups on or off for lyrics, and save the choice.
+    fn set_lyrics_online(&mut self, on: bool) {
+        self.settings.lyrics_online = on;
+        if let Err(e) = self.settings.save(&self.paths.settings) {
+            self.status = format!("Could not save settings: {e}");
+        }
+    }
+
     /// Log each track as it starts playing, and refresh the recent lists when one does.
     fn record_plays(&mut self) {
         let current = self.playback.current_id();
@@ -453,6 +461,7 @@ impl eframe::App for App {
             });
         }
         let panel = self.playback.panel;
+        let mut lyrics_outcome = side::LyricsOutcome::default();
         if self.playback.has_current() && panel != Panel::Closed {
             egui::Panel::right("side_panel")
                 .default_size(320.0)
@@ -461,12 +470,27 @@ impl eframe::App for App {
                 .frame(egui::Frame::new().fill(sidebar_fill))
                 .show(ui, |ui| match panel {
                     Panel::Queue => queue::show(ui, &mut self.queue_view, &mut self.playback),
-                    Panel::Lyrics => self
-                        .side
-                        .lyrics(ui, self.playback.current_item().as_deref()),
-                    Panel::Info => self.side.info(ui, self.playback.current_item().as_deref()),
+                    Panel::Lyrics => {
+                        lyrics_outcome = self.side.lyrics(
+                            ui,
+                            &self.library,
+                            self.playback.current_item().as_deref(),
+                            self.playback.position().unwrap_or_default(),
+                            self.settings.lyrics_online,
+                        );
+                    }
+                    Panel::Info => {
+                        self.side
+                            .info(ui, &self.library, self.playback.current_item().as_deref())
+                    }
                     Panel::Closed => {}
                 });
+        }
+        if let Some(at) = lyrics_outcome.seek {
+            self.playback.seek(at.as_secs_f64());
+        }
+        if lyrics_outcome.enable {
+            self.set_lyrics_online(true);
         }
         let mut queue_requests: Vec<MenuRequest> = Vec::new();
         let mut action = None;
@@ -573,6 +597,7 @@ impl eframe::App for App {
                 let roots = self.settings.library_roots.clone();
                 self.enqueue(&ctx, roots);
             }
+            Some(settings_view::Action::SetLyricsOnline(on)) => self.set_lyrics_online(on),
             Some(settings_view::Action::SetReplayGain(mode)) => {
                 self.settings.replay_gain = mode;
                 self.playback.set_replay_gain(mode);

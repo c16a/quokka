@@ -39,6 +39,7 @@ fn settings_round_trip_and_default_when_missing() {
         legacy_root: None,
         theme: Theme::Dark,
         replay_gain: ReplayGainMode::Album,
+        lyrics_online: true,
     };
     settings.save(&path).unwrap();
     assert_eq!(Settings::load(&path).unwrap(), settings);

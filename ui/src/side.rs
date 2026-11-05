@@ -1,55 +1,274 @@
-//! The lyrics and track info panels, beside the main view. Both read the playing file's tags
-//! once per track.
+//! The lyrics and track info panels, beside the main view.
 
 use std::path::Path;
 use std::process::Command;
+use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::thread;
+use std::time::Duration;
 
 use eframe::egui;
-use player_core::{MediaItem, TrackDetails, track_details};
+use player_core::{
+    Library, LyricLine, Lyrics, LyricsQuery, MediaItem, RemoteLyrics, TrackDetails, best_lyrics,
+    fetch_lyrics, lyrics_from_text, sidecar_lyrics, track_details,
+};
 
 use crate::format;
 
+/// What the lyrics panel asked for this frame.
+#[derive(Default)]
+pub struct LyricsOutcome {
+    /// A synced line was clicked: seek to its time.
+    pub seek: Option<Duration>,
+    /// The user chose to turn on lookups on lrclib.net.
+    pub enable: bool,
+}
+
+/// Where the lookup for the current track stands.
+#[derive(Default, Clone, PartialEq, Eq)]
+enum Lookup {
+    #[default]
+    Idle,
+    Pending,
+    /// Finished. The cache holds the result, which may be that nothing was found.
+    Done,
+    Failed(String),
+}
+
+/// What a lookup sends back: the track it was for, and the result.
+type LookupResult = (i64, Result<Option<RemoteLyrics>, String>);
+
 #[derive(Default)]
 pub struct SidePanels {
-    /// The track the cached details belong to, and the details read from its file.
+    /// The track the state below belongs to.
     track: Option<i64>,
     details: Option<TrackDetails>,
+    /// A `.lrc` file beside the track. It overrides every other source.
+    sidecar: Option<Lyrics>,
+    /// The cached lookup: `None` never looked up, `Some(None)` looked up and nothing found,
+    /// `Some(Some(lyrics))` found.
+    cached: Option<Option<Lyrics>>,
+    lookup: Lookup,
+    results: Option<Receiver<LookupResult>>,
+    /// The synced line last scrolled into view.
+    scrolled: Option<usize>,
 }
 
 impl SidePanels {
-    /// The details of `item`, read from its file the first time they are asked for.
-    fn details(&mut self, item: &MediaItem) -> Option<&TrackDetails> {
-        if self.track != Some(item.id) {
-            self.track = Some(item.id);
-            self.details = track_details(&item.path);
+    /// Load what the panels need when the playing track changes.
+    fn load(&mut self, item: &MediaItem, library: &Library) {
+        if self.track == Some(item.id) {
+            return;
         }
-        self.details.as_ref()
+        self.track = Some(item.id);
+        self.details = track_details(&item.path);
+        self.sidecar = sidecar_lyrics(&item.path);
+        self.cached = library.cached_lyrics(item.id).unwrap_or(None);
+        self.lookup = Lookup::Idle;
+        self.results = None;
+        self.scrolled = None;
     }
 
-    /// The lyrics of the playing track, as the file's tags give them.
-    pub fn lyrics(&mut self, ui: &mut egui::Ui, item: Option<&MediaItem>) {
+    /// The lyrics to show now: the `.lrc` file if there is one, otherwise the best of the file's
+    /// tags and the cached lookup.
+    fn current(&self) -> Option<Lyrics> {
+        if let Some(sidecar) = &self.sidecar {
+            return Some(sidecar.clone());
+        }
+        let embedded = self
+            .details
+            .as_ref()
+            .and_then(|d| d.lyrics.as_deref())
+            .and_then(lyrics_from_text);
+        let cached = self.cached.clone().flatten();
+        best_lyrics(embedded.into_iter().chain(cached))
+    }
+
+    /// Store a finished lookup and remember its outcome. Results for another track are dropped.
+    fn collect(&mut self, library: &Library) {
+        let Some(rx) = self.results.take() else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok((id, result)) => {
+                if Some(id) != self.track {
+                    return;
+                }
+                match result {
+                    Ok(Some(remote)) => {
+                        let text = remote.synced.or(remote.plain);
+                        store(library, id, text.as_deref());
+                        self.cached = Some(text.as_deref().and_then(lyrics_from_text));
+                        self.lookup = Lookup::Done;
+                    }
+                    Ok(None) => {
+                        store(library, id, None);
+                        self.cached = Some(None);
+                        self.lookup = Lookup::Done;
+                    }
+                    // A failed lookup is not cached, so it can be tried again.
+                    Err(e) => self.lookup = Lookup::Failed(e),
+                }
+            }
+            Err(TryRecvError::Empty) => self.results = Some(rx),
+            Err(TryRecvError::Disconnected) => {
+                self.lookup = Lookup::Failed("the lookup stopped unexpectedly".into());
+            }
+        }
+    }
+
+    /// Start a lookup for the track on a background thread, unless one is needed and not running.
+    fn look_up(&mut self, item: &MediaItem, library: &Library, ctx: &egui::Context) {
+        self.collect(library);
+        // A `.lrc` file or synced lyrics already in hand need no lookup.
+        let needed = self.sidecar.is_none() && !self.current().is_some_and(|l| l.is_synced());
+        if !needed || self.lookup != Lookup::Idle {
+            return;
+        }
+        let artist = item
+            .artist
+            .clone()
+            .or_else(|| item.album_artist.clone())
+            .unwrap_or_default();
+        if artist.is_empty() {
+            // Lookups match on the artist, so a track without one can't be looked up.
+            self.lookup = Lookup::Done;
+            return;
+        }
+        let query = LyricsQuery {
+            title: format::title(item),
+            artist,
+            album: item.album.clone(),
+            duration: item
+                .duration_ms
+                .and_then(|ms| u64::try_from(ms).ok())
+                .map(Duration::from_millis),
+        };
+        let (tx, rx) = mpsc::channel();
+        let id = item.id;
+        let ctx = ctx.clone();
+        thread::spawn(move || {
+            let result = fetch_lyrics(&query);
+            let _ = tx.send((id, result));
+            ctx.request_repaint();
+        });
+        self.lookup = Lookup::Pending;
+        self.results = Some(rx);
+    }
+
+    /// The lyrics panel. Synced lines follow the playback position and can be clicked to seek.
+    /// When there are no lyrics and lookups are off, it offers to turn them on.
+    pub fn lyrics(
+        &mut self,
+        ui: &mut egui::Ui,
+        library: &Library,
+        item: Option<&MediaItem>,
+        position: Duration,
+        online: bool,
+    ) -> LyricsOutcome {
+        let mut outcome = LyricsOutcome::default();
         heading(ui, "Lyrics");
         let Some(item) = item else {
             indented(ui, |ui| {
                 ui.weak("Nothing playing.");
             });
-            return;
+            return outcome;
         };
-        let lyrics = self.details(item).and_then(|d| d.lyrics.clone());
+        self.load(item, library);
+        if online {
+            self.look_up(item, library, ui.ctx());
+        }
+        let current = self.current();
+        let lookup = self.lookup.clone();
+        let has_sidecar = self.sidecar.is_some();
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
-            .show(ui, |ui| match lyrics {
-                Some(text) => indented(ui, |ui| {
+            .show(ui, |ui| match &current {
+                Some(Lyrics::Synced(lines)) => {
+                    outcome.seek = self.synced(ui, lines, position);
+                }
+                Some(Lyrics::Plain(text)) => indented(ui, |ui| {
                     ui.label(text);
+                    if !online && !has_sidecar {
+                        ui.add_space(12.0);
+                        offer(ui, &mut outcome);
+                    }
                 }),
                 None => indented(ui, |ui| {
-                    ui.weak("This file has no lyrics in its tags.");
+                    if !online {
+                        ui.label("This track has no lyrics in its tags or a .lrc file beside it.");
+                        ui.add_space(4.0);
+                        offer(ui, &mut outcome);
+                    } else {
+                        match &lookup {
+                            Lookup::Idle | Lookup::Pending => {
+                                ui.horizontal(|ui| {
+                                    ui.spinner();
+                                    ui.weak("Looking up lyrics on lrclib.net…");
+                                });
+                            }
+                            Lookup::Done => {
+                                ui.weak("No lyrics were found on lrclib.net for this track.");
+                            }
+                            Lookup::Failed(e) => {
+                                ui.colored_label(
+                                    ui.visuals().error_fg_color,
+                                    format!("Couldn't reach lrclib.net: {e}"),
+                                );
+                                if ui.button("Try again").clicked() {
+                                    self.lookup = Lookup::Idle;
+                                }
+                            }
+                        }
+                    }
                 }),
             });
+        outcome
+    }
+
+    /// Synced lines, the current one highlighted and kept in view. Returns the time of a line
+    /// the user clicked.
+    fn synced(
+        &mut self,
+        ui: &mut egui::Ui,
+        lines: &[LyricLine],
+        position: Duration,
+    ) -> Option<Duration> {
+        let current = lines.iter().rposition(|line| line.at <= position);
+        let mut seek = None;
+        ui.add_space(8.0);
+        for (i, line) in lines.iter().enumerate() {
+            let is_current = Some(i) == current;
+            let text = if line.text.is_empty() {
+                " "
+            } else {
+                line.text.as_str()
+            };
+            let rich = egui::RichText::new(text).size(if is_current { 18.0 } else { 15.0 });
+            let rich = if is_current {
+                rich.strong()
+            } else {
+                rich.weak()
+            };
+            let response = ui
+                .horizontal(|ui| {
+                    ui.add_space(14.0);
+                    ui.add(egui::Label::new(rich).wrap().sense(egui::Sense::click()))
+                })
+                .inner;
+            if is_current && self.scrolled != Some(i) {
+                response.scroll_to_me(Some(egui::Align::Center));
+                self.scrolled = Some(i);
+            }
+            if response.clicked() {
+                seek = Some(line.at);
+            }
+            ui.add_space(6.0);
+        }
+        seek
     }
 
     /// Everything the file says about itself, and a button to show it in the file manager.
-    pub fn info(&mut self, ui: &mut egui::Ui, item: Option<&MediaItem>) {
+    pub fn info(&mut self, ui: &mut egui::Ui, library: &Library, item: Option<&MediaItem>) {
         heading(ui, "Track info");
         let Some(item) = item else {
             indented(ui, |ui| {
@@ -57,7 +276,8 @@ impl SidePanels {
             });
             return;
         };
-        let details = self.details(item);
+        self.load(item, library);
+        let details = self.details.as_ref();
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
@@ -165,5 +385,20 @@ fn reveal(path: &Path) {
             "player: could not show {} in the file manager: {e}",
             path.display()
         );
+    }
+}
+
+/// Save a lookup result, or the fact that nothing was found. Failure is logged, not shown.
+fn store(library: &Library, id: i64, text: Option<&str>) {
+    if let Err(e) = library.store_lyrics(id, text) {
+        eprintln!("player: could not cache lyrics: {e}");
+    }
+}
+
+/// The prompt that asks for permission before lyrics are looked up online.
+fn offer(ui: &mut egui::Ui, outcome: &mut LyricsOutcome) {
+    ui.label("Look up synced lyrics on lrclib.net? The title, artist, album and length of each track you open are sent there.");
+    if ui.button("Turn on lyrics lookup").clicked() {
+        outcome.enable = true;
     }
 }
