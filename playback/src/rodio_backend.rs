@@ -147,6 +147,11 @@ impl Player for RodioPlayer {
         }
     }
 
+    fn set_volume(&mut self, volume: f32) -> Result<()> {
+        self.output.set_volume(volume);
+        Ok(())
+    }
+
     fn last_error(&self) -> Option<String> {
         self.error.lock().ok().and_then(|slot| slot.clone())
     }

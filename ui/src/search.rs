@@ -3,6 +3,7 @@ use player_core::{Library, MediaItem};
 
 use crate::albums::{self, AlbumsView, PlayRequest, TILE_GAP};
 use crate::format;
+use crate::playback::QueueRequest;
 
 /// Most songs listed for one search.
 const SONG_LIMIT: usize = 200;
@@ -38,6 +39,7 @@ impl SearchView {
         albums: &mut AlbumsView,
         library: &Library,
         current: Option<i64>,
+        queue: &mut Vec<QueueRequest>,
     ) -> SearchOutcome {
         let ctx = ui.ctx().clone();
         let mut outcome = SearchOutcome::default();
@@ -151,6 +153,16 @@ impl SearchView {
                         if response.double_clicked() {
                             outcome.play = Some(play_from(library, song));
                         }
+                        response.context_menu(|ui| {
+                            if ui.button("Play next").clicked() {
+                                queue.push(QueueRequest::PlayNext(song.clone()));
+                                ui.close();
+                            }
+                            if ui.button("Add to queue").clicked() {
+                                queue.push(QueueRequest::AddToQueue(song.clone()));
+                                ui.close();
+                            }
+                        });
                     }
                 }
             });

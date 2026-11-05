@@ -4,6 +4,7 @@ use eframe::egui;
 use player_core::{AlbumSummary, FavoriteKind, Library, MediaItem};
 
 use crate::format;
+use crate::playback::QueueRequest;
 
 /// Height of a track row's content. Vertical padding comes from the row's frame.
 const TRACK_ROW_HEIGHT: f32 = 52.0;
@@ -98,6 +99,7 @@ impl AlbumsView {
         ui: &mut egui::Ui,
         library: &Library,
         current: Option<i64>,
+        queue: &mut Vec<QueueRequest>,
     ) -> Option<PlayRequest> {
         if self.albums.is_empty() {
             ui.label("No albums yet. Choose your library folder in Settings.");
@@ -111,7 +113,7 @@ impl AlbumsView {
         match self.selected {
             None => open = self.grid(ui, &ctx, library),
             Some(i) => {
-                let (request, go_back) = self.detail(ui, &ctx, library, current, i);
+                let (request, go_back) = self.detail(ui, &ctx, library, current, i, queue);
                 play = request;
                 back = go_back;
             }
@@ -168,6 +170,7 @@ impl AlbumsView {
         library: &Library,
         current: Option<i64>,
         i: usize,
+        queue: &mut Vec<QueueRequest>,
     ) -> (Option<PlayRequest>, bool) {
         let mut play = None;
         let mut back = false;
@@ -336,6 +339,16 @@ impl AlbumsView {
                             index: n,
                         });
                     }
+                    response.context_menu(|ui| {
+                        if ui.button("Play next").clicked() {
+                            queue.push(QueueRequest::PlayNext(track.clone()));
+                            ui.close();
+                        }
+                        if ui.button("Add to queue").clicked() {
+                            queue.push(QueueRequest::AddToQueue(track.clone()));
+                            ui.close();
+                        }
+                    });
                 }
             });
         (play, back)

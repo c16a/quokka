@@ -53,6 +53,11 @@ pub trait Player {
     fn duration(&self) -> Option<Duration>;
     fn state(&self) -> PlayerState;
 
+    /// Set the output level, from 0 (silent) to 1 (full).
+    fn set_volume(&mut self, _volume: f32) -> Result<()> {
+        Ok(())
+    }
+
     /// Why the current track stopped before its end, if it did. Cleared when a track loads.
     fn last_error(&self) -> Option<String> {
         None

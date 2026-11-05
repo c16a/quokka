@@ -2,8 +2,10 @@
 
 mod albums;
 mod format;
+mod media;
 mod movies;
 mod playback;
+mod queue;
 mod search;
 mod settings_view;
 
@@ -17,7 +19,7 @@ use eframe::egui;
 use notify::{RecursiveMode, Watcher};
 use player_core::{Library, ScanStats, Settings, Theme};
 
-use playback::Playback;
+use playback::{Playback, QueueRequest};
 
 /// Where the app keeps its library database and settings file.
 pub struct Paths {
@@ -48,6 +50,9 @@ struct App {
     search: search::SearchView,
     movies: movies::MoviesView,
     playback: Playback,
+    queue_view: queue::QueueView,
+    /// System media keys and now-playing display. `None` when the system has none.
+    media: Option<media::Media>,
     /// The folder being scanned now, and the channel its result arrives on.
     scan: Option<(PathBuf, Receiver<ScanResult>)>,
     /// Folders waiting to be scanned. Each folder is scanned on its own, one after another.
@@ -106,6 +111,7 @@ impl App {
         } else {
             Tab::Settings
         };
+        let media = media::Media::new(&ctx);
         let (change_tx, changes) = mpsc::channel();
         let mut app = Self {
             paths,
@@ -116,6 +122,8 @@ impl App {
             search: Default::default(),
             movies: Default::default(),
             playback: Playback::new(),
+            queue_view: Default::default(),
+            media,
             scan: None,
             queue: VecDeque::new(),
             report: Vec::new(),
@@ -271,6 +279,11 @@ impl eframe::App for App {
         self.handle_changes(ui.ctx());
         self.playback.advance_if_finished();
         let ctx = ui.ctx().clone();
+        playback::handle_keys(&ctx, &mut self.playback);
+        if let Some(media) = self.media.as_mut() {
+            media.handle_events(&mut self.playback);
+            media.publish(&self.playback);
+        }
         if self.playback.is_playing() {
             // Keep the slider moving while audio plays.
             ctx.request_repaint_after(Duration::from_millis(200));
@@ -338,14 +351,28 @@ impl eframe::App for App {
                 self.playback.show(ui);
             });
         }
+        if self.playback.has_current() && self.playback.queue_open {
+            egui::Panel::right("queue")
+                .default_size(300.0)
+                .resizable(false)
+                .show_separator_line(false)
+                .frame(egui::Frame::new().fill(sidebar_fill))
+                .show(ui, |ui| {
+                    queue::show(ui, &mut self.queue_view, &mut self.playback);
+                });
+        }
+        let mut queue_requests: Vec<QueueRequest> = Vec::new();
         let mut action = None;
         let mut search_outcome = None;
         let mut play = None;
         egui::CentralPanel::default().show(ui, |ui| match self.tab {
             Tab::Albums => {
-                play = self
-                    .albums
-                    .show(ui, &self.library, self.playback.current_id());
+                play = self.albums.show(
+                    ui,
+                    &self.library,
+                    self.playback.current_id(),
+                    &mut queue_requests,
+                );
             }
             Tab::Search => {
                 search_outcome = Some(self.search.show(
@@ -353,6 +380,7 @@ impl eframe::App for App {
                     &mut self.albums,
                     &self.library,
                     self.playback.current_id(),
+                    &mut queue_requests,
                 ));
             }
             Tab::Movies => self.movies.show(ui),
@@ -372,6 +400,12 @@ impl eframe::App for App {
         }
         if let Some(request) = play {
             self.playback.play_queue(request.tracks, request.index);
+        }
+        for request in queue_requests {
+            match request {
+                QueueRequest::PlayNext(item) => self.playback.play_next(item),
+                QueueRequest::AddToQueue(item) => self.playback.add_to_queue(item),
+            }
         }
 
         match action {

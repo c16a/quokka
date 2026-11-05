@@ -1,0 +1,232 @@
+//! The queue panel: the tracks that play after the current one. Rows can be dragged to reorder
+//! and removed. These changes only touch the queue, never the files on disk.
+
+use eframe::egui;
+
+use crate::format;
+use crate::playback::Playback;
+
+/// Height of a queue row's content.
+const ROW_HEIGHT: f32 = 52.0;
+
+/// State kept between frames: the queue index of the row being dragged, if any.
+#[derive(Default)]
+pub struct QueueView {
+    dragging: Option<usize>,
+}
+
+/// What the user asked for this frame. Applied after the rows are drawn.
+#[derive(Default)]
+struct Edits {
+    clear: bool,
+    remove: Option<usize>,
+    jump: Option<usize>,
+    /// The queue index of a row whose drag ended this frame.
+    dropped: Option<usize>,
+}
+
+/// Draw the queue panel: a header with Clear, then the upcoming tracks.
+pub fn show(ui: &mut egui::Ui, view: &mut QueueView, playback: &mut Playback) {
+    let mut edits = Edits::default();
+    let index = playback.index();
+    let queue = playback.queue();
+    let end = queue.len();
+    let first = (index + 1).min(end);
+    let danger = ui.visuals().error_fg_color;
+
+    ui.add_space(14.0);
+    ui.horizontal(|ui| {
+        ui.add_space(14.0);
+        ui.vertical(|ui| {
+            ui.heading("Up Next");
+            ui.weak(match end - first {
+                0 => "Nothing queued".to_owned(),
+                1 => "1 track".to_owned(),
+                n => format!("{n} tracks"),
+            });
+        });
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+            ui.add_space(14.0);
+            let clear = egui::Button::new(egui::RichText::new("Clear").color(danger)).frame(false);
+            if ui.add_enabled(first < end, clear).clicked() {
+                edits.clear = true;
+            }
+        });
+    });
+    ui.add_space(8.0);
+
+    if first == end {
+        view.dragging = None;
+        ui.horizontal(|ui| {
+            ui.add_space(14.0);
+            ui.weak("Tracks you queue will appear here.");
+        });
+        return;
+    }
+
+    let mut rows: Vec<(usize, egui::Rect)> = Vec::with_capacity(end - first);
+    egui::ScrollArea::vertical()
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            for (i, item) in queue.iter().enumerate().skip(first) {
+                // Reserved now, filled in once we know whether the row is hovered.
+                let background = ui.painter().add(egui::Shape::Noop);
+                let mut grip_rect = egui::Rect::NOTHING;
+                let mut close_rect = egui::Rect::NOTHING;
+                let frame = egui::Frame::new()
+                    .inner_margin(egui::Margin::symmetric(12, 6))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            let (grip, _) = ui.allocate_exact_size(
+                                egui::vec2(14.0, ROW_HEIGHT - 12.0),
+                                egui::Sense::hover(),
+                            );
+                            grip_rect = grip;
+                            ui.add_space(6.0);
+                            ui.vertical(|ui| {
+                                // Leave room on the right for the duration and the remove button.
+                                ui.set_max_width(ui.available_width() - 80.0);
+                                ui.add(egui::Label::new(format::title(item)).truncate());
+                                if let Some(artist) =
+                                    item.artist.as_deref().or(item.album_artist.as_deref())
+                                {
+                                    ui.add(
+                                        egui::Label::new(egui::RichText::new(artist).weak())
+                                            .truncate(),
+                                    );
+                                }
+                            });
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    let (close, _) = ui.allocate_exact_size(
+                                        egui::vec2(18.0, 18.0),
+                                        egui::Sense::hover(),
+                                    );
+                                    close_rect = close;
+                                    ui.add_space(6.0);
+                                    ui.weak(format::duration(item.duration_ms));
+                                },
+                            );
+                        });
+                    });
+
+                let row = frame.response.rect;
+                let hovered = ui.rect_contains_pointer(row);
+                // Registered after the row, so the grip and remove button sit on top of it.
+                let row_response = ui.interact(
+                    row,
+                    ui.scope_id().with(("queue_row", i)),
+                    egui::Sense::click(),
+                );
+                let grip = ui.interact(
+                    grip_rect,
+                    ui.scope_id().with(("queue_grip", i)),
+                    egui::Sense::drag(),
+                );
+                let close = ui.interact(
+                    close_rect,
+                    ui.scope_id().with(("queue_close", i)),
+                    egui::Sense::click(),
+                );
+                if hovered {
+                    ui.painter().set(
+                        background,
+                        egui::Shape::rect_filled(row, 6.0, ui.visuals().faint_bg_color),
+                    );
+                    draw_grip(ui.painter(), grip_rect, ui.visuals().weak_text_color());
+                    let close_color = if close.hovered() {
+                        ui.visuals().strong_text_color()
+                    } else {
+                        ui.visuals().weak_text_color()
+                    };
+                    draw_close(ui.painter(), close_rect, close_color);
+                }
+                if grip.hovered() || view.dragging.is_some() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+                }
+
+                if grip.drag_started() {
+                    view.dragging = Some(i);
+                }
+                if grip.drag_stopped() {
+                    view.dragging = None;
+                    edits.dropped = Some(i);
+                }
+                if close.clicked() {
+                    edits.remove = Some(i);
+                } else if row_response.double_clicked() && !grip.hovered() {
+                    edits.jump = Some(i);
+                }
+                rows.push((i, row));
+            }
+        });
+
+    // Where a dragged row would land: before the row under the pointer, or at the end.
+    let pointer = ui.ctx().input(|i| i.pointer.interact_pos());
+    let before = pointer.map(|p| insertion_point(&rows, p.y, end));
+    if let (Some(_), Some(before)) = (view.dragging, before) {
+        let color = ui.visuals().selection.bg_fill;
+        draw_drop_line(ui.painter(), &rows, before, color);
+    }
+
+    if edits.clear {
+        playback.clear_upcoming();
+    } else if let Some(i) = edits.remove {
+        playback.remove_at(i);
+    } else if let Some(i) = edits.jump {
+        playback.jump_to(i);
+    } else if let (Some(from), Some(before)) = (edits.dropped, before) {
+        playback.move_upcoming(from, before);
+    }
+}
+
+/// The queue index a dragged row would be inserted before, given the pointer's height.
+fn insertion_point(rows: &[(usize, egui::Rect)], y: f32, end: usize) -> usize {
+    rows.iter()
+        .find(|(_, r)| y < r.center().y)
+        .map_or(end, |(i, _)| *i)
+}
+
+/// A line where a dragged row would be inserted.
+fn draw_drop_line(
+    painter: &egui::Painter,
+    rows: &[(usize, egui::Rect)],
+    before: usize,
+    color: egui::Color32,
+) {
+    let Some((_, first)) = rows.first() else {
+        return;
+    };
+    let y = match rows.iter().find(|(i, _)| *i == before) {
+        Some((_, r)) => r.top(),
+        None => rows.last().map_or(first.top(), |(_, r)| r.bottom()),
+    };
+    let stroke = egui::Stroke::new(2.0, color);
+    painter.line_segment(
+        [
+            egui::pos2(first.left() + 12.0, y),
+            egui::pos2(first.right() - 12.0, y),
+        ],
+        stroke,
+    );
+}
+
+/// Six dots in two columns: the drag handle.
+fn draw_grip(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
+    let c = rect.center();
+    for dy in [-6.0, 0.0, 6.0] {
+        for dx in [-3.0, 3.0] {
+            painter.circle_filled(c + egui::vec2(dx, dy), 1.5, color);
+        }
+    }
+}
+
+/// A small cross: removes the row from the queue.
+fn draw_close(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
+    let c = rect.center();
+    let r = 4.5;
+    let stroke = egui::Stroke::new(1.5, color);
+    painter.line_segment([c + egui::vec2(-r, -r), c + egui::vec2(r, r)], stroke);
+    painter.line_segment([c + egui::vec2(r, -r), c + egui::vec2(-r, r)], stroke);
+}
