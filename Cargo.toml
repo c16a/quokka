@@ -13,17 +13,17 @@ publish = false
 # `dep = { workspace = true }`. Default features are always disabled; list only what is needed.
 # Platform-only features (for example Linux windowing) are added in the crate that needs them.
 [workspace.dependencies]
-directories = { version = "6", default-features = false }
-eframe = { version = "0.37", default-features = false, features = ["glow", "default_fonts", "accesskit", "clipboard", "links", "system_fonts"] }
+directories = { version = "6.0.0", default-features = false }
+eframe = { version = "0.37.0", default-features = false, features = ["glow", "default_fonts", "accesskit", "clipboard", "links", "system_fonts"] }
 lofty = { version = "0.25.5", default-features = false, features = ["id3v2_compression_support"] }
-rfd = { version = "0.17", default-features = false }
-rodio = { version = "0.23", default-features = false, features = ["playback"] }
+rfd = { version = "0.17.2", default-features = false }
+rodio = { version = "0.23.0", default-features = false, features = ["playback"] }
 symphonia = { version = "0.5.5", default-features = false, features = ["mp3", "flac", "isomp4", "aac", "alac", "vorbis", "ogg", "wav", "pcm", "aiff", "adpcm"] }
 rusqlite = { version = "0.41.1", default-features = false, features = ["bundled"] }
-serde = { version = "1", default-features = false, features = ["derive", "std"] }
-serde_json = { version = "1", default-features = false, features = ["std"] }
-tempfile = { version = "3", default-features = false, features = ["getrandom"] }
-thiserror = { version = "2", default-features = false, features = ["std"] }
+serde = { version = "1.0.229", default-features = false, features = ["derive", "std"] }
+serde_json = { version = "1.0.154", default-features = false, features = ["std"] }
+tempfile = { version = "3.27.0", default-features = false, features = ["getrandom"] }
+thiserror = { version = "2.0.21", default-features = false, features = ["std"] }
 walkdir = { version = "2.5.0", default-features = false }
 player-core = { path = "core" }
 player-playback = { path = "playback" }
