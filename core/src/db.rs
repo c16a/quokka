@@ -3,7 +3,7 @@ use rusqlite::Connection;
 use crate::Result;
 
 /// Bump when the schema changes and add a matching migration step below.
-const SCHEMA_VERSION: i64 = 7;
+const SCHEMA_VERSION: i64 = 8;
 
 /// Per-connection settings and schema migration.
 pub(crate) fn configure(conn: &Connection) -> Result<()> {
@@ -34,6 +34,9 @@ pub(crate) fn configure(conn: &Connection) -> Result<()> {
     }
     if version < 7 {
         conn.execute_batch(SCHEMA_V7)?;
+    }
+    if version < 8 {
+        conn.execute_batch(SCHEMA_V8)?;
     }
     if version != SCHEMA_VERSION {
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
@@ -159,5 +162,41 @@ CREATE TABLE lyrics (
     media_id INTEGER PRIMARY KEY REFERENCES media(id) ON DELETE CASCADE,
     text     TEXT,
     fetched  INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+);
+";
+
+/// Internet radio: the station index, the tuned-in list (with each station's address, so it plays
+/// even if the index drops it), and small app state such as the last sync time.
+const SCHEMA_V8: &str = "
+CREATE TABLE station (
+    uuid     TEXT PRIMARY KEY,
+    name     TEXT NOT NULL,
+    url      TEXT NOT NULL,
+    country  TEXT NOT NULL DEFAULT '',
+    codec    TEXT NOT NULL DEFAULT '',
+    bitrate  INTEGER NOT NULL DEFAULT 0,
+    tags     TEXT NOT NULL DEFAULT '',
+    votes    INTEGER NOT NULL DEFAULT 0,
+    working  INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE VIRTUAL TABLE station_fts USING fts5(
+    uuid UNINDEXED, name, tags, country,
+    tokenize = 'unicode61 remove_diacritics 2'
+);
+
+CREATE TABLE tuned (
+    uuid    TEXT PRIMARY KEY,
+    name    TEXT NOT NULL,
+    url     TEXT NOT NULL,
+    country TEXT NOT NULL DEFAULT '',
+    codec   TEXT NOT NULL DEFAULT '',
+    bitrate INTEGER NOT NULL DEFAULT 0,
+    added   INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+);
+
+CREATE TABLE meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
 );
 ";

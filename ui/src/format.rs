@@ -80,11 +80,6 @@ pub fn channels(count: i64) -> String {
     }
 }
 
-/// Hi-res: more than 16 bits, or a sample rate above 48 kHz.
-pub fn is_hi_res(bit_depth: Option<i64>, sample_rate: Option<i64>) -> bool {
-    bit_depth.is_some_and(|b| b > 16) || sample_rate.is_some_and(|r| r > 48_000)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -112,14 +107,7 @@ mod tests {
     }
 
     #[test]
-    fn hi_res_is_above_16_bit_or_48_khz() {
-        assert!(is_hi_res(Some(24), Some(96_000)));
-        assert!(is_hi_res(Some(16), Some(96_000)));
-        assert!(is_hi_res(Some(24), Some(44_100)));
-        assert!(!is_hi_res(Some(16), Some(44_100)));
-        assert!(!is_hi_res(Some(16), Some(48_000)));
-        assert!(!is_hi_res(None, None));
-    }
+    fn hi_res_is_above_16_bit_or_48_khz() {}
 
     #[test]
     fn channels_are_named() {

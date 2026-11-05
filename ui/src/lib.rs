@@ -8,16 +8,18 @@ mod movies;
 mod playback;
 mod playlists;
 mod queue;
+mod radio;
 mod recent;
 mod search;
 mod settings_view;
 mod side;
 
 use std::collections::VecDeque;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::thread;
 use std::time::{Duration, Instant};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use eframe::egui;
 use notify::{RecursiveMode, Watcher};
@@ -35,6 +37,7 @@ pub struct Paths {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Tab {
+    Radio,
     Search,
     Albums,
     Recent,
@@ -62,6 +65,9 @@ struct App {
     queue_view: queue::QueueView,
     artists: artists::ArtistsView,
     recent: recent::RecentView,
+    radio: radio::RadioView,
+    /// A station index sync running on a background thread, and its result.
+    station_sync: Option<std::sync::mpsc::Receiver<Result<usize, String>>>,
     side: side::SidePanels,
     /// The track last logged as played, so one track is logged once per start.
     last_played: Option<i64>,
@@ -143,6 +149,8 @@ impl App {
             queue_view: Default::default(),
             artists: Default::default(),
             recent: Default::default(),
+            radio: Default::default(),
+            station_sync: None,
             side: Default::default(),
             last_played: None,
             playlists: Default::default(),
@@ -161,6 +169,9 @@ impl App {
         app.playback.set_replay_gain(app.settings.replay_gain);
         app.reload_views();
         app.restore_session();
+        if station_index_stale(&app.library) {
+            app.start_station_sync(&ctx);
+        }
         if app.settings.library_roots.is_empty() {
             app.status = "Add a folder to get started.".into();
         } else {
@@ -207,6 +218,40 @@ impl App {
         self.session_saved = Some(self.playback.session());
     }
 
+    /// Refresh the radio station index on a background thread. Does nothing while a sync runs.
+    fn start_station_sync(&mut self, ctx: &egui::Context) {
+        if self.station_sync.is_some() {
+            return;
+        }
+        let db = self.paths.db.clone();
+        let (tx, rx) = mpsc::channel();
+        let ctx = ctx.clone();
+        thread::spawn(move || {
+            let _ = tx.send(sync_stations(&db));
+            ctx.request_repaint();
+        });
+        self.station_sync = Some(rx);
+        self.status = "Syncing the radio station list…".into();
+    }
+
+    /// Collect a finished station sync, if there is one.
+    fn poll_station_sync(&mut self) {
+        let Some(rx) = self.station_sync.take() else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(Ok(count)) => {
+                self.status = format!("Radio: {count} stations.");
+                self.radio.reload(&self.library);
+            }
+            Ok(Err(e)) => self.status = format!("Radio station sync failed: {e}"),
+            Err(TryRecvError::Empty) => self.station_sync = Some(rx),
+            Err(TryRecvError::Disconnected) => {
+                self.status = "Radio station sync stopped unexpectedly.".into();
+            }
+        }
+    }
+
     /// Turn lookups on or off for lyrics, and save the choice.
     fn set_lyrics_online(&mut self, on: bool) {
         self.settings.lyrics_online = on;
@@ -248,6 +293,7 @@ impl App {
         self.playlists.reload(&self.library);
         self.artists.reload(self.albums.albums());
         self.recent.reload(&self.library, self.albums.albums());
+        self.radio.reload(&self.library);
     }
 
     /// Add folders to the scan queue. Each folder is scanned on its own. A folder that is
@@ -377,6 +423,7 @@ impl App {
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.poll_scan(ui.ctx());
+        self.poll_station_sync();
         self.handle_changes(ui.ctx());
         self.playback.advance_if_finished();
         let ctx = ui.ctx().clone();
@@ -431,6 +478,7 @@ impl eframe::App for App {
                     (Tab::Recent, "Recent"),
                     (Tab::Artists, "Artists"),
                     (Tab::Playlists, "Playlists"),
+                    (Tab::Radio, "Radio"),
                     (Tab::Movies, "Movies"),
                     (Tab::Settings, "Settings"),
                 ] {
@@ -455,7 +503,7 @@ impl eframe::App for App {
         }
         self.tab = next_tab;
 
-        if self.playback.has_current() {
+        if self.playback.has_bar() {
             egui::Panel::bottom("now_playing").show(ui, |ui| {
                 self.playback.show(ui);
             });
@@ -496,6 +544,7 @@ impl eframe::App for App {
         let mut action = None;
         let mut search_outcome = None;
         let mut opened_album = None;
+        let mut radio_action = None;
         let mut play = None;
         egui::CentralPanel::default().show(ui, |ui| match self.tab {
             Tab::Albums => {
@@ -523,6 +572,14 @@ impl eframe::App for App {
             Tab::Artists => {
                 opened_album = self.artists.show(ui, &mut self.albums, &self.library);
             }
+            Tab::Radio => {
+                radio_action = self.radio.show(
+                    ui,
+                    &self.library,
+                    self.playback.radio_station().map(|s| s.uuid.as_str()),
+                    self.station_sync.is_some(),
+                );
+            }
             Tab::Playlists => {
                 if let Some(request) =
                     self.playlists
@@ -549,6 +606,23 @@ impl eframe::App for App {
         if let Some(i) = opened_album {
             self.albums.open(&self.library, i);
             self.tab = Tab::Albums;
+        }
+        match radio_action {
+            Some(radio::RadioAction::Play(station)) => self.playback.tune(station),
+            Some(radio::RadioAction::TuneIn(station)) => {
+                if let Err(e) = self.library.tune_in(&station) {
+                    self.status = format!("Could not tune in: {e}");
+                }
+                self.radio.reload(&self.library);
+            }
+            Some(radio::RadioAction::TuneOut(uuid)) => {
+                if let Err(e) = self.library.tune_out(&uuid) {
+                    self.status = format!("Could not tune out: {e}");
+                }
+                self.radio.reload(&self.library);
+            }
+            Some(radio::RadioAction::Sync) => self.start_station_sync(&ctx),
+            None => {}
         }
         if let Some(request) = play {
             self.playback.play_queue(request.tracks, request.index);
@@ -629,4 +703,38 @@ fn sidebar_item(selected: bool, label: &str, highlight: egui::Color32) -> egui::
         .fill(fill)
         .stroke(egui::Stroke::NONE)
         .corner_radius(6.0)
+}
+
+/// Whether the station index is missing, or more than a day old.
+fn station_index_stale(library: &Library) -> bool {
+    let synced: Option<i64> = library
+        .meta("stations_synced")
+        .ok()
+        .flatten()
+        .and_then(|value| value.parse().ok());
+    match synced {
+        None => true,
+        Some(at) => now_secs() - at >= 24 * 60 * 60,
+    }
+}
+
+fn now_secs() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// Fetch the station list and store it, on the calling thread. Returns how many stations were
+/// stored.
+fn sync_stations(db: &Path) -> Result<usize, String> {
+    let stations = player_core::fetch_all_stations()?;
+    let mut library = Library::open(db).map_err(|e| e.to_string())?;
+    let count = library
+        .replace_stations(&stations)
+        .map_err(|e| e.to_string())?;
+    library
+        .set_meta("stations_synced", &now_secs().to_string())
+        .map_err(|e| e.to_string())?;
+    Ok(count)
 }

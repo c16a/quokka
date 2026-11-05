@@ -4,6 +4,7 @@
 mod chain;
 mod mock;
 mod rodio_backend;
+mod stream;
 mod symphonia_source;
 
 use std::path::Path;
@@ -13,6 +14,7 @@ use thiserror::Error;
 
 pub use mock::MockPlayer;
 pub use rodio_backend::{RodioPlayer, output_device_names};
+pub use stream::open_stream;
 pub use symphonia_source::SymphoniaSource;
 
 #[derive(Debug, Error)]

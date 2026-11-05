@@ -12,6 +12,7 @@ mod history;
 mod lyrics;
 mod metadata;
 mod playlist;
+mod radio;
 mod replaygain;
 mod scan;
 mod search;
@@ -32,6 +33,7 @@ pub use lyrics::{
     parse_lrc, sidecar_lyrics,
 };
 pub use playlist::PlaylistSummary;
+pub use radio::{Station, fetch_all_stations, parse_stations};
 pub use replaygain::replay_gain_factor;
 pub use scan::ScanStats;
 pub use search::SongQuery;

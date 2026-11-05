@@ -17,7 +17,7 @@ use symphonia::core::codecs::registry::CodecRegistry;
 use symphonia::core::errors::Error as DecodeError;
 use symphonia::core::formats::probe::Hint;
 use symphonia::core::formats::{FormatOptions, FormatReader, SeekMode, SeekTo};
-use symphonia::core::io::MediaSourceStream;
+use symphonia::core::io::{MediaSource, MediaSourceStream};
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::units::Time;
 
@@ -91,15 +91,24 @@ impl SymphoniaSource {
     /// Open and probe `path`, and start the decoder thread for its first audio track.
     pub fn open(path: &Path, error: ErrorSlot) -> Result<Self, String> {
         let file = File::open(path).map_err(|e| e.to_string())?;
-        let stream = MediaSourceStream::new(Box::new(file), Default::default());
-
         let mut hint = Hint::new();
         if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
             hint.with_extension(ext);
         }
+        Self::from_source(Box::new(file), &hint, error)
+    }
+
+    /// Decode from any source. `hint` names the format when the caller knows it. A source that
+    /// can't seek (a live stream) has no length, and can't be sought.
+    pub fn from_source(
+        source: Box<dyn MediaSource>,
+        hint: &Hint,
+        error: ErrorSlot,
+    ) -> Result<Self, String> {
+        let stream = MediaSourceStream::new(source, Default::default());
         let format = symphonia::default::get_probe()
             .probe(
-                &hint,
+                hint,
                 stream,
                 FormatOptions::default(),
                 MetadataOptions::default(),

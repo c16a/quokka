@@ -180,7 +180,10 @@ impl SidePanels {
         let current = self.current();
         let lookup = self.lookup.clone();
         let has_sidecar = self.sidecar.is_some();
-        egui::ScrollArea::vertical()
+        egui::Frame::new()
+            .inner_margin(egui::Margin::symmetric(0, 10))
+            .show(ui, |ui| {
+                egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| match &current {
                 Some(Lyrics::Synced(lines)) => {
@@ -222,6 +225,7 @@ impl SidePanels {
                     }
                 }),
             });
+            });
         outcome
     }
 
@@ -243,15 +247,17 @@ impl SidePanels {
             } else {
                 line.text.as_str()
             };
-            let rich = egui::RichText::new(text).size(if is_current { 18.0 } else { 15.0 });
-            let rich = if is_current {
-                rich.strong()
+            // Same size for every line. Only the line being sung is at full opacity.
+            let full = ui.visuals().text_color();
+            let color = if is_current {
+                full
             } else {
-                rich.weak()
+                full.gamma_multiply(0.4)
             };
-            let response = ui
-                .horizontal(|ui| {
-                    ui.add_space(14.0);
+            let rich = egui::RichText::new(text).size(16.0).color(color);
+            let response = egui::Frame::new()
+                .inner_margin(egui::Margin::symmetric(14, 0))
+                .show(ui, |ui| {
                     ui.add(egui::Label::new(rich).wrap().sense(egui::Sense::click()))
                 })
                 .inner;

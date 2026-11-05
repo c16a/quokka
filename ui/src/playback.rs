@@ -4,8 +4,13 @@ use std::time::Duration;
 
 use eframe::egui;
 use player_core::RepeatMode as Repeat;
+use player_core::Station;
 use player_core::{MediaItem, ReplayGainMode, Session};
-use player_playback::{Player, PlayerState, RodioPlayer, output_device_names};
+use player_playback::{
+    Player, PlayerState, RodioPlayer, SymphoniaSource, open_stream, output_device_names,
+};
+use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::thread;
 
 use crate::format;
 
@@ -31,6 +36,8 @@ pub enum Panel {
 }
 
 /// The queue the user is listening through, and the player that plays it.
+const RADIO_RECONNECTS: u32 = 5;
+
 pub struct Playback {
     /// `None` when no audio output device could be opened.
     player: Option<RodioPlayer>,
@@ -60,6 +67,14 @@ pub struct Playback {
     gain: f32,
     /// The queue index of the track armed to follow the current one, if any.
     armed: Option<usize>,
+    /// The station being played, when the output is live radio rather than the queue.
+    radio: Option<Station>,
+    /// A stream being connected to on a background thread.
+    radio_loading: Option<Receiver<Result<SymphoniaSource, String>>>,
+    /// Whether the user paused the station. A paused station is not reconnected.
+    radio_paused: bool,
+    /// Reconnects since the user last started the station.
+    radio_reconnects: u32,
 }
 
 /// What the bar asked for this frame. Applied after drawing.
@@ -100,6 +115,10 @@ impl Playback {
             outputs: output_device_names(),
             gain: 1.0,
             armed: None,
+            radio: None,
+            radio_loading: None,
+            radio_paused: false,
+            radio_reconnects: 0,
         }
     }
 
@@ -144,9 +163,162 @@ impl Playback {
         self.index
     }
 
+    /// Tune in to a station: connect to its stream and play it. Replaces what was playing.
+    pub fn tune(&mut self, station: Station) {
+        self.with_player(|p| p.stop());
+        self.radio = Some(station);
+        self.radio_paused = false;
+        self.radio_reconnects = 0;
+        self.error = None;
+        self.connect_radio();
+    }
+
+    /// Whether the bar has something to show: a track, or a station.
+    pub fn has_bar(&self) -> bool {
+        self.has_current() || self.radio.is_some()
+    }
+
+    /// The station playing, if the output is live radio.
+    pub fn radio_station(&self) -> Option<&Station> {
+        self.radio.as_ref()
+    }
+
+    /// Stop the station and forget it.
+    pub fn clear_radio(&mut self) {
+        if self.radio.is_some() {
+            self.with_player(|p| p.stop());
+        }
+        self.radio = None;
+        self.radio_loading = None;
+        self.radio_paused = false;
+        self.radio_reconnects = 0;
+    }
+
+    /// Pause or resume a station. Pausing stops the stream, so resuming joins it live rather
+    /// than playing on from where it was paused.
+    fn radio_toggle(&mut self) {
+        if self.radio_paused {
+            self.radio_paused = false;
+            self.radio_reconnects = 0;
+            self.error = None;
+            self.connect_radio();
+        } else {
+            self.radio_paused = true;
+            self.radio_loading = None;
+            self.with_player(|p| p.stop());
+        }
+    }
+
+    /// Connect to the current station's stream on a background thread.
+    fn connect_radio(&mut self) {
+        let Some(station) = &self.radio else {
+            return;
+        };
+        let url = station.url.clone();
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            let _ = tx.send(open_stream(&url));
+        });
+        self.radio_loading = Some(rx);
+    }
+
+    /// Start playing a stream once it has connected.
+    fn poll_radio(&mut self) {
+        let Some(rx) = self.radio_loading.take() else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(Ok(source)) => {
+                if self.player.is_none() {
+                    self.player = RodioPlayer::new().ok();
+                    self.apply_volume();
+                }
+                let outcome = match self.player.as_mut() {
+                    Some(player) => player.load_stream(source).and_then(|_| player.play()),
+                    None => Err(player_playback::PlaybackError::Backend(
+                        "no audio output device available".into(),
+                    )),
+                };
+                self.error = outcome
+                    .err()
+                    .map(|e| format!("Could not play the station: {e}"));
+            }
+            Ok(Err(e)) => {
+                self.radio_paused = true;
+                self.error = Some(format!("Could not connect to the station: {e}"));
+            }
+            Err(TryRecvError::Empty) => self.radio_loading = Some(rx),
+            Err(TryRecvError::Disconnected) => {
+                self.radio_paused = true;
+                self.error = Some("Could not connect to the station.".into());
+            }
+        }
+    }
+
+    /// A live stream that ends (the server dropped it) is reconnected, a few times over.
+    fn radio_ended(&mut self) {
+        if self.radio_paused || self.radio_loading.is_some() || self.state() != PlayerState::Ended {
+            return;
+        }
+        self.radio_reconnects += 1;
+        if self.radio_reconnects > RADIO_RECONNECTS {
+            self.radio_paused = true;
+            self.error =
+                Some("The station keeps dropping the connection. Press play to try again.".into());
+            return;
+        }
+        self.connect_radio();
+    }
+
+    /// The bar for a station: play or pause, the station's name, and whether it is live.
+    fn show_radio(&mut self, ui: &mut egui::Ui) {
+        let Some(station) = self.radio.clone() else {
+            return;
+        };
+        let connecting = self.radio_loading.is_some();
+        let playing = self.is_playing();
+        let mut toggle = false;
+        egui::Frame::new()
+            .inner_margin(egui::Margin::symmetric(12, 10))
+            .show(ui, |ui| {
+                ui.vertical_centered(|ui| {
+                    centred_row(ui, &mut self.row_widths[0], |ui| {
+                        let icon = if playing { Icon::Pause } else { Icon::Play };
+                        let tip = if playing { "Pause" } else { "Play" };
+                        if transport_button(ui, icon, 36.0)
+                            .on_hover_text(tip)
+                            .clicked()
+                        {
+                            toggle = true;
+                        }
+                        ui.add_space(10.0);
+                        ui.vertical(|ui| {
+                            ui.strong(&station.name);
+                            let status = if connecting {
+                                "Connecting…"
+                            } else if self.radio_paused {
+                                "Paused"
+                            } else {
+                                "Live"
+                            };
+                            ui.weak(status);
+                        });
+                    });
+                    if let Some(error) = self.error.as_deref() {
+                        ui.add_space(6.0);
+                        ui.colored_label(ui.visuals().error_fg_color, error);
+                    }
+                });
+            });
+        if toggle {
+            self.radio_toggle();
+        }
+    }
+
     /// Replace the queue with `tracks` and start playing at `index`. With shuffle on, the
     /// tracks after `index` are shuffled.
     pub fn play_queue(&mut self, tracks: Vec<MediaItem>, index: usize) {
+        self.clear_radio();
         let items: Vec<Arc<MediaItem>> = tracks.into_iter().map(Arc::new).collect();
         self.original = items.clone();
         self.queue = items;
@@ -238,6 +410,7 @@ impl Playback {
 
     /// Start playing the queue entry at `i`.
     pub fn jump_to(&mut self, i: usize) {
+        self.clear_radio();
         if i < self.queue.len() {
             self.index = i;
             self.start_current();
@@ -352,6 +525,11 @@ impl Playback {
     /// Move on when a track has finished, and say why if it stopped early.
     pub fn advance_if_finished(&mut self) {
         self.sync_gapless();
+        self.poll_radio();
+        if self.radio.is_some() {
+            self.radio_ended();
+            return;
+        }
         if self.state() != PlayerState::Ended {
             return;
         }
@@ -367,6 +545,12 @@ impl Playback {
     }
 
     pub fn play(&mut self) {
+        if self.radio.is_some() {
+            if self.radio_paused {
+                self.radio_toggle();
+            }
+            return;
+        }
         match self.state() {
             PlayerState::Playing => {}
             PlayerState::Paused => self.with_player(|p| p.play()),
@@ -375,12 +559,22 @@ impl Playback {
     }
 
     pub fn pause(&mut self) {
+        if self.radio.is_some() {
+            if !self.radio_paused {
+                self.radio_toggle();
+            }
+            return;
+        }
         if self.is_playing() {
             self.with_player(|p| p.pause());
         }
     }
 
     pub fn toggle(&mut self) {
+        if self.radio.is_some() {
+            self.radio_toggle();
+            return;
+        }
         match self.state() {
             PlayerState::Playing => self.with_player(|p| p.pause()),
             PlayerState::Paused => self.with_player(|p| p.play()),
@@ -400,6 +594,9 @@ impl Playback {
     }
 
     pub fn next(&mut self) {
+        if self.radio.is_some() {
+            return;
+        }
         if self.index + 1 < self.queue.len() {
             self.index += 1;
         } else if self.repeat == Repeat::Queue && !self.queue.is_empty() {
@@ -412,6 +609,9 @@ impl Playback {
 
     /// Within the first few seconds, go to the previous track. Otherwise restart this one.
     pub fn previous(&mut self) {
+        if self.radio.is_some() {
+            return;
+        }
         let past_start = self.position().is_some_and(|p| p > Duration::from_secs(3));
         if past_start || self.index == 0 {
             self.seek(0.0);
@@ -440,6 +640,9 @@ impl Playback {
     /// Keep the output one track ahead, so the next track follows without a gap. Called every
     /// frame. When the output has moved on to the armed track, the queue position follows it.
     fn sync_gapless(&mut self) {
+        if self.radio.is_some() {
+            return;
+        }
         let started = match self.player.as_mut() {
             Some(player) => player.take_started().is_some(),
             None => false,
@@ -522,6 +725,9 @@ impl Playback {
     }
 
     pub fn seek(&mut self, secs: f64) {
+        if self.radio.is_some() {
+            return;
+        }
         let target = Duration::from_secs_f64(secs.max(0.0));
         self.with_player(|p| p.seek(target));
         self.seek_secs = secs;
@@ -569,6 +775,10 @@ impl Playback {
     /// Draw the playback bar, centred. Row 1: shuffle, transport and repeat, with the track name
     /// and artist. Row 2: seek slider, with mute and volume. Row 3: format details.
     pub fn show(&mut self, ui: &mut egui::Ui) {
+        if self.radio.is_some() {
+            self.show_radio(ui);
+            return;
+        }
         let current = self.current().cloned();
         let state = self.state();
         let position = self.position().unwrap_or_default();
@@ -746,26 +956,9 @@ impl Playback {
                         command = Some(Command::SetVolume(level));
                     }
 
-                    if let Some(item) = &current {
+                    if current.is_some() {
                         ui.add_space(4.0);
                         centred_row(ui, &mut self.row_widths[2], |ui| {
-                            if let Some(codec) = item.codec.as_deref() {
-                                chip(ui, codec);
-                            }
-                            if let Some(format) =
-                                format::sample_format(item.bit_depth, item.sample_rate)
-                            {
-                                chip(ui, &format);
-                            }
-                            if let Some(kbps) = item.bitrate_kbps {
-                                chip(ui, &format::kbps(kbps));
-                            }
-                            if let Some(channels) = item.channels {
-                                chip(ui, &format::channels(channels));
-                            }
-                            if format::is_hi_res(item.bit_depth, item.sample_rate) {
-                                hi_res_badge(ui);
-                            }
                             ui.add_space(4.0);
                             let label = format!(
                                 "Output: {}",
@@ -895,39 +1088,6 @@ fn short_name(name: &str) -> String {
         let head: String = name.chars().take(MAX - 1).collect();
         format!("{head}…")
     }
-}
-
-/// Outlined label for one format detail.
-fn chip(ui: &mut egui::Ui, text: &str) {
-    egui::Frame::new()
-        .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
-        .corner_radius(4.0)
-        .inner_margin(egui::Margin::symmetric(8, 2))
-        .show(ui, |ui| {
-            ui.small(text);
-        });
-}
-
-/// Green "Hi-res" badge, with colours chosen for the current theme.
-fn hi_res_badge(ui: &mut egui::Ui) {
-    let (fill, text) = if ui.visuals().dark_mode {
-        (
-            egui::Color32::from_rgb(24, 58, 40),
-            egui::Color32::from_rgb(140, 220, 170),
-        )
-    } else {
-        (
-            egui::Color32::from_rgb(222, 243, 228),
-            egui::Color32::from_rgb(28, 98, 54),
-        )
-    };
-    egui::Frame::new()
-        .fill(fill)
-        .corner_radius(4.0)
-        .inner_margin(egui::Margin::symmetric(8, 2))
-        .show(ui, |ui| {
-            ui.label(egui::RichText::new("Hi-res").small().color(text));
-        });
 }
 
 /// Lay out `add` in a horizontal row, centred in the available width. The row's width
@@ -1242,6 +1402,10 @@ mod tests {
             outputs: Vec::new(),
             gain: 1.0,
             armed: None,
+            radio: None,
+            radio_loading: None,
+            radio_paused: false,
+            radio_reconnects: 0,
         };
         p.play_queue((1..=n).map(item).collect(), 0);
         p

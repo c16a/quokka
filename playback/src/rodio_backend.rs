@@ -165,6 +165,26 @@ impl RodioPlayer {
         }
     }
 
+    /// Play a live stream. It has no path or length, so the duration is unknown.
+    pub fn load_stream(&mut self, source: SymphoniaSource) -> Result<()> {
+        if let Ok(mut slot) = self.error.lock() {
+            *slot = None;
+        }
+        let rate = source.sample_rate().get();
+        self.match_rate(rate);
+        let shared = Arc::new(Shared::new(rate));
+        self.output.clear();
+        self.output.pause();
+        self.output.append(Chain::new(source, Arc::clone(&shared)));
+        self.shared = Some(shared);
+        self.seen_started = 0;
+        self.current = Some(Current {
+            path: PathBuf::new(),
+            duration: None,
+        });
+        Ok(())
+    }
+
     /// Decode `path` and queue it on a paused output.
     fn queue(&mut self, path: &Path) -> Result<Option<Duration>> {
         if let Ok(mut slot) = self.error.lock() {

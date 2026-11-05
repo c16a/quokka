@@ -2987,6 +2987,7 @@ dependencies = [
  "symphonia",
  "symphonia-adapter-opus-rs",
  "thiserror 2.0.21",
+ "ureq",
 ]
 
 [[package]]
