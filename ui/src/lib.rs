@@ -2,7 +2,9 @@
 
 mod albums;
 mod artists;
+mod fonts;
 mod format;
+mod icons;
 mod media;
 mod movies;
 mod playback;
@@ -129,6 +131,30 @@ fn preference(theme: Theme) -> egui::ThemePreference {
 
 impl App {
     fn new(ctx: egui::Context, paths: Paths, settings: Settings, library: Library) -> Self {
+        // Artist photos are cached beside the library database.
+        let photo_dir = paths
+            .db
+            .parent()
+            .unwrap_or(std::path::Path::new("."))
+            .join("artist-photos");
+        fonts::install(&ctx);
+        // Buttons grow a little when hovered, which made them flicker under the pointer.
+        ctx.all_styles_mut(|style| {
+            // Hovering only changes colour: size, expansion and stroke width stay the same in every
+            // state, so nothing under the pointer moves or flickers.
+            let widgets = &mut style.visuals.widgets;
+            let fg = widgets.inactive.fg_stroke.width;
+            let bg = widgets.inactive.bg_stroke.width;
+            for state in [
+                &mut widgets.inactive,
+                &mut widgets.hovered,
+                &mut widgets.active,
+            ] {
+                state.expansion = 0.0;
+                state.fg_stroke.width = fg;
+                state.bg_stroke.width = bg;
+            }
+        });
         ctx.set_theme(preference(settings.theme));
         let tab = if !settings.library_roots.is_empty() {
             Tab::Albums
@@ -147,7 +173,7 @@ impl App {
             movies: Default::default(),
             playback: Playback::new(),
             queue_view: Default::default(),
-            artists: Default::default(),
+            artists: artists::ArtistsView::new(photo_dir),
             recent: Default::default(),
             radio: Default::default(),
             station_sync: None,
@@ -456,7 +482,7 @@ impl eframe::App for App {
             sidebar_fill.lerp_to_gamma(egui::Color32::BLACK, 0.06)
         };
         egui::Panel::left("sidebar")
-            .default_size(180.0)
+            .default_size(200.0)
             .resizable(false)
             .show_separator_line(false)
             .frame(
@@ -546,53 +572,64 @@ impl eframe::App for App {
         let mut opened_album = None;
         let mut radio_action = None;
         let mut play = None;
-        egui::CentralPanel::default().show(ui, |ui| match self.tab {
-            Tab::Albums => {
-                play = self.albums.show(
-                    ui,
-                    &self.library,
-                    self.playback.current_id(),
-                    &mut queue_requests,
-                    self.playlists.summaries(),
-                );
-            }
-            Tab::Search => {
-                search_outcome = Some(self.search.show(
-                    ui,
-                    &mut self.albums,
-                    &self.library,
-                    self.playback.current_id(),
-                    &mut queue_requests,
-                    self.playlists.summaries(),
-                ));
-            }
-            Tab::Recent => {
-                opened_album = self.recent.show(ui, &mut self.albums, &self.library);
-            }
-            Tab::Artists => {
-                opened_album = self.artists.show(ui, &mut self.albums, &self.library);
-            }
-            Tab::Radio => {
-                radio_action = self.radio.show(
-                    ui,
-                    &self.library,
-                    self.playback.radio_station().map(|s| s.uuid.as_str()),
-                    self.station_sync.is_some(),
-                );
-            }
-            Tab::Playlists => {
-                if let Some(request) =
-                    self.playlists
-                        .show(ui, &self.library, self.playback.current_id())
-                {
-                    play = Some(request);
+        // The Radio page pads its own content, so its scrollbar can reach the window edge.
+        let main_frame = if self.tab == Tab::Radio {
+            egui::Frame::central_panel(ui.style()).inner_margin(egui::Margin::same(0))
+        } else {
+            egui::Frame::central_panel(ui.style()).inner_margin(egui::Margin::symmetric(24, 20))
+        };
+        egui::CentralPanel::default()
+            .frame(main_frame)
+            .show(ui, |ui| match self.tab {
+                Tab::Albums => {
+                    play = self.albums.show(
+                        ui,
+                        &self.library,
+                        self.playback.current_id(),
+                        &mut queue_requests,
+                        self.playlists.summaries(),
+                    );
                 }
-            }
-            Tab::Movies => self.movies.show(ui),
-            Tab::Settings => {
-                action = settings_view::show(ui, &self.settings, self.scan.is_some(), &self.status);
-            }
-        });
+                Tab::Search => {
+                    search_outcome = Some(self.search.show(
+                        ui,
+                        &mut self.albums,
+                        &self.library,
+                        self.playback.current_id(),
+                        &mut queue_requests,
+                        self.playlists.summaries(),
+                    ));
+                }
+                Tab::Recent => {
+                    opened_album = self.recent.show(ui, &mut self.albums, &self.library);
+                }
+                Tab::Artists => {
+                    opened_album = self.artists.show(ui, &mut self.albums, &self.library);
+                }
+                Tab::Radio => {
+                    let on_air = self.playback.radio_station().cloned();
+                    radio_action = self.radio.show(
+                        ui,
+                        &self.library,
+                        on_air.as_ref(),
+                        !self.playback.is_playing(),
+                        self.station_sync.is_some(),
+                    );
+                }
+                Tab::Playlists => {
+                    if let Some(request) =
+                        self.playlists
+                            .show(ui, &self.library, self.playback.current_id())
+                    {
+                        play = Some(request);
+                    }
+                }
+                Tab::Movies => self.movies.show(ui),
+                Tab::Settings => {
+                    action =
+                        settings_view::show(ui, &self.settings, self.scan.is_some(), &self.status);
+                }
+            });
 
         if let Some(outcome) = search_outcome {
             if outcome.play.is_some() {
@@ -602,6 +639,10 @@ impl eframe::App for App {
                 self.albums.open(&self.library, i);
                 self.tab = Tab::Albums;
             }
+            if let Some(id) = outcome.open_playlist {
+                self.playlists.open(id, &self.library);
+                self.tab = Tab::Playlists;
+            }
         }
         if let Some(i) = opened_album {
             self.albums.open(&self.library, i);
@@ -609,11 +650,13 @@ impl eframe::App for App {
         }
         match radio_action {
             Some(radio::RadioAction::Play(station)) => self.playback.tune(station),
-            Some(radio::RadioAction::TuneIn(station)) => {
+            Some(radio::RadioAction::TogglePlayback) => self.playback.toggle(),
+            Some(radio::RadioAction::TuneInAndPlay(station)) => {
                 if let Err(e) = self.library.tune_in(&station) {
                     self.status = format!("Could not tune in: {e}");
                 }
                 self.radio.reload(&self.library);
+                self.playback.tune(station);
             }
             Some(radio::RadioAction::TuneOut(uuid)) => {
                 if let Err(e) = self.library.tune_out(&uuid) {

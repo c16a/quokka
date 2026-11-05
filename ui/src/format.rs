@@ -12,6 +12,16 @@ pub fn title(item: &MediaItem) -> String {
 }
 
 /// `m:ss`, or `h:mm:ss` for items an hour or longer.
+/// A total length for an album's details: "1 h 42 min", or "42 min" under an hour.
+pub fn long_duration(ms: i64) -> String {
+    let minutes = ms.max(0) / 60_000;
+    if minutes >= 60 {
+        format!("{} h {} min", minutes / 60, minutes % 60)
+    } else {
+        format!("{minutes} min")
+    }
+}
+
 pub fn duration(ms: Option<i64>) -> String {
     let Some(ms) = ms else {
         return "—".into();

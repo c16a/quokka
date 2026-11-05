@@ -13,6 +13,7 @@ use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
 
 use crate::format;
+use crate::icons;
 
 /// A track to add to the queue from elsewhere in the app.
 pub enum MenuRequest {
@@ -75,6 +76,10 @@ pub struct Playback {
     radio_paused: bool,
     /// Reconnects since the user last started the station.
     radio_reconnects: u32,
+    /// The cover thumbnail of the track in the bar, by track id.
+    thumb: Option<(i64, Option<egui::TextureHandle>)>,
+    /// Whether the output list above the bar is open.
+    output_menu: bool,
 }
 
 /// What the bar asked for this frame. Applied after drawing.
@@ -119,6 +124,8 @@ impl Playback {
             radio_loading: None,
             radio_paused: false,
             radio_reconnects: 0,
+            thumb: None,
+            output_menu: false,
         }
     }
 
@@ -293,7 +300,7 @@ impl Playback {
                         }
                         ui.add_space(10.0);
                         ui.vertical(|ui| {
-                            ui.strong(&station.name);
+                            ui.label(crate::fonts::bold(&station.name));
                             let status = if connecting {
                                 "Connecting…"
                             } else if self.radio_paused {
@@ -772,162 +779,236 @@ impl Playback {
         self.seek_secs = 0.0;
     }
 
-    /// Draw the playback bar, centred. Row 1: shuffle, transport and repeat, with the track name
-    /// and artist. Row 2: seek slider, with mute and volume. Row 3: format details.
+    /// The playback bar, in this order: shuffle, previous, play or pause, next, repeat, the
+    /// track's cover and name, then (after a space) information, lyrics, queue and sound. A seek
+    /// slider runs along the top edge, with the elapsed and total time at its ends.
     pub fn show(&mut self, ui: &mut egui::Ui) {
         if self.radio.is_some() {
             self.show_radio(ui);
             return;
         }
-        let current = self.current().cloned();
         let state = self.state();
         let position = self.position().unwrap_or_default();
         let total = self
             .duration()
             .map_or(0.001, |d| d.as_secs_f64().max(0.001));
-
         if !self.dragging {
             self.seek_secs = position.as_secs_f64().min(total);
         }
+        let current = self.current().cloned();
+        let thumb = match &current {
+            Some(item) => {
+                let item = item.clone();
+                self.thumbnail(ui.ctx(), &item)
+            }
+            None => None,
+        };
 
-        let animate = state == PlayerState::Playing;
         let mut command = None;
         let mut choice: Option<Option<String>> = None;
         let mut refresh = false;
         egui::Frame::new()
-            .inner_margin(egui::Margin::symmetric(12, 10))
+            .inner_margin(egui::Margin::symmetric(24, 6))
             .show(ui, |ui| {
-                ui.vertical_centered(|ui| {
-                    centred_row(ui, &mut self.row_widths[0], |ui| {
-                        if mode_button(ui, ModeIcon::Shuffle, self.shuffle)
-                            .on_hover_text("Shuffle")
-                            .clicked()
-                        {
-                            command = Some(Command::ToggleShuffle);
-                        }
-                        if transport_button(ui, Icon::Previous, 32.0)
-                            .on_hover_text("Previous track")
-                            .clicked()
-                        {
-                            command = Some(Command::Previous);
-                        }
-                        let (icon, tip) = if state == PlayerState::Playing {
-                            (Icon::Pause, "Pause")
-                        } else {
-                            (Icon::Play, "Play")
-                        };
-                        if transport_button(ui, icon, 36.0)
-                            .on_hover_text(tip)
-                            .clicked()
-                        {
-                            command = Some(Command::Toggle);
-                        }
-                        if transport_button(ui, Icon::Next, 32.0)
-                            .on_hover_text("Next track")
-                            .clicked()
-                        {
-                            command = Some(Command::Next);
-                        }
-                        if mode_button(
-                            ui,
-                            ModeIcon::Repeat(self.repeat),
-                            self.repeat != Repeat::Off,
-                        )
-                        .on_hover_text("Repeat")
+                // Seek slider along the top edge.
+                let mut secs = self.seek_secs;
+                let mut dragging = self.dragging;
+                let mut seek_to = None;
+                ui.horizontal(|ui| {
+                    ui.add_sized(
+                        [48.0, 16.0],
+                        egui::Label::new(egui::RichText::new(format::clock(secs)).small().weak()),
+                    );
+                    ui.spacing_mut().slider_width = ui.available_width() - 56.0;
+                    let response = ui.add(
+                        egui::Slider::new(&mut secs, 0.0..=total)
+                            .show_value(false)
+                            .trailing_fill(true),
+                    );
+                    ui.add_sized(
+                        [48.0, 16.0],
+                        egui::Label::new(egui::RichText::new(format::clock(total)).small().weak()),
+                    );
+                    dragging = response.dragged();
+                    if response.drag_stopped() || (response.changed() && !response.dragged()) {
+                        seek_to = Some(secs);
+                    }
+                });
+                self.seek_secs = secs;
+                self.dragging = dragging;
+                if let Some(target) = seek_to {
+                    command = Some(Command::Seek(target));
+                }
+
+                ui.add_space(4.0);
+                ui.horizontal_centered(|ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    // Left: the transport and the track.
+                    if mode_button(ui, ModeIcon::Shuffle, self.shuffle)
+                        .on_hover_text("Shuffle")
                         .clicked()
-                        {
-                            command = Some(Command::CycleRepeat);
-                        }
-                        ui.add_space(8.0);
-                        ui.vertical(|ui| {
-                            let (title_color, artist_color) = (
-                                ui.visuals().strong_text_color(),
-                                ui.visuals().weak_text_color(),
+                    {
+                        command = Some(Command::ToggleShuffle);
+                    }
+                    if transport_button(ui, Icon::Previous, 32.0)
+                        .on_hover_text("Previous track")
+                        .clicked()
+                    {
+                        command = Some(Command::Previous);
+                    }
+                    let (icon, tip) = if state == PlayerState::Playing {
+                        (Icon::Pause, "Pause")
+                    } else {
+                        (Icon::Play, "Play")
+                    };
+                    if transport_button(ui, icon, 36.0)
+                        .on_hover_text(tip)
+                        .clicked()
+                    {
+                        command = Some(Command::Toggle);
+                    }
+                    if transport_button(ui, Icon::Next, 32.0)
+                        .on_hover_text("Next track")
+                        .clicked()
+                    {
+                        command = Some(Command::Next);
+                    }
+                    if mode_button(
+                        ui,
+                        ModeIcon::Repeat(self.repeat),
+                        self.repeat != Repeat::Off,
+                    )
+                    .on_hover_text("Repeat")
+                    .clicked()
+                    {
+                        command = Some(Command::CycleRepeat);
+                    }
+                    ui.add_space(12.0);
+                    let (rect, _) =
+                        ui.allocate_exact_size(egui::vec2(48.0, 48.0), egui::Sense::hover());
+                    match &thumb {
+                        Some(texture) => {
+                            ui.painter().image(
+                                texture.id(),
+                                rect,
+                                egui::Rect::from_min_max(
+                                    egui::pos2(0.0, 0.0),
+                                    egui::pos2(1.0, 1.0),
+                                ),
+                                egui::Color32::WHITE,
                             );
-                            match &current {
+                        }
+                        None => {
+                            ui.painter()
+                                .rect_filled(rect, 6.0, ui.visuals().faint_bg_color);
+                        }
+                    }
+                    ui.add_space(4.0);
+                    // Title and artist, centred vertically on the thumbnail's 48px height.
+                    let title_h = ui.fonts_mut(|f| f.row_height(&egui::FontId::proportional(14.0)));
+                    let artist_h =
+                        ui.fonts_mut(|f| f.row_height(&egui::FontId::proportional(12.0)));
+                    let block = title_h + artist_h + ui.spacing().item_spacing.y;
+                    let top = ((48.0 - block) / 2.0).max(0.0);
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(260.0, 48.0),
+                        egui::Layout::top_down(egui::Align::Min),
+                        |ui| {
+                            ui.add_space(top);
+                            ui.vertical(|ui| match &current {
                                 Some(item) => {
-                                    marquee(
-                                        ui,
-                                        INFO_WIDTH,
-                                        &format::title(item),
-                                        egui::FontId::proportional(14.0),
-                                        title_color,
-                                        animate,
+                                    ui.add(
+                                        egui::Label::new(
+                                            egui::RichText::new(format::title(item))
+                                                .size(14.0)
+                                                .strong(),
+                                        )
+                                        .truncate(),
                                     );
                                     let artist = item
                                         .artist
                                         .as_deref()
                                         .or(item.album_artist.as_deref())
                                         .unwrap_or_default();
-                                    marquee(
-                                        ui,
-                                        INFO_WIDTH,
-                                        artist,
-                                        egui::FontId::proportional(12.0),
-                                        artist_color,
-                                        animate,
+                                    ui.add(
+                                        egui::Label::new(
+                                            egui::RichText::new(artist).size(12.0).weak(),
+                                        )
+                                        .truncate(),
                                     );
                                 }
                                 None => {
-                                    marquee(
-                                        ui,
-                                        INFO_WIDTH,
-                                        "Nothing playing",
-                                        egui::FontId::proportional(12.0),
-                                        artist_color,
-                                        animate,
-                                    );
+                                    ui.weak("Nothing playing");
                                 }
-                            }
-                        });
-                    });
+                            });
+                        },
+                    );
 
-                    let mut secs = self.seek_secs;
-                    let mut dragging = self.dragging;
-                    let mut seek_to = None;
-                    let mut volume_level = self.volume;
-                    let mut volume_to = None;
-                    let width = ui.available_width().min(560.0);
-                    centred_row(ui, &mut self.row_widths[1], |ui| {
-                        ui.add_sized(
-                            [48.0, 18.0],
-                            egui::Label::new(
-                                egui::RichText::new(format::clock(secs)).small().weak(),
-                            ),
-                        );
-                        ui.spacing_mut().slider_width = width - 110.0 - 170.0;
-                        let response = ui.add(
-                            egui::Slider::new(&mut secs, 0.0..=total)
-                                .show_value(false)
-                                .trailing_fill(true),
-                        );
-                        ui.add_sized(
-                            [48.0, 18.0],
-                            egui::Label::new(
-                                egui::RichText::new(format::clock(total)).small().weak(),
-                            ),
-                        );
-                        dragging = response.dragged();
-                        // Seek once the drag ends, or on a click (a change without a drag).
-                        if response.drag_stopped() || (response.changed() && !response.dragged()) {
-                            seek_to = Some(secs);
+                    // Right: information, lyrics, queue, then sound. Added right to left.
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.spacing_mut().slider_width = 80.0;
+                        let volume = ui
+                            .add(egui::Slider::new(&mut self.volume, 0.0..=1.0).show_value(false));
+                        if volume.changed() {
+                            command = Some(Command::SetVolume(self.volume));
                         }
-
-                        ui.add_space(8.0);
-                        let speaker = speaker_button(ui, self.muted);
-                        if speaker
+                        if speaker_button(ui, self.muted)
                             .on_hover_text(if self.muted { "Unmute" } else { "Mute" })
                             .clicked()
                         {
                             command = Some(Command::ToggleMute);
                         }
-                        ui.spacing_mut().slider_width = 80.0;
-                        let volume = ui
-                            .add(egui::Slider::new(&mut volume_level, 0.0..=1.0).show_value(false));
-                        if volume.changed() {
-                            volume_to = Some(volume_level);
+                        // Output: a button that opens a list of audio outputs.
+                        let output = output_button(ui, self.output_menu).on_hover_text("Output");
+                        if output.clicked() {
+                            self.output_menu = !self.output_menu;
+                            // Refresh the device list whenever the list opens.
+                            refresh |= self.output_menu;
                         }
-                        ui.add_space(4.0);
+                        if self.output_menu {
+                            let height = 44.0 + 28.0 * self.outputs.len() as f32;
+                            let pos = egui::pos2(
+                                output.rect.right() - 240.0,
+                                output.rect.top() - height - 8.0,
+                            );
+                            let area = egui::Area::new(ui.scope_id().with("output_menu"))
+                                .order(egui::Order::Foreground)
+                                .fixed_pos(pos)
+                                .show(ui.ctx(), |ui| {
+                                    egui::Frame::popup(ui.style()).show(ui, |ui| {
+                                        ui.set_width(240.0);
+                                        ui.weak("Output");
+                                        if ui
+                                            .selectable_label(
+                                                self.output.is_none(),
+                                                "System default",
+                                            )
+                                            .clicked()
+                                        {
+                                            choice = Some(None);
+                                        }
+                                        for name in &self.outputs {
+                                            if ui
+                                                .selectable_label(
+                                                    self.output.as_deref() == Some(name),
+                                                    name,
+                                                )
+                                                .clicked()
+                                            {
+                                                choice = Some(Some(name.clone()));
+                                            }
+                                        }
+                                    });
+                                });
+                            if choice.is_some() {
+                                self.output_menu = false;
+                            }
+                            // A click anywhere else closes the list.
+                            let pressed = ui.input(|i| i.pointer.any_pressed());
+                            if pressed && !area.response.contains_pointer() && !output.hovered() {
+                                self.output_menu = false;
+                            }
+                        }
                         if panel_button(ui, Panel::Queue, self.panel == Panel::Queue)
                             .on_hover_text("Up next")
                             .clicked()
@@ -947,55 +1028,10 @@ impl Playback {
                             command = Some(Command::TogglePanel(Panel::Info));
                         }
                     });
-                    self.seek_secs = secs;
-                    self.dragging = dragging;
-                    if let Some(target) = seek_to {
-                        command = Some(Command::Seek(target));
-                    }
-                    if let Some(level) = volume_to {
-                        command = Some(Command::SetVolume(level));
-                    }
-
-                    if current.is_some() {
-                        ui.add_space(4.0);
-                        centred_row(ui, &mut self.row_widths[2], |ui| {
-                            ui.add_space(4.0);
-                            let label = format!(
-                                "Output: {}",
-                                short_name(self.output.as_deref().unwrap_or("System default"))
-                            );
-                            let menu = ui.menu_button(label, |ui| {
-                                if ui
-                                    .selectable_label(self.output.is_none(), "System default")
-                                    .clicked()
-                                {
-                                    choice = Some(None);
-                                    ui.close();
-                                }
-                                for name in &self.outputs {
-                                    if ui
-                                        .selectable_label(
-                                            self.output.as_deref() == Some(name),
-                                            name,
-                                        )
-                                        .clicked()
-                                    {
-                                        choice = Some(Some(name.clone()));
-                                        ui.close();
-                                    }
-                                }
-                            });
-                            if menu.response.clicked() {
-                                refresh = true;
-                            }
-                        });
-                    }
-
-                    ui.add_space(6.0);
-                    if let Some(error) = self.error.as_deref() {
-                        ui.colored_label(ui.visuals().error_fg_color, error);
-                    }
                 });
+                if let Some(error) = self.error.as_deref() {
+                    ui.colored_label(ui.visuals().error_fg_color, error);
+                }
             });
 
         if refresh {
@@ -1022,6 +1058,26 @@ impl Playback {
             }
             None => {}
         }
+    }
+
+    /// The cover of the track, as a small texture. It is decoded once per track.
+    fn thumbnail(&mut self, ctx: &egui::Context, item: &MediaItem) -> Option<egui::TextureHandle> {
+        if self.thumb.as_ref().is_none_or(|(id, _)| *id != item.id) {
+            let texture = player_core::read_cover(&item.path)
+                .and_then(|bytes| image::load_from_memory(&bytes).ok())
+                .map(|image| {
+                    let rgba = image.thumbnail(96, 96).to_rgba8();
+                    let size = [rgba.width() as usize, rgba.height() as usize];
+                    let colour = egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw());
+                    ctx.load_texture(
+                        format!("bar-cover-{}", item.id),
+                        colour,
+                        egui::TextureOptions::LINEAR,
+                    )
+                });
+            self.thumb = Some((item.id, texture));
+        }
+        self.thumb.as_ref().and_then(|(_, texture)| texture.clone())
     }
 }
 
@@ -1079,17 +1135,6 @@ pub fn shuffle<T>(items: &mut [T]) {
     }
 }
 
-/// A device name cut short so it fits in the bar.
-fn short_name(name: &str) -> String {
-    const MAX: usize = 22;
-    if name.chars().count() <= MAX {
-        name.to_owned()
-    } else {
-        let head: String = name.chars().take(MAX - 1).collect();
-        format!("{head}…")
-    }
-}
-
 /// Lay out `add` in a horizontal row, centred in the available width. The row's width
 /// comes from the previous frame, so the first frame may be a few pixels off.
 fn centred_row(ui: &mut egui::Ui, width: &mut f32, add: impl FnOnce(&mut egui::Ui)) {
@@ -1124,38 +1169,13 @@ fn transport_button(ui: &mut egui::Ui, icon: Icon, size: f32) -> egui::Response 
     let painter = ui.painter();
     painter.rect_filled(rect, radius, fill);
 
-    let c = rect.center();
-    let bar = |x0: f32, x1: f32| {
-        egui::Rect::from_min_max(egui::pos2(x0, c.y - 6.0), egui::pos2(x1, c.y + 6.0))
+    let glyph = match icon {
+        Icon::Previous => icons::SKIP_BACK,
+        Icon::Next => icons::SKIP_FORWARD,
+        Icon::Play => icons::PLAY,
+        Icon::Pause => icons::PAUSE,
     };
-    let triangle = |tip: f32, base: f32| {
-        egui::Shape::convex_polygon(
-            vec![
-                egui::pos2(base, c.y - 6.0),
-                egui::pos2(base, c.y + 6.0),
-                egui::pos2(tip, c.y),
-            ],
-            color,
-            egui::Stroke::NONE,
-        )
-    };
-    match icon {
-        Icon::Previous => {
-            painter.rect_filled(bar(c.x - 7.0, c.x - 5.0), 0.0, color);
-            painter.add(triangle(c.x - 5.0, c.x + 5.0));
-        }
-        Icon::Next => {
-            painter.rect_filled(bar(c.x + 5.0, c.x + 7.0), 0.0, color);
-            painter.add(triangle(c.x + 5.0, c.x - 5.0));
-        }
-        Icon::Play => {
-            painter.add(triangle(c.x + 6.0, c.x - 3.0));
-        }
-        Icon::Pause => {
-            painter.rect_filled(bar(c.x - 4.0, c.x - 1.5), 0.0, color);
-            painter.rect_filled(bar(c.x + 1.5, c.x + 4.0), 0.0, color);
-        }
-    }
+    icons::paint(painter, rect.center(), glyph, size * 0.5, color);
     response
 }
 
@@ -1178,29 +1198,12 @@ fn mode_button(ui: &mut egui::Ui, icon: ModeIcon, active: bool) -> egui::Respons
     };
     let painter = ui.painter();
     painter.rect_filled(rect, 14.0, fill);
-    let c = rect.center();
-    let stroke = egui::Stroke::new(1.4, color);
-    match icon {
-        ModeIcon::Shuffle => {
-            let (left, right) = (c.x - 6.0, c.x + 6.0);
-            let (top, bottom) = (c.y - 5.0, c.y + 5.0);
-            painter.line_segment([egui::pos2(left, bottom), egui::pos2(right, top)], stroke);
-            painter.line_segment([egui::pos2(left, top), egui::pos2(right, bottom)], stroke);
-        }
-        ModeIcon::Repeat(mode) => {
-            let body = egui::Rect::from_center_size(c, egui::vec2(13.0, 10.0));
-            painter.rect_stroke(body, 3.0, stroke, egui::StrokeKind::Inside);
-            if mode == Repeat::Track {
-                painter.text(
-                    c,
-                    egui::Align2::CENTER_CENTER,
-                    "1",
-                    egui::FontId::proportional(9.0),
-                    color,
-                );
-            }
-        }
-    }
+    let glyph = match icon {
+        ModeIcon::Shuffle => icons::SHUFFLE,
+        ModeIcon::Repeat(Repeat::Track) => icons::REPEAT_ONCE,
+        ModeIcon::Repeat(_) => icons::REPEAT,
+    };
+    icons::paint(painter, rect.center(), glyph, 16.0, color);
     response
 }
 
@@ -1215,43 +1218,29 @@ fn panel_button(ui: &mut egui::Ui, panel: Panel, active: bool) -> egui::Response
     };
     let painter = ui.painter();
     painter.rect_filled(rect, 14.0, visuals.weak_bg_fill);
-    let c = rect.center();
-    let stroke = egui::Stroke::new(1.4, color);
-    match panel {
-        Panel::Queue => {
-            for dy in [-5.0, 0.0, 5.0] {
-                painter.circle_filled(egui::pos2(c.x - 5.0, c.y + dy), 1.2, color);
-                painter.line_segment(
-                    [
-                        egui::pos2(c.x - 2.0, c.y + dy),
-                        egui::pos2(c.x + 6.0, c.y + dy),
-                    ],
-                    stroke,
-                );
-            }
-        }
-        Panel::Lyrics => {
-            // Three lines of text, the last one shorter.
-            for (dy, half) in [(-5.0, 6.0), (0.0, 6.0), (5.0, 3.5)] {
-                painter.line_segment(
-                    [
-                        egui::pos2(c.x - half, c.y + dy),
-                        egui::pos2(c.x + half, c.y + dy),
-                    ],
-                    stroke,
-                );
-            }
-        }
-        Panel::Info => {
-            painter.circle_stroke(c, 7.0, stroke);
-            painter.circle_filled(egui::pos2(c.x, c.y - 3.5), 1.2, color);
-            painter.line_segment(
-                [egui::pos2(c.x, c.y - 0.5), egui::pos2(c.x, c.y + 4.0)],
-                stroke,
-            );
-        }
-        Panel::Closed => {}
-    }
+    let glyph = match panel {
+        Panel::Queue => icons::QUEUE,
+        Panel::Lyrics => icons::QUOTES,
+        Panel::Info => icons::INFO,
+        Panel::Closed => "",
+    };
+    icons::paint(painter, rect.center(), glyph, 16.0, color);
+    response
+}
+
+/// Round button with an output icon: a screen with a pointer below it. Tinted while the output
+/// list is open.
+fn output_button(ui: &mut egui::Ui, active: bool) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(28.0, 28.0), egui::Sense::click());
+    let visuals = ui.style().interact(&response);
+    let colour = if active {
+        ui.visuals().hyperlink_color
+    } else {
+        visuals.fg_stroke.color
+    };
+    let painter = ui.painter();
+    painter.rect_filled(rect, 14.0, visuals.weak_bg_fill);
+    icons::paint(painter, rect.center(), icons::AIRPLAY, 16.0, colour);
     response
 }
 
@@ -1261,90 +1250,13 @@ fn speaker_button(ui: &mut egui::Ui, muted: bool) -> egui::Response {
     let visuals = ui.style().interact(&response);
     let color = visuals.fg_stroke.color;
     let painter = ui.painter();
-    let c = rect.center();
-    let stroke = egui::Stroke::new(1.4, color);
-    painter.add(egui::Shape::convex_polygon(
-        vec![
-            egui::pos2(c.x - 7.0, c.y - 2.5),
-            egui::pos2(c.x - 3.0, c.y - 2.5),
-            egui::pos2(c.x + 1.0, c.y - 6.0),
-            egui::pos2(c.x + 1.0, c.y + 6.0),
-            egui::pos2(c.x - 3.0, c.y + 2.5),
-            egui::pos2(c.x - 7.0, c.y + 2.5),
-        ],
-        color,
-        egui::Stroke::NONE,
-    ));
-    if muted {
-        painter.line_segment(
-            [
-                egui::pos2(c.x + 4.0, c.y - 4.0),
-                egui::pos2(c.x + 9.0, c.y + 4.0),
-            ],
-            stroke,
-        );
-        painter.line_segment(
-            [
-                egui::pos2(c.x + 4.0, c.y + 4.0),
-                egui::pos2(c.x + 9.0, c.y - 4.0),
-            ],
-            stroke,
-        );
+    let glyph = if muted {
+        icons::SPEAKER_X
     } else {
-        painter.line_segment(
-            [
-                egui::pos2(c.x + 4.0, c.y - 3.0),
-                egui::pos2(c.x + 4.0, c.y + 3.0),
-            ],
-            stroke,
-        );
-        painter.line_segment(
-            [
-                egui::pos2(c.x + 7.0, c.y - 5.0),
-                egui::pos2(c.x + 7.0, c.y + 5.0),
-            ],
-            stroke,
-        );
-    }
+        icons::SPEAKER_HIGH
+    };
+    icons::paint(painter, rect.center(), glyph, 16.0, color);
     response
-}
-
-/// Fixed width of the track name and artist column.
-const INFO_WIDTH: f32 = 300.0;
-
-/// Scroll speed of a line that is wider than the column, in points per second.
-const SCROLL_SPEED: f64 = 40.0;
-
-/// Gap between repeats of a scrolling line.
-const SCROLL_GAP: f32 = 48.0;
-
-/// One line of text in a fixed-width box. A short line is left-aligned. A line wider than the
-/// box scrolls in a loop, and the window keeps redrawing while it does.
-fn marquee(
-    ui: &mut egui::Ui,
-    width: f32,
-    text: &str,
-    font: egui::FontId,
-    color: egui::Color32,
-    animate: bool,
-) {
-    let galley = ui.painter().layout_no_wrap(text.to_owned(), font, color);
-    let text_width = galley.size().x;
-    let (rect, _) =
-        ui.allocate_exact_size(egui::vec2(width, galley.size().y), egui::Sense::hover());
-    let painter = ui.painter_at(rect);
-    if text_width <= width || !animate {
-        let x = rect.left();
-        painter.galley(egui::pos2(x, rect.top()), galley, color);
-    } else {
-        let period = text_width + SCROLL_GAP;
-        let time = ui.input(|i| i.time);
-        let offset = ((time * SCROLL_SPEED) % f64::from(period)) as f32;
-        let x = rect.left() - offset;
-        painter.galley(egui::pos2(x, rect.top()), galley.clone(), color);
-        painter.galley(egui::pos2(x + period, rect.top()), galley, color);
-        ui.ctx().request_repaint();
-    }
 }
 
 #[cfg(test)]
@@ -1406,6 +1318,8 @@ mod tests {
             radio_loading: None,
             radio_paused: false,
             radio_reconnects: 0,
+            thumb: None,
+            output_menu: false,
         };
         p.play_queue((1..=n).map(item).collect(), 0);
         p

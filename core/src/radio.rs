@@ -26,6 +26,8 @@ pub struct Station {
     pub name: String,
     pub url: String,
     pub country: String,
+    /// Two-letter country code, such as "IN". Empty when the directory has none.
+    pub country_code: String,
     pub codec: String,
     pub bitrate: i64,
     pub tags: String,
@@ -135,6 +137,7 @@ fn station_from(entry: &Value) -> Option<Station> {
         name: text(entry, "name"),
         url,
         country: text(entry, "country"),
+        country_code: text(entry, "countrycode").to_ascii_uppercase(),
         codec: text(entry, "codec"),
         bitrate: number(entry, "bitrate"),
         tags: text(entry, "tags"),
@@ -171,6 +174,7 @@ fn tuned_from(row: &rusqlite::Row<'_>) -> rusqlite::Result<Station> {
         name: row.get(1)?,
         url: row.get(2)?,
         country: row.get(3)?,
+        country_code: String::new(),
         codec: row.get(4)?,
         bitrate: row.get(5)?,
         tags: String::new(),
@@ -209,8 +213,8 @@ impl Library {
         for s in stations {
             tx.execute(
                 "INSERT OR REPLACE INTO station \
-                 (uuid, name, url, country, codec, bitrate, tags, votes, working) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                 (uuid, name, url, country, codec, bitrate, tags, votes, working, countrycode) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                 params![
                     s.uuid,
                     s.name,
@@ -220,7 +224,8 @@ impl Library {
                     s.bitrate,
                     s.tags,
                     s.votes,
-                    i64::from(s.working)
+                    i64::from(s.working),
+                    s.country_code
                 ],
             )?;
             tx.execute(
@@ -251,7 +256,7 @@ impl Library {
         let rows: Vec<Station> = match fts_query(query) {
             Some(fts) => {
                 let sql = format!(
-                    "SELECT {columns}, s.working FROM station_fts f \
+                    "SELECT {columns}, s.working, s.countrycode FROM station_fts f \
                      JOIN station s ON s.uuid = f.uuid \
                      WHERE station_fts MATCH ?1 AND s.working = 1 \
                      ORDER BY s.votes DESC LIMIT ?2"
@@ -262,7 +267,7 @@ impl Library {
             }
             None => {
                 let sql = format!(
-                    "SELECT {columns}, s.working FROM station s \
+                    "SELECT {columns}, s.working, s.countrycode FROM station s \
                      WHERE s.working = 1 ORDER BY s.votes DESC LIMIT ?1"
                 );
                 let mut stmt = self.conn.prepare(&sql)?;
@@ -350,6 +355,7 @@ fn station_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Station> {
         tags: row.get(6)?,
         votes: row.get(7)?,
         working: row.get::<_, i64>(8)? != 0,
+        country_code: row.get(9)?,
     })
 }
 

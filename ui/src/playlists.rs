@@ -1,6 +1,8 @@
 //! Playlists: the list of playlists, and one playlist's tracks with play, shuffle, rename,
 //! reorder (drag the grip) and remove.
 
+use std::collections::HashMap;
+
 use eframe::egui;
 use player_core::{Library, MediaItem, PlaylistSummary};
 
@@ -8,6 +10,8 @@ use crate::albums::{
     PlayRequest, back_icon_button, play_icon_button, shuffle_icon_button, shuffled,
 };
 use crate::format;
+use crate::icons;
+use crate::search::search_fill;
 
 /// The playlist list, or the tracks of one playlist when one is open.
 #[derive(Default)]
@@ -23,12 +27,23 @@ pub struct PlaylistsView {
     renaming: Option<String>,
     /// Index of the track whose grip is being dragged.
     dragging: Option<usize>,
+    /// Small covers of the open playlist's tracks, by track id.
+    thumbs: HashMap<i64, Option<egui::TextureHandle>>,
+    /// The row the pointer was over in the last frame; its remove button is shown.
+    hovered_row: Option<usize>,
 }
 
 impl PlaylistsView {
     /// All playlists, for the menus that add tracks to one.
     pub fn summaries(&self) -> &[PlaylistSummary] {
         &self.playlists
+    }
+
+    /// Open one playlist, as if it had been clicked in the list.
+    pub fn open(&mut self, id: i64, library: &Library) {
+        self.selected = Some(id);
+        self.renaming = None;
+        self.load_tracks(library);
     }
 
     /// Reload the playlists from the library, and the open one's tracks.
@@ -81,15 +96,53 @@ impl PlaylistsView {
         ui.heading("Playlists");
         ui.add_space(8.0);
         ui.horizontal(|ui| {
-            let field = ui.add(
-                egui::TextEdit::singleline(&mut self.new_name)
-                    .hint_text("New playlist name")
-                    .desired_width(240.0),
-            );
-            let create = ui.add_enabled(
-                !self.new_name.trim().is_empty(),
-                egui::Button::new("Create"),
-            );
+            // The same filled field as the search box, with a plus in place of the magnifier.
+            let framed = egui::Frame::new()
+                .fill(search_fill(ui))
+                .corner_radius(10.0)
+                .inner_margin(egui::Margin::symmetric(12, 9))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        let (rect, _) =
+                            ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
+                        icons::paint(
+                            ui.painter(),
+                            rect.center(),
+                            icons::PLUS,
+                            16.0,
+                            ui.visuals().weak_text_color(),
+                        );
+                        ui.add_space(6.0);
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.new_name)
+                                .frame(egui::Frame::NONE)
+                                .hint_text("New playlist name")
+                                .margin(egui::Margin::symmetric(10, 6))
+                                .align(egui::Align2::LEFT_CENTER)
+                                .desired_width(200.0),
+                        )
+                    })
+                    .inner
+                });
+            let field = framed.inner;
+            // The button is as tall as the field, with the same corners as the Sync now button.
+            let height = framed.response.rect.height();
+            let create = ui
+                .scope(|ui| {
+                    // Wider than the default button padding, so the label has room either side.
+                    ui.spacing_mut().button_padding = egui::vec2(18.0, 6.0);
+                    ui.add_enabled(
+                        !self.new_name.trim().is_empty(),
+                        egui::Button::new(
+                            egui::RichText::new("Create").color(egui::Color32::WHITE),
+                        )
+                        .fill(ui.visuals().selection.bg_fill)
+                        .stroke(egui::Stroke::NONE)
+                        .corner_radius(6.0)
+                        .min_size(egui::vec2(0.0, height)),
+                    )
+                })
+                .inner;
             let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
             if (create.clicked() || enter) && !self.new_name.trim().is_empty() {
                 match library.create_playlist(&self.new_name) {
@@ -113,26 +166,38 @@ impl PlaylistsView {
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                for playlist in &self.playlists {
-                    let label = format!("{}   ·   {} tracks", playlist.name, playlist.track_count);
-                    let response = ui.add_sized(
-                        [ui.available_width(), 36.0],
-                        egui::Button::new(label).corner_radius(6.0),
-                    );
-                    if response.clicked() {
-                        self.selected = Some(playlist.id);
-                    }
-                    response.context_menu(|ui| {
-                        if ui.button("Rename").clicked() {
-                            rename = Some((playlist.id, playlist.name.clone()));
-                            ui.close();
+                // As many fixed-width columns as the window fits.
+                let columns =
+                    (((ui.available_width() + CARD_GAP) / (CARD_WIDTH + CARD_GAP)).floor()
+                        as usize)
+                        .max(1);
+                egui::Grid::new("playlist_grid")
+                    .num_columns(columns)
+                    .spacing([CARD_GAP, CARD_GAP])
+                    .min_col_width(CARD_WIDTH)
+                    .max_col_width(CARD_WIDTH)
+                    .show(ui, |ui| {
+                        for (n, playlist) in self.playlists.iter().enumerate() {
+                            let response = playlist_card(ui, playlist);
+                            if response.clicked() {
+                                self.selected = Some(playlist.id);
+                            }
+                            response.context_menu(|ui| {
+                                if ui.button("Rename").clicked() {
+                                    rename = Some((playlist.id, playlist.name.clone()));
+                                    ui.close();
+                                }
+                                if ui.button("Delete playlist").clicked() {
+                                    delete = Some(playlist.id);
+                                    ui.close();
+                                }
+                            });
+                            if (n + 1) % columns == 0 {
+                                ui.end_row();
+                            }
                         }
-                        if ui.button("Delete playlist").clicked() {
-                            delete = Some(playlist.id);
-                            ui.close();
-                        }
+                        ui.end_row();
                     });
-                }
             });
         if let Some((id, name)) = rename {
             self.selected = Some(id);
@@ -179,7 +244,12 @@ impl PlaylistsView {
         let mut start_rename = false;
         match &mut self.renaming {
             Some(buffer) => ui.horizontal(|ui| {
-                let field = ui.add(egui::TextEdit::singleline(buffer).desired_width(260.0));
+                let field = ui.add(
+                    egui::TextEdit::singleline(buffer)
+                        .margin(egui::Margin::symmetric(10, 6))
+                        .align(egui::Align2::LEFT_CENTER)
+                        .desired_width(260.0),
+                );
                 if !field.has_focus() && !field.lost_focus() {
                     field.request_focus();
                 }
@@ -242,11 +312,12 @@ impl PlaylistsView {
         let mut rows: Vec<(usize, egui::Rect)> = Vec::with_capacity(self.tracks.len());
         let mut drag_started = None;
         let mut drag_stopped = None;
+        let mut hovered_now = None;
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 for (n, track) in self.tracks.iter().enumerate() {
-                    let row = ui
+                    let row_rect = ui
                         .horizontal(|ui| {
                             let (grip_rect, grip) =
                                 ui.allocate_exact_size(egui::vec2(14.0, 36.0), egui::Sense::drag());
@@ -261,10 +332,23 @@ impl PlaylistsView {
                                 drag_stopped = Some(n);
                             }
                             ui.add_space(6.0);
+                            // The position in the playlist, numbered as in the album listing.
+                            let (number, _) = ui
+                                .allocate_exact_size(egui::vec2(28.0, 36.0), egui::Sense::hover());
+                            ui.painter().text(
+                                number.left_center(),
+                                egui::Align2::LEFT_CENTER,
+                                (n + 1).to_string(),
+                                egui::FontId::proportional(13.0),
+                                ui.visuals().weak_text_color(),
+                            );
+                            let texture = track_thumbnail(&mut self.thumbs, ui.ctx(), track);
+                            thumbnail(ui, texture.as_ref());
+                            ui.add_space(8.0);
                             ui.vertical(|ui| {
                                 let title = format::title(track);
                                 if current == Some(track.id) {
-                                    ui.strong(title);
+                                    ui.label(crate::fonts::bold(title));
                                 } else {
                                     ui.label(title);
                                 }
@@ -277,8 +361,33 @@ impl PlaylistsView {
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {
-                                    if ui.small_button("Remove").clicked() {
-                                        remove = Some(n);
+                                    // The minus appears only while the row is hovered.
+                                    if self.hovered_row == Some(n) {
+                                        let (rect, button) = ui.allocate_exact_size(
+                                            egui::vec2(24.0, 24.0),
+                                            egui::Sense::click(),
+                                        );
+                                        let colour = if button.hovered() {
+                                            ui.visuals().strong_text_color()
+                                        } else {
+                                            ui.visuals().weak_text_color()
+                                        };
+                                        if button.hovered() {
+                                            ui.ctx()
+                                                .set_cursor_icon(egui::CursorIcon::PointingHand);
+                                        }
+                                        icons::paint(
+                                            ui.painter(),
+                                            rect.center(),
+                                            icons::MINUS,
+                                            16.0,
+                                            colour,
+                                        );
+                                        if button.clicked() {
+                                            remove = Some(n);
+                                        }
+                                    } else {
+                                        ui.add_space(24.0);
                                     }
                                     ui.add_space(8.0);
                                     ui.weak(format::duration(track.duration_ms));
@@ -287,11 +396,15 @@ impl PlaylistsView {
                         })
                         .response
                         .rect;
-                    rows.push((n, row));
+                    if ui.rect_contains_pointer(row_rect) {
+                        hovered_now = Some(n);
+                    }
+                    rows.push((n, row_rect));
                     ui.add_space(4.0);
                 }
             });
 
+        self.hovered_row = hovered_now;
         if let Some(n) = drag_started {
             self.dragging = Some(n);
         }
@@ -357,14 +470,130 @@ impl PlaylistsView {
     }
 }
 
-/// Six dots in two columns: the drag handle for a row.
-fn draw_grip(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
-    let c = rect.center();
-    for dy in [-6.0, 0.0, 6.0] {
-        for dx in [-3.0, 3.0] {
-            painter.circle_filled(c + egui::vec2(dx, dy), 1.5, color);
+/// Size of a playlist card, and the gap between cards. They match the radio station cards.
+pub(crate) const CARD_WIDTH: f32 = 260.0;
+const CARD_HEIGHT: f32 = 66.0;
+pub(crate) const CARD_GAP: f32 = 12.0;
+
+/// A playlist as a card: a tile with its initials, the name and the track count.
+pub(crate) fn playlist_card(ui: &mut egui::Ui, playlist: &PlaylistSummary) -> egui::Response {
+    let frame = egui::Frame::new()
+        .fill(ui.visuals().faint_bg_color)
+        .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
+        .corner_radius(12.0)
+        .inner_margin(egui::Margin::same(12))
+        .show(ui, |ui| {
+            ui.set_width(CARD_WIDTH - 24.0);
+            // The content is centred vertically within the card's fixed height.
+            ui.allocate_ui_with_layout(
+                egui::vec2(ui.available_width(), CARD_HEIGHT - 24.0),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    let (tile, _) =
+                        ui.allocate_exact_size(egui::vec2(42.0, 42.0), egui::Sense::hover());
+                    ui.painter()
+                        .rect_filled(tile, 42.0 * 0.22, ui.visuals().selection.bg_fill);
+                    ui.painter().text(
+                        tile.center(),
+                        egui::Align2::CENTER_CENTER,
+                        initials(&playlist.name),
+                        egui::FontId::proportional(15.0),
+                        egui::Color32::WHITE,
+                    );
+                    ui.add_space(10.0);
+                    ui.vertical(|ui| {
+                        // Two lines of text: centre them against the tile.
+                        ui.add_space(((CARD_HEIGHT - 24.0) - 38.0) / 2.0);
+                        ui.add(
+                            egui::Label::new(egui::RichText::new(&playlist.name).strong())
+                                .truncate(),
+                        );
+                        ui.add(egui::Label::new(
+                            egui::RichText::new(format!("{} tracks", playlist.track_count)).weak(),
+                        ));
+                    });
+                },
+            );
+        })
+        .response;
+    if ui.rect_contains_pointer(frame.rect) {
+        ui.painter().rect_stroke(
+            frame.rect,
+            12.0,
+            egui::Stroke::new(1.5, ui.visuals().selection.bg_fill),
+            egui::StrokeKind::Inside,
+        );
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    ui.interact(
+        frame.rect,
+        ui.scope_id().with(("playlist_card", playlist.id)),
+        egui::Sense::click(),
+    )
+}
+
+/// The first letter of the first two words, in capitals.
+fn initials(name: &str) -> String {
+    name.split_whitespace()
+        .take(2)
+        .filter_map(|word| word.chars().next())
+        .flat_map(char::to_uppercase)
+        .collect()
+}
+
+/// The track's embedded cover as a small texture. It is decoded once per track.
+fn track_thumbnail(
+    thumbs: &mut HashMap<i64, Option<egui::TextureHandle>>,
+    ctx: &egui::Context,
+    track: &MediaItem,
+) -> Option<egui::TextureHandle> {
+    thumbs
+        .entry(track.id)
+        .or_insert_with(|| {
+            let bytes = player_core::read_cover(&track.path)?;
+            let image = image::load_from_memory(&bytes)
+                .ok()?
+                .thumbnail(72, 72)
+                .to_rgba8();
+            let size = [image.width() as usize, image.height() as usize];
+            let colour = egui::ColorImage::from_rgba_unmultiplied(size, image.as_raw());
+            Some(ctx.load_texture(
+                format!("track-thumb-{}", track.id),
+                colour,
+                egui::TextureOptions::LINEAR,
+            ))
+        })
+        .clone()
+}
+
+/// Draw a 36 px square thumbnail, or a plain square when there is no cover.
+fn thumbnail(ui: &mut egui::Ui, texture: Option<&egui::TextureHandle>) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(36.0, 36.0), egui::Sense::hover());
+    match texture {
+        Some(texture) => {
+            ui.put(
+                rect,
+                egui::Image::new(texture)
+                    .fit_to_exact_size(rect.size())
+                    .corner_radius(4.0),
+            );
+        }
+        None => {
+            ui.painter()
+                .rect_filled(rect, 4.0, ui.visuals().faint_bg_color);
         }
     }
+}
+
+/// The drag handle for a row.
+fn draw_grip(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
+    icons::paint(
+        painter,
+        rect.center(),
+        icons::DOTS_SIX_VERTICAL,
+        16.0,
+        color,
+    );
 }
 
 /// A line where the dragged row would be inserted.

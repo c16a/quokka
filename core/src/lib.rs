@@ -1,9 +1,11 @@
 //! Library layer: SQLite index of audio and video files, scanning, metadata,
 //! full-text search and tags. Pure Rust, no UI and no playback dependencies.
 
+mod artist_photo;
 mod browse;
 mod cover;
 
+pub use artist_photo::{ArtistPhoto, fetch_artist_photo};
 pub use cover::read_cover;
 mod db;
 mod details;

@@ -3,7 +3,7 @@ use rusqlite::Connection;
 use crate::Result;
 
 /// Bump when the schema changes and add a matching migration step below.
-const SCHEMA_VERSION: i64 = 8;
+const SCHEMA_VERSION: i64 = 9;
 
 /// Per-connection settings and schema migration.
 pub(crate) fn configure(conn: &Connection) -> Result<()> {
@@ -37,6 +37,9 @@ pub(crate) fn configure(conn: &Connection) -> Result<()> {
     }
     if version < 8 {
         conn.execute_batch(SCHEMA_V8)?;
+    }
+    if version < 9 {
+        conn.execute_batch(SCHEMA_V9)?;
     }
     if version != SCHEMA_VERSION {
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
@@ -199,4 +202,10 @@ CREATE TABLE meta (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+";
+
+/// Two-letter country code of each station, for the flag shown in the radio list. Stations
+/// stored before this version get it at the next sync.
+const SCHEMA_V9: &str = "
+ALTER TABLE station ADD COLUMN countrycode TEXT NOT NULL DEFAULT '';
 ";

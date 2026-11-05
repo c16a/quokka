@@ -30,7 +30,7 @@ impl MoviesView {
                 for i in range {
                     let movie = &self.movies[i];
                     ui.horizontal(|ui| {
-                        ui.strong(format::title(movie));
+                        ui.label(crate::fonts::bold(format::title(movie)));
                         ui.weak(format!(
                             "{} · {}",
                             format::duration(movie.duration_ms),

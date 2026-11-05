@@ -329,7 +329,7 @@ impl SidePanels {
                 if let Some(details) = details {
                     ui.add_space(16.0);
                     indented(ui, |ui| {
-                        ui.strong("Tags");
+                        ui.label(crate::fonts::bold("Tags"));
                         ui.add_space(4.0);
                         egui::Grid::new("track_tags")
                             .num_columns(2)

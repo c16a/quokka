@@ -5,6 +5,7 @@ use eframe::egui;
 use player_core::{MediaItem, PlaylistSummary};
 
 use crate::format;
+use crate::icons;
 use crate::playback::{MenuRequest, Playback};
 
 /// Height of a queue row's content.
@@ -215,21 +216,18 @@ fn draw_drop_line(
 
 /// Six dots in two columns: the drag handle.
 fn draw_grip(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
-    let c = rect.center();
-    for dy in [-6.0, 0.0, 6.0] {
-        for dx in [-3.0, 3.0] {
-            painter.circle_filled(c + egui::vec2(dx, dy), 1.5, color);
-        }
-    }
+    icons::paint(
+        painter,
+        rect.center(),
+        icons::DOTS_SIX_VERTICAL,
+        16.0,
+        color,
+    );
 }
 
-/// A small cross: removes the row from the queue.
+/// A cross: removes the row from the queue.
 fn draw_close(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
-    let c = rect.center();
-    let r = 4.5;
-    let stroke = egui::Stroke::new(1.5, color);
-    painter.line_segment([c + egui::vec2(-r, -r), c + egui::vec2(r, r)], stroke);
-    painter.line_segment([c + egui::vec2(r, -r), c + egui::vec2(-r, r)], stroke);
+    icons::paint(painter, rect.center(), icons::X, 14.0, color);
 }
 
 /// The right-click menu for a track: play it next, or add it to the end of the queue.

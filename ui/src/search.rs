@@ -3,7 +3,9 @@ use player_core::{AlbumSummary, Library, MediaItem, PlaylistSummary, SongQuery};
 
 use crate::albums::{self, AlbumsView, PlayRequest, TILE_GAP};
 use crate::format;
+use crate::icons;
 use crate::playback::MenuRequest;
+use crate::playlists::{CARD_GAP, CARD_WIDTH, playlist_card};
 use crate::queue;
 
 /// Most songs listed for one search.
@@ -14,6 +16,7 @@ const SONG_LIMIT: usize = 200;
 pub struct SearchOutcome {
     pub play: Option<PlayRequest>,
     pub open_album: Option<usize>,
+    pub open_playlist: Option<i64>,
 }
 
 /// The search screen: a field at the top, then the albums and songs whose names match.
@@ -24,6 +27,8 @@ pub struct SearchView {
     searched: String,
     /// Positions in the album grid of albums whose name matches.
     album_hits: Vec<usize>,
+    /// Playlists whose name matches.
+    playlist_hits: Vec<PlaylistSummary>,
     songs: Vec<MediaItem>,
     focus_pending: bool,
 }
@@ -59,7 +64,9 @@ impl SearchView {
                     let field = ui.add(
                         egui::TextEdit::singleline(&mut self.query)
                             .frame(egui::Frame::NONE)
-                            .hint_text("Search albums and songs")
+                            .hint_text("Search albums, songs and playlists")
+                            .margin(egui::Margin::symmetric(10, 6))
+                            .align(egui::Align2::LEFT_CENTER)
                             .desired_width(f32::INFINITY),
                     );
                     if std::mem::take(&mut self.focus_pending) {
@@ -71,14 +78,14 @@ impl SearchView {
 
         let query = self.query.trim().to_owned();
         if query != self.searched {
-            self.refresh(albums, library, &query);
+            self.refresh(albums, library, playlists, &query);
             self.searched = query.clone();
         }
         if query.is_empty() {
-            ui.weak("Search for an album or a song. Filters: artist:, album:, genre:, year:, format:flac.");
+            ui.weak("Search for an album, a song or a playlist. Filters: artist:, album:, genre:, year:, format:flac.");
             return outcome;
         }
-        if self.album_hits.is_empty() && self.songs.is_empty() {
+        if self.playlist_hits.is_empty() && self.album_hits.is_empty() && self.songs.is_empty() {
             ui.weak(format!("No results for \"{query}\"."));
             return outcome;
         }
@@ -86,6 +93,32 @@ impl SearchView {
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
+                if !self.playlist_hits.is_empty() {
+                    ui.heading("Playlists");
+                    ui.add_space(8.0);
+                    // Cards in a grid, as on the Playlists screen.
+                    let columns = (((ui.available_width() + CARD_GAP) / (CARD_WIDTH + CARD_GAP))
+                        .floor() as usize)
+                        .max(1);
+                    egui::Grid::new("search_playlist_grid")
+                        .num_columns(columns)
+                        .spacing([CARD_GAP, CARD_GAP])
+                        .min_col_width(CARD_WIDTH)
+                        .max_col_width(CARD_WIDTH)
+                        .show(ui, |ui| {
+                            for (n, playlist) in self.playlist_hits.iter().enumerate() {
+                                if playlist_card(ui, playlist).clicked() {
+                                    outcome.open_playlist = Some(playlist.id);
+                                }
+                                if (n + 1) % columns == 0 {
+                                    ui.end_row();
+                                }
+                            }
+                            ui.end_row();
+                        });
+                    ui.add_space(24.0);
+                }
+
                 if !self.album_hits.is_empty() {
                     ui.heading("Albums");
                     ui.add_space(8.0);
@@ -115,7 +148,7 @@ impl SearchView {
                                     ui.vertical(|ui| {
                                         let title = format::title(song);
                                         if current == Some(song.id) {
-                                            ui.strong(title);
+                                            ui.label(crate::fonts::bold(title));
                                         } else {
                                             ui.label(title);
                                         }
@@ -163,12 +196,34 @@ impl SearchView {
     }
 
     /// Rebuild the results for `query`, which may contain filters such as `artist:`.
-    fn refresh(&mut self, albums: &AlbumsView, library: &Library, query: &str) {
+    fn refresh(
+        &mut self,
+        albums: &AlbumsView,
+        library: &Library,
+        playlists: &[PlaylistSummary],
+        query: &str,
+    ) {
         self.album_hits.clear();
+        self.playlist_hits.clear();
         self.songs.clear();
         let parsed = SongQuery::parse(query);
         if parsed.is_empty() {
             return;
+        }
+        // A playlist has only a name, so it matches the words typed and no other filter.
+        if !parsed.text.is_empty()
+            && parsed.artist.is_none()
+            && parsed.album.is_none()
+            && parsed.genre.is_none()
+            && parsed.year.is_none()
+            && parsed.format.is_none()
+        {
+            let needle = parsed.text.to_lowercase();
+            self.playlist_hits = playlists
+                .iter()
+                .filter(|playlist| playlist.name.to_lowercase().contains(&needle))
+                .cloned()
+                .collect();
         }
         // Genre and format describe tracks, not albums, so they only filter songs.
         if !parsed.has_track_filters() {
@@ -227,7 +282,7 @@ fn play_from(library: &Library, song: &MediaItem) -> PlayRequest {
 }
 
 /// Background of the search field: a faint tint that works in both themes.
-fn search_fill(ui: &egui::Ui) -> egui::Color32 {
+pub(crate) fn search_fill(ui: &egui::Ui) -> egui::Color32 {
     if ui.visuals().dark_mode {
         egui::Color32::from_white_alpha(18)
     } else {
@@ -235,12 +290,14 @@ fn search_fill(ui: &egui::Ui) -> egui::Color32 {
     }
 }
 
-/// A magnifying glass, drawn so it needs no icon font.
+/// A magnifying glass.
 fn search_icon(ui: &mut egui::Ui) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
-    let c = rect.center() + egui::vec2(-1.0, -1.0);
-    let stroke = egui::Stroke::new(1.6, ui.visuals().weak_text_color());
-    ui.painter().circle_stroke(c, 5.0, stroke);
-    ui.painter()
-        .line_segment([c + egui::vec2(3.6, 3.6), c + egui::vec2(6.5, 6.5)], stroke);
+    icons::paint(
+        ui.painter(),
+        rect.center(),
+        icons::MAGNIFYING_GLASS,
+        16.0,
+        ui.visuals().weak_text_color(),
+    );
 }
