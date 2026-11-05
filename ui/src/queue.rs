@@ -2,10 +2,10 @@
 //! and removed. These changes only touch the queue, never the files on disk.
 
 use eframe::egui;
-use player_core::MediaItem;
+use player_core::{MediaItem, PlaylistSummary};
 
 use crate::format;
-use crate::playback::{Playback, QueueRequest};
+use crate::playback::{MenuRequest, Playback};
 
 /// Height of a queue row's content.
 const ROW_HEIGHT: f32 = 52.0;
@@ -233,17 +233,37 @@ fn draw_close(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
 }
 
 /// The right-click menu for a track: play it next, or add it to the end of the queue.
-pub fn track_menu(ui: &mut egui::Ui, queue: &mut Vec<QueueRequest>, track: &MediaItem) {
+pub fn track_menu(
+    ui: &mut egui::Ui,
+    queue: &mut Vec<MenuRequest>,
+    track: &MediaItem,
+    playlists: &[PlaylistSummary],
+) {
     ui.set_min_width(180.0);
     ui.spacing_mut().item_spacing.y = 4.0;
+    ui.spacing_mut().button_padding = egui::vec2(14.0, 6.0);
     if menu_row(ui, "Play next") {
-        queue.push(QueueRequest::PlayNext(track.clone()));
+        queue.push(MenuRequest::PlayNext(track.clone()));
         ui.close();
     }
     if menu_row(ui, "Add to queue") {
-        queue.push(QueueRequest::AddToQueue(track.clone()));
+        queue.push(MenuRequest::AddToQueue(track.clone()));
         ui.close();
     }
+    ui.menu_button("Add to playlist", |ui| {
+        if playlists.is_empty() {
+            ui.weak("No playlists yet");
+        }
+        for playlist in playlists {
+            if ui.button(&playlist.name).clicked() {
+                queue.push(MenuRequest::AddToPlaylist {
+                    playlist: playlist.id,
+                    media_id: track.id,
+                });
+                ui.close();
+            }
+        }
+    });
 }
 
 /// One full-width entry in a menu, with its label inset from the left edge. Returns true when

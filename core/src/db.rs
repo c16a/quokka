@@ -3,7 +3,7 @@ use rusqlite::Connection;
 use crate::Result;
 
 /// Bump when the schema changes and add a matching migration step below.
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 
 /// Per-connection settings and schema migration.
 pub(crate) fn configure(conn: &Connection) -> Result<()> {
@@ -25,6 +25,9 @@ pub(crate) fn configure(conn: &Connection) -> Result<()> {
     }
     if version < 4 {
         conn.execute_batch(SCHEMA_V4)?;
+    }
+    if version < 5 {
+        conn.execute_batch(SCHEMA_V5)?;
     }
     if version != SCHEMA_VERSION {
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
@@ -110,5 +113,22 @@ CREATE TABLE favorite (
     kind TEXT NOT NULL,
     key  TEXT NOT NULL,
     PRIMARY KEY (kind, key)
+);
+";
+
+/// User playlists. Entries are numbered by `position`; removing an entry leaves a gap, which
+/// is fine because entries are always read in order.
+const SCHEMA_V5: &str = "
+CREATE TABLE playlist (
+    id      INTEGER PRIMARY KEY,
+    name    TEXT NOT NULL,
+    created INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+);
+
+CREATE TABLE playlist_track (
+    playlist_id INTEGER NOT NULL REFERENCES playlist(id) ON DELETE CASCADE,
+    position    INTEGER NOT NULL,
+    media_id    INTEGER NOT NULL REFERENCES media(id) ON DELETE CASCADE,
+    PRIMARY KEY (playlist_id, position)
 );
 ";

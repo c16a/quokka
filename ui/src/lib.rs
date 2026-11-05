@@ -1,10 +1,12 @@
 //! Desktop UI (egui via eframe): Albums, Movies, Settings views, and the playback bar.
 
 mod albums;
+mod artists;
 mod format;
 mod media;
 mod movies;
 mod playback;
+mod playlists;
 mod queue;
 mod search;
 mod settings_view;
@@ -17,20 +19,24 @@ use std::time::{Duration, Instant};
 
 use eframe::egui;
 use notify::{RecursiveMode, Watcher};
-use player_core::{Library, ScanStats, Settings, Theme};
+use player_core::{Library, ScanStats, Session, Settings, Theme};
 
-use playback::{Playback, QueueRequest};
+use playback::{MenuRequest, Playback};
 
 /// Where the app keeps its library database and settings file.
 pub struct Paths {
     pub db: PathBuf,
     pub settings: PathBuf,
+    /// Where the playback state is saved on exit, so it can resume.
+    pub session: PathBuf,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Tab {
     Search,
     Albums,
+    Artists,
+    Playlists,
     Movies,
     Settings,
 }
@@ -51,6 +57,8 @@ struct App {
     movies: movies::MoviesView,
     playback: Playback,
     queue_view: queue::QueueView,
+    artists: artists::ArtistsView,
+    playlists: playlists::PlaylistsView,
     /// System media keys and now-playing display. `None` when the system has none.
     media: Option<media::Media>,
     /// The folder being scanned now, and the channel its result arrives on.
@@ -65,6 +73,9 @@ struct App {
     changes: Receiver<()>,
     /// When to rescan after changes, once the library has been quiet for a while.
     rescan_at: Option<Instant>,
+    /// The playback state last written to disk, and when the state was last checked.
+    session_saved: Option<Session>,
+    last_save: Instant,
     status: String,
 }
 
@@ -123,6 +134,8 @@ impl App {
             movies: Default::default(),
             playback: Playback::new(),
             queue_view: Default::default(),
+            artists: Default::default(),
+            playlists: Default::default(),
             media,
             scan: None,
             queue: VecDeque::new(),
@@ -131,10 +144,13 @@ impl App {
             change_tx,
             changes,
             rescan_at: None,
+            session_saved: None,
+            last_save: Instant::now(),
             status: String::new(),
         };
         app.playback.set_replay_gain(app.settings.replay_gain);
         app.reload_views();
+        app.restore_session();
         if app.settings.library_roots.is_empty() {
             app.status = "Add a folder to get started.".into();
         } else {
@@ -145,9 +161,59 @@ impl App {
         app
     }
 
+    /// Put back the queue and position saved when the app last closed. Playback stays paused.
+    /// Files that are no longer in the library are skipped.
+    fn restore_session(&mut self) {
+        let Some(session) = Session::load(&self.paths.session) else {
+            return;
+        };
+        let mut items = Vec::new();
+        let mut index = None;
+        for (i, path) in session.queue.iter().enumerate() {
+            let Ok(Some(item)) = self.library.find_path(path) else {
+                continue;
+            };
+            if i == session.index {
+                index = Some(items.len());
+            }
+            items.push(item);
+        }
+        if items.is_empty() {
+            return;
+        }
+        // If the saved current track is gone, start from the first one at the beginning.
+        let position = if index.is_some() {
+            session.position_secs
+        } else {
+            0.0
+        };
+        self.playback.restore(
+            items,
+            index.unwrap_or(0),
+            position,
+            session.shuffle,
+            session.repeat,
+        );
+        self.session_saved = Some(self.playback.session());
+    }
+
+    /// Save the playback state if it has changed since the last save.
+    fn save_session(&mut self) {
+        let session = self.playback.session();
+        if self.session_saved.as_ref() == Some(&session) {
+            return;
+        }
+        if let Err(e) = session.save(&self.paths.session) {
+            eprintln!("player: could not save playback state: {e}");
+        }
+        self.session_saved = Some(session);
+    }
+
     fn reload_views(&mut self) {
         self.albums.reload(&self.library);
         self.movies.reload(&self.library);
+        self.playlists.reload(&self.library);
+        self.artists.reload(self.albums.albums());
     }
 
     /// Add folders to the scan queue. Each folder is scanned on its own. A folder that is
@@ -281,6 +347,10 @@ impl eframe::App for App {
         self.playback.advance_if_finished();
         let ctx = ui.ctx().clone();
         playback::handle_keys(&ctx, &mut self.playback);
+        if self.last_save.elapsed() >= Duration::from_secs(2) {
+            self.last_save = Instant::now();
+            self.save_session();
+        }
         if let Some(media) = self.media.as_mut() {
             media.handle_events(&mut self.playback);
             media.publish(&self.playback);
@@ -323,6 +393,8 @@ impl eframe::App for App {
                 for (tab, label) in [
                     (Tab::Search, "Search"),
                     (Tab::Albums, "Albums"),
+                    (Tab::Artists, "Artists"),
+                    (Tab::Playlists, "Playlists"),
                     (Tab::Movies, "Movies"),
                     (Tab::Settings, "Settings"),
                 ] {
@@ -362,9 +434,10 @@ impl eframe::App for App {
                     queue::show(ui, &mut self.queue_view, &mut self.playback);
                 });
         }
-        let mut queue_requests: Vec<QueueRequest> = Vec::new();
+        let mut queue_requests: Vec<MenuRequest> = Vec::new();
         let mut action = None;
         let mut search_outcome = None;
+        let mut artist_album = None;
         let mut play = None;
         egui::CentralPanel::default().show(ui, |ui| match self.tab {
             Tab::Albums => {
@@ -373,6 +446,7 @@ impl eframe::App for App {
                     &self.library,
                     self.playback.current_id(),
                     &mut queue_requests,
+                    self.playlists.summaries(),
                 );
             }
             Tab::Search => {
@@ -382,7 +456,19 @@ impl eframe::App for App {
                     &self.library,
                     self.playback.current_id(),
                     &mut queue_requests,
+                    self.playlists.summaries(),
                 ));
+            }
+            Tab::Artists => {
+                artist_album = self.artists.show(ui, &mut self.albums, &self.library);
+            }
+            Tab::Playlists => {
+                if let Some(request) =
+                    self.playlists
+                        .show(ui, &self.library, self.playback.current_id())
+                {
+                    play = Some(request);
+                }
             }
             Tab::Movies => self.movies.show(ui),
             Tab::Settings => {
@@ -399,13 +485,23 @@ impl eframe::App for App {
                 self.tab = Tab::Albums;
             }
         }
+        if let Some(i) = artist_album {
+            self.albums.open(&self.library, i);
+            self.tab = Tab::Albums;
+        }
         if let Some(request) = play {
             self.playback.play_queue(request.tracks, request.index);
         }
         for request in queue_requests {
             match request {
-                QueueRequest::PlayNext(item) => self.playback.play_next(item),
-                QueueRequest::AddToQueue(item) => self.playback.add_to_queue(item),
+                MenuRequest::PlayNext(item) => self.playback.play_next(item),
+                MenuRequest::AddToQueue(item) => self.playback.add_to_queue(item),
+                MenuRequest::AddToPlaylist { playlist, media_id } => {
+                    match self.library.add_to_playlist(playlist, &[media_id]) {
+                        Ok(()) => self.playlists.reload(&self.library),
+                        Err(e) => self.status = format!("Could not add to playlist: {e}"),
+                    }
+                }
             }
         }
 

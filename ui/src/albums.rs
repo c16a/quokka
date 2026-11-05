@@ -1,10 +1,10 @@
 use std::collections::{HashMap, HashSet};
 
 use eframe::egui;
-use player_core::{AlbumSummary, FavoriteKind, Library, MediaItem};
+use player_core::{AlbumSummary, FavoriteKind, Library, MediaItem, PlaylistSummary};
 
 use crate::format;
-use crate::playback::QueueRequest;
+use crate::playback::MenuRequest;
 use crate::queue;
 
 /// Height of a track row's content. Vertical padding comes from the row's frame.
@@ -16,10 +16,10 @@ const TRACK_PADDING: f32 = 6.0;
 const FAVORITE_COLOR: egui::Color32 = egui::Color32::from_rgb(255, 196, 64);
 
 /// Square side of a cover in the album grid, and in the album detail view.
-const TILE_COVER: f32 = 160.0;
+pub(crate) const TILE_COVER: f32 = 160.0;
 const COVER_DETAIL: f32 = 240.0;
 /// Space under a grid tile's cover for its title and composer, and the gap between tiles.
-const TILE_TEXT: f32 = 44.0;
+pub(crate) const TILE_TEXT: f32 = 44.0;
 pub(crate) const TILE_GAP: f32 = 20.0;
 /// Largest side of a decoded cover. Bigger covers are scaled down to save memory.
 const COVER_MAX_SIDE: u32 = 256;
@@ -100,7 +100,8 @@ impl AlbumsView {
         ui: &mut egui::Ui,
         library: &Library,
         current: Option<i64>,
-        queue: &mut Vec<QueueRequest>,
+        queue: &mut Vec<MenuRequest>,
+        playlists: &[PlaylistSummary],
     ) -> Option<PlayRequest> {
         if self.albums.is_empty() {
             ui.label("No albums yet. Choose your library folder in Settings.");
@@ -114,7 +115,7 @@ impl AlbumsView {
         match self.selected {
             None => open = self.grid(ui, &ctx, library),
             Some(i) => {
-                let (request, go_back) = self.detail(ui, &ctx, library, current, i, queue);
+                let (request, go_back) = self.detail(ui, library, current, i, queue, playlists);
                 play = request;
                 back = go_back;
             }
@@ -167,16 +168,17 @@ impl AlbumsView {
     fn detail(
         &mut self,
         ui: &mut egui::Ui,
-        ctx: &egui::Context,
         library: &Library,
         current: Option<i64>,
         i: usize,
-        queue: &mut Vec<QueueRequest>,
+        queue: &mut Vec<MenuRequest>,
+        playlists: &[PlaylistSummary],
     ) -> (Option<PlayRequest>, bool) {
         let mut play = None;
         let mut back = false;
         let album = &self.albums[i];
-        let cover = cover_texture(&mut self.covers, ctx, library, i, album);
+        let ctx = ui.ctx().clone();
+        let cover = cover_texture(&mut self.covers, &ctx, library, i, album);
 
         if back_icon_button(ui).on_hover_text("All albums").clicked() {
             back = true;
@@ -340,7 +342,7 @@ impl AlbumsView {
                             index: n,
                         });
                     }
-                    response.context_menu(|ui| queue::track_menu(ui, queue, track));
+                    response.context_menu(|ui| queue::track_menu(ui, queue, track, playlists));
                 }
             });
         (play, back)
@@ -440,7 +442,7 @@ pub(crate) fn album_tile(
 }
 
 /// Round button with a play triangle. No text, so it needs no font glyph.
-fn play_icon_button(ui: &mut egui::Ui) -> egui::Response {
+pub(crate) fn play_icon_button(ui: &mut egui::Ui) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(32.0, 32.0), egui::Sense::click());
     let visuals = ui.style().interact(&response);
     ui.painter().rect_filled(rect, 16.0, visuals.weak_bg_fill);
@@ -459,7 +461,7 @@ fn play_icon_button(ui: &mut egui::Ui) -> egui::Response {
 }
 
 /// Round button with a left chevron, for going back to the album grid.
-fn back_icon_button(ui: &mut egui::Ui) -> egui::Response {
+pub(crate) fn back_icon_button(ui: &mut egui::Ui) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(32.0, 32.0), egui::Sense::click());
     let visuals = ui.style().interact(&response);
     ui.painter().rect_filled(rect, 16.0, visuals.weak_bg_fill);
@@ -477,7 +479,7 @@ fn back_icon_button(ui: &mut egui::Ui) -> egui::Response {
 }
 
 /// Round button with a shuffle icon (two crossing arrows). No text, so it needs no font glyph.
-fn shuffle_icon_button(ui: &mut egui::Ui) -> egui::Response {
+pub(crate) fn shuffle_icon_button(ui: &mut egui::Ui) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(32.0, 32.0), egui::Sense::click());
     let visuals = ui.style().interact(&response);
     ui.painter().rect_filled(rect, 16.0, visuals.weak_bg_fill);
@@ -510,7 +512,7 @@ fn shuffle_icon_button(ui: &mut egui::Ui) -> egui::Response {
 
 /// The tracks in a random order (Fisher-Yates). The generator is seeded from the clock;
 /// nothing here needs real randomness, so no extra crate is used.
-fn shuffled(mut tracks: Vec<MediaItem>) -> Vec<MediaItem> {
+pub(crate) fn shuffled(mut tracks: Vec<MediaItem>) -> Vec<MediaItem> {
     let mut state = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos() as u64)

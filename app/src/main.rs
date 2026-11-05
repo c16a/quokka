@@ -4,6 +4,7 @@ fn main() {
     let paths = player_ui::Paths {
         db: dirs.data_dir().join("library.db"),
         settings: dirs.config_dir().join("settings.json"),
+        session: dirs.data_dir().join("session.json"),
     };
     if let Err(e) = player_ui::run(paths) {
         eprintln!("player: {e}");

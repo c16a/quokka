@@ -3,35 +3,21 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use eframe::egui;
-use player_core::{MediaItem, ReplayGainMode};
+use player_core::RepeatMode as Repeat;
+use player_core::{MediaItem, ReplayGainMode, Session};
 use player_playback::{Player, PlayerState, RodioPlayer, output_device_names};
 
 use crate::format;
 
-/// What repeat does when a track or the queue ends.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Repeat {
-    Off,
-    /// Repeat the whole queue.
-    Queue,
-    /// Repeat the current track.
-    Track,
-}
-
-impl Repeat {
-    fn cycle(self) -> Self {
-        match self {
-            Self::Off => Self::Queue,
-            Self::Queue => Self::Track,
-            Self::Track => Self::Off,
-        }
-    }
-}
-
 /// A track to add to the queue from elsewhere in the app.
-pub enum QueueRequest {
+pub enum MenuRequest {
     PlayNext(MediaItem),
     AddToQueue(MediaItem),
+    /// Append a track to a saved playlist.
+    AddToPlaylist {
+        playlist: i64,
+        media_id: i64,
+    },
 }
 
 /// The queue the user is listening through, and the player that plays it.
@@ -262,6 +248,37 @@ impl Playback {
 
     pub fn cycle_repeat(&mut self) {
         self.repeat = self.repeat.cycle();
+    }
+
+    /// The playback state to save on exit, so it can resume later.
+    pub fn session(&self) -> Session {
+        Session {
+            queue: self.queue.iter().map(|item| item.path.clone()).collect(),
+            index: self.index,
+            position_secs: self.position().map_or(0.0, |p| p.as_secs_f64()),
+            shuffle: self.shuffle,
+            repeat: self.repeat,
+        }
+    }
+
+    /// Put back a saved queue at `index`, paused at `position` seconds into the track.
+    pub fn restore(
+        &mut self,
+        items: Vec<MediaItem>,
+        index: usize,
+        position: f64,
+        shuffle: bool,
+        repeat: Repeat,
+    ) {
+        self.queue = items.into_iter().map(Arc::new).collect();
+        self.original = self.queue.clone();
+        self.index = index.min(self.queue.len().saturating_sub(1));
+        self.shuffle = shuffle;
+        self.repeat = repeat;
+        self.start(false);
+        if position > 0.0 {
+            self.seek(position);
+        }
     }
 
     /// Switch the audio output. The current track carries on from the same position, in the
@@ -510,6 +527,11 @@ impl Playback {
 
     /// Load and play the current queue item.
     fn start_current(&mut self) {
+        self.start(true);
+    }
+
+    /// Load the current queue item. It plays when `autoplay`, otherwise it waits paused.
+    fn start(&mut self, autoplay: bool) {
         let Some(item) = self.current().cloned() else {
             return;
         };
@@ -523,7 +545,8 @@ impl Playback {
             self.error = Some("No audio output device available".into());
             return;
         };
-        self.error = match player.load(&item.path).and_then(|_| player.play()) {
+        let loaded = player.load(&item.path);
+        self.error = match loaded.and_then(|_| if autoplay { player.play() } else { Ok(()) }) {
             Ok(()) => None,
             Err(e) => Some(format!("Could not play {}: {e}", format::title(&item))),
         };

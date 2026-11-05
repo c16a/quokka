@@ -1,9 +1,9 @@
 use eframe::egui;
-use player_core::{Library, MediaItem};
+use player_core::{Library, MediaItem, PlaylistSummary};
 
 use crate::albums::{self, AlbumsView, PlayRequest, TILE_GAP};
 use crate::format;
-use crate::playback::QueueRequest;
+use crate::playback::MenuRequest;
 use crate::queue;
 
 /// Most songs listed for one search.
@@ -40,7 +40,8 @@ impl SearchView {
         albums: &mut AlbumsView,
         library: &Library,
         current: Option<i64>,
-        queue: &mut Vec<QueueRequest>,
+        queue: &mut Vec<MenuRequest>,
+        playlists: &[PlaylistSummary],
     ) -> SearchOutcome {
         let ctx = ui.ctx().clone();
         let mut outcome = SearchOutcome::default();
@@ -154,7 +155,7 @@ impl SearchView {
                         if response.double_clicked() {
                             outcome.play = Some(play_from(library, song));
                         }
-                        response.context_menu(|ui| queue::track_menu(ui, queue, song));
+                        response.context_menu(|ui| queue::track_menu(ui, queue, song, playlists));
                     }
                 }
             });

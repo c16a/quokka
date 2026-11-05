@@ -8,8 +8,10 @@ pub use cover::read_cover;
 mod db;
 mod favorites;
 mod metadata;
+mod playlist;
 mod replaygain;
 mod scan;
+mod session;
 mod settings;
 
 use std::path::{Path, PathBuf};
@@ -19,8 +21,10 @@ use thiserror::Error;
 
 pub use browse::AlbumSummary;
 pub use favorites::FavoriteKind;
+pub use playlist::PlaylistSummary;
 pub use replaygain::replay_gain_factor;
 pub use scan::ScanStats;
+pub use session::{RepeatMode, Session};
 pub use settings::{ReplayGainMode, Settings, Theme};
 
 #[derive(Debug, Error)]
@@ -174,6 +178,16 @@ impl Library {
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(params![fts, limit as i64], row_to_item)?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Look up one item by its file path.
+    pub fn find_path(&self, path: &Path) -> Result<Option<MediaItem>> {
+        let sql = format!("SELECT {COLUMNS} FROM media WHERE path = ?1");
+        let key = path.to_string_lossy();
+        Ok(self
+            .conn
+            .query_row(&sql, [key.as_ref()], row_to_item)
+            .optional()?)
     }
 
     /// Look up one item by id.
