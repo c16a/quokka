@@ -1,7 +1,7 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use eframe::egui;
-use player_core::{AlbumSummary, Library, MediaItem};
+use player_core::{AlbumSummary, FavoriteKind, Library, MediaItem};
 
 use crate::format;
 
@@ -9,6 +9,9 @@ use crate::format;
 const TRACK_ROW_HEIGHT: f32 = 52.0;
 /// Space above and below the title and artist when a track row is highlighted.
 const TRACK_PADDING: f32 = 6.0;
+
+/// Colour of a favourite star.
+const FAVORITE_COLOR: egui::Color32 = egui::Color32::from_rgb(255, 196, 64);
 
 /// Square side of a cover in the album grid, and in the album detail view.
 const TILE_COVER: f32 = 160.0;
@@ -33,6 +36,9 @@ pub struct AlbumsView {
     tracks: Vec<MediaItem>,
     /// Decoded covers by album index, loaded when first shown. `None` means no cover.
     covers: HashMap<usize, Option<egui::TextureHandle>>,
+    /// Keys of favourite tracks (file paths) and albums (album names).
+    favorite_tracks: HashSet<String>,
+    favorite_albums: HashSet<String>,
 }
 
 impl AlbumsView {
@@ -62,6 +68,8 @@ impl AlbumsView {
 
     pub fn reload(&mut self, library: &Library) {
         self.covers.clear();
+        self.favorite_tracks = library.favorites(FavoriteKind::Track).unwrap_or_default();
+        self.favorite_albums = library.favorites(FavoriteKind::Album).unwrap_or_default();
         self.albums = library.albums().unwrap_or_else(|e| {
             eprintln!("player: could not load albums: {e}");
             Vec::new()
@@ -199,6 +207,27 @@ impl AlbumsView {
                             index: 0,
                         });
                     }
+                    ui.add_space(8.0);
+                    let key = album.album.clone().unwrap_or_default();
+                    let favorite = self.favorite_albums.contains(&key);
+                    let tip = if favorite {
+                        "Remove from favourites"
+                    } else {
+                        "Add to favourites"
+                    };
+                    if favorite_icon_button(ui, favorite)
+                        .on_hover_text(tip)
+                        .clicked()
+                    {
+                        let on = !favorite;
+                        if library.set_favorite(FavoriteKind::Album, &key, on).is_ok() {
+                            if on {
+                                self.favorite_albums.insert(key);
+                            } else {
+                                self.favorite_albums.remove(&key);
+                            }
+                        }
+                    }
                 });
             });
         });
@@ -214,11 +243,13 @@ impl AlbumsView {
                     // Reserved now, filled in once we know whether the row is hovered.
                     let background = ui.painter().add(egui::Shape::Noop);
                     let mut text_rect = egui::Rect::NOTHING;
+                    let mut star_rect = egui::Rect::NOTHING;
                     let row = egui::Frame::new()
                         .inner_margin(egui::Margin::symmetric(8, 6))
                         .show(ui, |ui| {
                             ui.horizontal(|ui| {
                                 let number = track.track.map(|t| t.to_string()).unwrap_or_default();
+                                ui.add_space(6.0);
                                 ui.add_sized([32.0, 40.0], egui::Label::new(number));
                                 let block = ui.vertical(|ui| {
                                     let title = format::title(track);
@@ -237,8 +268,14 @@ impl AlbumsView {
                                 ui.with_layout(
                                     egui::Layout::right_to_left(egui::Align::Center),
                                     |ui| {
-                                        // Gap between the duration and the scroll bar.
+                                        // Gap between the star and the scroll bar.
                                         ui.add_space(16.0);
+                                        let (slot, _) = ui.allocate_exact_size(
+                                            egui::vec2(20.0, 20.0),
+                                            egui::Sense::hover(),
+                                        );
+                                        star_rect = slot;
+                                        ui.add_space(8.0);
                                         ui.weak(format::duration(track.duration_ms));
                                     },
                                 );
@@ -252,7 +289,9 @@ impl AlbumsView {
                         ui.scope_id().with(("track_row", n)),
                         egui::Sense::click(),
                     );
-                    if response.hovered() {
+                    // Hover covers the whole row, including the star, so the star stays while it is used.
+                    let hovered = ui.rect_contains_pointer(row.rect);
+                    if hovered {
                         // Padding is measured from the title and artist, so it is even above and below.
                         let highlight = egui::Rect::from_min_max(
                             egui::pos2(row.rect.left(), text_rect.top() - TRACK_PADDING),
@@ -264,8 +303,34 @@ impl AlbumsView {
                         );
                         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                     }
-                    // Double-click anywhere on the row to play from this track.
-                    if response.double_clicked() {
+                    // The star shows on hover, and stays on for favourites.
+                    let key = track.path.to_string_lossy().into_owned();
+                    let favorite = self.favorite_tracks.contains(&key);
+                    let star_response = ui.interact(
+                        star_rect,
+                        ui.scope_id().with(("track_star", n)),
+                        egui::Sense::click(),
+                    );
+                    if hovered || favorite {
+                        let color = if favorite {
+                            FAVORITE_COLOR
+                        } else {
+                            ui.visuals().weak_text_color()
+                        };
+                        draw_star(ui.painter(), star_rect.center(), 7.0, color, favorite);
+                    }
+                    if star_response.clicked() {
+                        let on = !favorite;
+                        if library.set_favorite(FavoriteKind::Track, &key, on).is_ok() {
+                            if on {
+                                self.favorite_tracks.insert(key);
+                            } else {
+                                self.favorite_tracks.remove(&key);
+                            }
+                        }
+                    }
+                    // Double-click anywhere on the row to play from this track, except on the star.
+                    if response.double_clicked() && !star_response.hovered() {
                         play = Some(PlayRequest {
                             tracks: self.tracks.clone(),
                             index: n,
@@ -455,4 +520,58 @@ fn shuffled(mut tracks: Vec<MediaItem>) -> Vec<MediaItem> {
         tracks.swap(i, j);
     }
     tracks
+}
+
+/// Round button with a star: filled in the favourite colour when `favorite`, outlined otherwise.
+fn favorite_icon_button(ui: &mut egui::Ui, favorite: bool) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(32.0, 32.0), egui::Sense::click());
+    let visuals = ui.style().interact(&response);
+    ui.painter().rect_filled(rect, 16.0, visuals.weak_bg_fill);
+    let color = if favorite {
+        FAVORITE_COLOR
+    } else {
+        visuals.fg_stroke.color
+    };
+    draw_star(ui.painter(), rect.center(), 9.0, color, favorite);
+    response
+}
+
+/// A five-point star. A filled star is built from convex pieces, because painter fills must be convex.
+fn draw_star(
+    painter: &egui::Painter,
+    center: egui::Pos2,
+    radius: f32,
+    color: egui::Color32,
+    filled: bool,
+) {
+    let points: Vec<egui::Pos2> = (0..10)
+        .map(|i| {
+            let r = if i % 2 == 0 { radius } else { radius * 0.45 };
+            let angle = -std::f32::consts::FRAC_PI_2 + i as f32 * std::f32::consts::PI / 5.0;
+            center + egui::vec2(r * angle.cos(), r * angle.sin())
+        })
+        .collect();
+    if filled {
+        let inner: Vec<egui::Pos2> = (0..5).map(|k| points[2 * k + 1]).collect();
+        painter.add(egui::Shape::convex_polygon(
+            inner,
+            color,
+            egui::Stroke::NONE,
+        ));
+        for k in 0..5 {
+            let tip = points[2 * k];
+            let before = points[(2 * k + 9) % 10];
+            let after = points[(2 * k + 1) % 10];
+            painter.add(egui::Shape::convex_polygon(
+                vec![tip, before, after],
+                color,
+                egui::Stroke::NONE,
+            ));
+        }
+    } else {
+        painter.add(egui::Shape::closed_line(
+            points,
+            egui::Stroke::new(1.2, color),
+        ));
+    }
 }

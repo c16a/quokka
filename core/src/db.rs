@@ -3,7 +3,7 @@ use rusqlite::Connection;
 use crate::Result;
 
 /// Bump when the schema changes and add a matching migration step below.
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
 
 /// Per-connection settings and schema migration.
 pub(crate) fn configure(conn: &Connection) -> Result<()> {
@@ -22,6 +22,9 @@ pub(crate) fn configure(conn: &Connection) -> Result<()> {
     }
     if version < 3 {
         conn.execute_batch(SCHEMA_V3)?;
+    }
+    if version < 4 {
+        conn.execute_batch(SCHEMA_V4)?;
     }
     if version != SCHEMA_VERSION {
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
@@ -99,4 +102,13 @@ ALTER TABLE media ADD COLUMN sample_rate INTEGER;
 ALTER TABLE media ADD COLUMN channels INTEGER;
 ALTER TABLE media ADD COLUMN bitrate_kbps INTEGER;
 UPDATE media SET mtime = -1;
+";
+
+/// Favourite tracks and albums, keyed by kind and key.
+const SCHEMA_V4: &str = "
+CREATE TABLE favorite (
+    kind TEXT NOT NULL,
+    key  TEXT NOT NULL,
+    PRIMARY KEY (kind, key)
+);
 ";

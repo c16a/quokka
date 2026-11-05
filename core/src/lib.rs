@@ -6,6 +6,7 @@ mod cover;
 
 pub use cover::read_cover;
 mod db;
+mod favorites;
 mod metadata;
 mod scan;
 mod settings;
@@ -16,6 +17,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use thiserror::Error;
 
 pub use browse::AlbumSummary;
+pub use favorites::FavoriteKind;
 pub use scan::ScanStats;
 pub use settings::{Settings, Theme};
 
