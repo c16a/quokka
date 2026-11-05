@@ -85,3 +85,19 @@ fn repeat_cycles_off_queue_track() {
     assert_eq!(RepeatMode::Queue.cycle(), RepeatMode::Track);
     assert_eq!(RepeatMode::Track.cycle(), RepeatMode::Off);
 }
+
+#[test]
+fn playlist_entries_can_be_reordered() {
+    let dir = tempfile::tempdir().unwrap();
+    let (lib, items) = library_with(dir.path(), &["a.mp3", "b.mp3", "c.mp3"]);
+    let (a, b, c) = (items[0].id, items[1].id, items[2].id);
+    let id = lib.create_playlist("Order").unwrap();
+    lib.add_to_playlist(id, &[a, b, c]).unwrap();
+
+    // Put the last entry first: stored positions are 0, 1, 2, so the new order is 2, 0, 1.
+    let positions = lib.playlist_positions(id).unwrap();
+    lib.reorder_playlist(id, &[positions[2], positions[0], positions[1]])
+        .unwrap();
+    assert_eq!(ids(&lib.playlist_tracks(id).unwrap()), vec![c, a, b]);
+    assert_eq!(lib.playlist_positions(id).unwrap(), vec![0, 1, 2]);
+}

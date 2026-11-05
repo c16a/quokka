@@ -99,6 +99,25 @@ impl Library {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    /// Put a playlist's entries in a new order. `order` lists the stored positions (as
+    /// [`Library::playlist_positions`] returns them) in the order they should now play.
+    pub fn reorder_playlist(&self, id: i64, order: &[i64]) -> Result<()> {
+        // Positions are moved out of the way first, so the new numbers never collide with old ones.
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(
+            "UPDATE playlist_track SET position = -position - 1 WHERE playlist_id = ?1",
+            [id],
+        )?;
+        for (new, old) in order.iter().enumerate() {
+            tx.execute(
+                "UPDATE playlist_track SET position = ?3 WHERE playlist_id = ?1 AND position = ?2",
+                params![id, -old - 1, new as i64],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     /// Find the playlist with this name, if any.
     pub fn playlist_id(&self, name: &str) -> Result<Option<i64>> {
         Ok(self

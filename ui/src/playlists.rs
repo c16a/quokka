@@ -1,4 +1,5 @@
-//! Playlists: the list of playlists, and one playlist's tracks with play, shuffle and remove.
+//! Playlists: the list of playlists, and one playlist's tracks with play, shuffle, rename,
+//! reorder (drag the grip) and remove.
 
 use eframe::egui;
 use player_core::{Library, MediaItem, PlaylistSummary};
@@ -15,9 +16,13 @@ pub struct PlaylistsView {
     /// The open playlist, if any.
     selected: Option<i64>,
     tracks: Vec<MediaItem>,
-    /// Stored position of each track in the open playlist, for removing it.
+    /// Stored position of each track in the open playlist, for removing and reordering.
     positions: Vec<i64>,
     new_name: String,
+    /// The name being typed, while the open playlist is being renamed.
+    renaming: Option<String>,
+    /// Index of the track whose grip is being dragged.
+    dragging: Option<usize>,
 }
 
 impl PlaylistsView {
@@ -37,6 +42,7 @@ impl PlaylistsView {
             .is_some_and(|id| !self.playlists.iter().any(|p| p.id == id))
         {
             self.selected = None;
+            self.renaming = None;
         }
         self.load_tracks(library);
     }
@@ -103,6 +109,7 @@ impl PlaylistsView {
             return;
         }
         let mut delete = None;
+        let mut rename = None;
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
@@ -116,6 +123,10 @@ impl PlaylistsView {
                         self.selected = Some(playlist.id);
                     }
                     response.context_menu(|ui| {
+                        if ui.button("Rename").clicked() {
+                            rename = Some((playlist.id, playlist.name.clone()));
+                            ui.close();
+                        }
                         if ui.button("Delete playlist").clicked() {
                             delete = Some(playlist.id);
                             ui.close();
@@ -123,6 +134,11 @@ impl PlaylistsView {
                     });
                 }
             });
+        if let Some((id, name)) = rename {
+            self.selected = Some(id);
+            self.renaming = Some(name);
+            self.load_tracks(library);
+        }
         if let Some(id) = delete {
             if let Err(e) = library.delete_playlist(id) {
                 eprintln!("player: could not delete playlist: {e}");
@@ -134,7 +150,7 @@ impl PlaylistsView {
         }
     }
 
-    /// One playlist: back button, name, play and shuffle, then its tracks.
+    /// One playlist: back button, name (with rename), play and shuffle, then its tracks.
     fn detail(
         &mut self,
         ui: &mut egui::Ui,
@@ -158,7 +174,46 @@ impl PlaylistsView {
             back = true;
         }
         ui.add_space(12.0);
-        ui.heading(name);
+        // Some(true) saves the new name, Some(false) cancels.
+        let mut finish_rename = None;
+        let mut start_rename = false;
+        match &mut self.renaming {
+            Some(buffer) => ui.horizontal(|ui| {
+                let field = ui.add(egui::TextEdit::singleline(buffer).desired_width(260.0));
+                if !field.has_focus() && !field.lost_focus() {
+                    field.request_focus();
+                }
+                let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                let escape = ui.input(|i| i.key_pressed(egui::Key::Escape));
+                if ui.button("Save").clicked() || enter {
+                    finish_rename = Some(true);
+                } else if ui.button("Cancel").clicked() || escape {
+                    finish_rename = Some(false);
+                }
+            }),
+            None => ui.horizontal(|ui| {
+                ui.heading(&name);
+                if ui.small_button("Rename").clicked() {
+                    start_rename = true;
+                }
+            }),
+        };
+        if start_rename {
+            self.renaming = Some(name.clone());
+        }
+        if let Some(save) = finish_rename {
+            let buffer = self.renaming.take().unwrap_or_default();
+            if save
+                && !buffer.trim().is_empty()
+                && let Some(id) = self.selected
+            {
+                if let Err(e) = library.rename_playlist(id, &buffer) {
+                    eprintln!("player: could not rename playlist: {e}");
+                }
+                self.reload(library);
+            }
+        }
+
         ui.weak(format!("{} tracks", self.tracks.len()));
         ui.add_space(8.0);
         ui.horizontal(|ui| {
@@ -184,39 +239,86 @@ impl PlaylistsView {
         });
         ui.add_space(12.0);
 
+        let mut rows: Vec<(usize, egui::Rect)> = Vec::with_capacity(self.tracks.len());
+        let mut drag_started = None;
+        let mut drag_stopped = None;
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 for (n, track) in self.tracks.iter().enumerate() {
-                    ui.horizontal(|ui| {
-                        ui.add_space(6.0);
-                        ui.vertical(|ui| {
-                            let title = format::title(track);
-                            if current == Some(track.id) {
-                                ui.strong(title);
-                            } else {
-                                ui.label(title);
+                    let row = ui
+                        .horizontal(|ui| {
+                            let (grip_rect, grip) =
+                                ui.allocate_exact_size(egui::vec2(14.0, 36.0), egui::Sense::drag());
+                            draw_grip(ui.painter(), grip_rect, ui.visuals().weak_text_color());
+                            if grip.hovered() {
+                                ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
                             }
-                            if let Some(artist) =
-                                track.artist.as_deref().or(track.album_artist.as_deref())
-                            {
-                                ui.weak(artist);
+                            if grip.drag_started() {
+                                drag_started = Some(n);
                             }
-                        });
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.small_button("Remove").clicked() {
-                                remove = Some(n);
+                            if grip.drag_stopped() {
+                                drag_stopped = Some(n);
                             }
-                            ui.add_space(8.0);
-                            ui.weak(format::duration(track.duration_ms));
-                        });
-                    });
+                            ui.add_space(6.0);
+                            ui.vertical(|ui| {
+                                let title = format::title(track);
+                                if current == Some(track.id) {
+                                    ui.strong(title);
+                                } else {
+                                    ui.label(title);
+                                }
+                                if let Some(artist) =
+                                    track.artist.as_deref().or(track.album_artist.as_deref())
+                                {
+                                    ui.weak(artist);
+                                }
+                            });
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    if ui.small_button("Remove").clicked() {
+                                        remove = Some(n);
+                                    }
+                                    ui.add_space(8.0);
+                                    ui.weak(format::duration(track.duration_ms));
+                                },
+                            );
+                        })
+                        .response
+                        .rect;
+                    rows.push((n, row));
                     ui.add_space(4.0);
                 }
             });
 
+        if let Some(n) = drag_started {
+            self.dragging = Some(n);
+        }
+        let pointer = ui.ctx().input(|i| i.pointer.interact_pos());
+        let len = self.tracks.len();
+        if let (Some(from), Some(_)) = (drag_stopped, self.dragging.take()) {
+            // Dropped above the row under the pointer, or at the end of the list.
+            if let Some(p) = pointer {
+                let before = rows
+                    .iter()
+                    .find(|(_, r)| p.y < r.center().y)
+                    .map_or(len, |(i, _)| *i);
+                self.move_track(library, from, before);
+            }
+        } else if self.dragging.is_some()
+            && let Some(p) = pointer
+        {
+            let before = rows
+                .iter()
+                .find(|(_, r)| p.y < r.center().y)
+                .map_or(len, |(i, _)| *i);
+            draw_drop_line(ui.painter(), &rows, before, ui.visuals().selection.bg_fill);
+        }
+
         if back {
             self.selected = None;
+            self.renaming = None;
             self.tracks.clear();
             self.positions.clear();
         }
@@ -230,4 +332,57 @@ impl PlaylistsView {
         }
         play
     }
+
+    /// Move the track at `from` so it sits just before the track at `before` (or at the end when
+    /// `before` is the number of tracks), and save the new order.
+    fn move_track(&mut self, library: &Library, from: usize, before: usize) {
+        if from >= self.tracks.len()
+            || before == from
+            || before == from + 1
+            || before > self.tracks.len()
+        {
+            return;
+        }
+        let mut order: Vec<usize> = (0..self.tracks.len()).collect();
+        let item = order.remove(from);
+        let dest = if before > from { before - 1 } else { before };
+        order.insert(dest, item);
+        let stored: Vec<i64> = order.iter().map(|&n| self.positions[n]).collect();
+        if let Some(id) = self.selected {
+            if let Err(e) = library.reorder_playlist(id, &stored) {
+                eprintln!("player: could not reorder playlist: {e}");
+            }
+            self.load_tracks(library);
+        }
+    }
+}
+
+/// Six dots in two columns: the drag handle for a row.
+fn draw_grip(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
+    let c = rect.center();
+    for dy in [-6.0, 0.0, 6.0] {
+        for dx in [-3.0, 3.0] {
+            painter.circle_filled(c + egui::vec2(dx, dy), 1.5, color);
+        }
+    }
+}
+
+/// A line where the dragged row would be inserted.
+fn draw_drop_line(
+    painter: &egui::Painter,
+    rows: &[(usize, egui::Rect)],
+    before: usize,
+    color: egui::Color32,
+) {
+    let Some((_, first)) = rows.first() else {
+        return;
+    };
+    let y = match rows.iter().find(|(i, _)| *i == before) {
+        Some((_, r)) => r.top(),
+        None => rows.last().map_or(first.top(), |(_, r)| r.bottom()),
+    };
+    painter.line_segment(
+        [egui::pos2(first.left(), y), egui::pos2(first.right(), y)],
+        egui::Stroke::new(2.0, color),
+    );
 }
