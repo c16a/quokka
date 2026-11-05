@@ -66,10 +66,17 @@ impl Playback {
         self.start_current();
     }
 
-    /// Move to the next track when the current one has finished.
+    /// Move on when a track has finished, and say why if it stopped early.
     pub fn advance_if_finished(&mut self) {
-        if self.state() == PlayerState::Ended && self.index + 1 < self.queue.len() {
+        if self.state() != PlayerState::Ended {
+            return;
+        }
+        let stopped_early = self.player.as_ref().and_then(|p| p.last_error());
+        if self.index + 1 < self.queue.len() {
             self.next();
+        }
+        if let Some(message) = stopped_early {
+            self.error = Some(format!("Playback stopped early: {message}"));
         }
     }
 
@@ -129,7 +136,14 @@ impl Playback {
         match self.state() {
             PlayerState::Playing => self.with_player(|p| p.pause()),
             PlayerState::Paused => self.with_player(|p| p.play()),
-            PlayerState::Ended | PlayerState::Idle => {
+            // Playing again after the queue finished starts the album from the first track.
+            PlayerState::Ended => {
+                if !self.queue.is_empty() {
+                    self.index = 0;
+                    self.start_current();
+                }
+            }
+            PlayerState::Idle => {
                 if self.current().is_some() {
                     self.start_current();
                 }

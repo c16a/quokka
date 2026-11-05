@@ -1,12 +1,13 @@
 //! Audio playback: symphonia decodes, rodio mixes and sends the samples to the device.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use rodio::cpal::traits::{DeviceTrait, HostTrait};
 use rodio::{DeviceSinkBuilder, MixerDeviceSink, Player as Output, Source};
 
-use crate::symphonia_source::SymphoniaSource;
+use crate::symphonia_source::{ErrorSlot, SymphoniaSource};
 use crate::{PlaybackError, Player, PlayerState, Result};
 
 /// `Player` that plays through the default audio output device.
@@ -15,6 +16,8 @@ pub struct RodioPlayer {
     _device: MixerDeviceSink,
     output: Output,
     current: Option<Current>,
+    /// Filled in by the decoder if the current track stops early.
+    error: ErrorSlot,
 }
 
 struct Current {
@@ -57,12 +60,16 @@ impl RodioPlayer {
             _device: device,
             output,
             current: None,
+            error: ErrorSlot::default(),
         })
     }
 
     /// Decode `path` and queue it on a paused output.
     fn queue(&mut self, path: &Path) -> Result<Option<Duration>> {
-        let source = SymphoniaSource::open(path)
+        if let Ok(mut slot) = self.error.lock() {
+            *slot = None;
+        }
+        let source = SymphoniaSource::open(path, Arc::clone(&self.error))
             .map_err(|_| PlaybackError::Open(path.display().to_string()))?;
         let duration = source.total_duration();
         self.output.clear();
@@ -138,5 +145,9 @@ impl Player for RodioPlayer {
         } else {
             PlayerState::Playing
         }
+    }
+
+    fn last_error(&self) -> Option<String> {
+        self.error.lock().ok().and_then(|slot| slot.clone())
     }
 }

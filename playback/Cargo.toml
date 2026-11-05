@@ -9,4 +9,5 @@ publish.workspace = true
 [dependencies]
 rodio.workspace = true
 symphonia.workspace = true
+symphonia-adapter-opus-rs.workspace = true
 thiserror.workspace = true

@@ -3,23 +3,39 @@
 
 use std::fs::File;
 use std::path::Path;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use rodio::source::SeekError;
 use rodio::{ChannelCount, SampleRate, Source};
-use symphonia::core::audio::SampleBuffer;
-use symphonia::core::codecs::{CODEC_TYPE_NULL, Decoder, DecoderOptions};
+use symphonia::core::codecs::CodecParameters;
+use symphonia::core::codecs::audio::{AudioDecoder, AudioDecoderOptions};
+use symphonia::core::codecs::registry::CodecRegistry;
 use symphonia::core::errors::Error as DecodeError;
+use symphonia::core::formats::probe::Hint;
 use symphonia::core::formats::{FormatOptions, FormatReader, SeekMode, SeekTo};
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
-use symphonia::core::probe::Hint;
 use symphonia::core::units::Time;
+
+/// Shared slot holding the error that stopped a track early, if there was one.
+pub type ErrorSlot = Arc<Mutex<Option<String>>>;
+
+/// Symphonia's default codecs, plus Opus (which symphonia itself does not decode).
+fn codecs() -> &'static CodecRegistry {
+    static CODECS: OnceLock<CodecRegistry> = OnceLock::new();
+    CODECS.get_or_init(|| {
+        let mut registry = CodecRegistry::new();
+        symphonia::default::register_enabled_codecs(&mut registry);
+        registry.register_audio_decoder::<symphonia_adapter_opus_rs::OpusAdapter>();
+        registry
+    })
+}
 
 /// Streams interleaved `f32` samples decoded from one audio file.
 pub struct SymphoniaSource {
     format: Box<dyn FormatReader>,
-    decoder: Box<dyn Decoder>,
+    decoder: Box<dyn AudioDecoder>,
     track_id: u32,
     sample_rate: SampleRate,
     channels: ChannelCount,
@@ -30,11 +46,13 @@ pub struct SymphoniaSource {
     finished: bool,
     /// Samples to drop after a seek, so playback starts exactly at the target.
     skip_samples: usize,
+    /// Set when decoding fails for a reason other than the end of the file.
+    error: ErrorSlot,
 }
 
 impl SymphoniaSource {
     /// Open and probe `path`, and prepare the first audio track for decoding.
-    pub fn open(path: &Path) -> Result<Self, String> {
+    pub fn open(path: &Path, error: ErrorSlot) -> Result<Self, String> {
         let file = File::open(path).map_err(|e| e.to_string())?;
         let stream = MediaSourceStream::new(Box::new(file), Default::default());
 
@@ -42,40 +60,36 @@ impl SymphoniaSource {
         if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
             hint.with_extension(ext);
         }
-        let options = FormatOptions {
-            enable_gapless: true,
-            ..Default::default()
-        };
-        let probed = symphonia::default::get_probe()
-            .format(&hint, stream, &options, &MetadataOptions::default())
+        let options = FormatOptions::default();
+        let format = symphonia::default::get_probe()
+            .probe(&hint, stream, options, MetadataOptions::default())
             .map_err(|e| e.to_string())?;
-        let format = probed.format;
 
-        let track = format
+        let (track_id, params, num_frames) = format
             .tracks()
             .iter()
-            .find(|t| t.codec_params.codec != CODEC_TYPE_NULL)
+            .find_map(|track| match &track.codec_params {
+                Some(CodecParameters::Audio(params)) => {
+                    Some((track.id, params.clone(), track.num_frames))
+                }
+                _ => None,
+            })
             .ok_or("no audio track")?;
-        let params = track.codec_params.clone();
-        let track_id = track.id;
 
         let sample_rate = params
             .sample_rate
             .and_then(SampleRate::new)
             .ok_or("unknown sample rate")?;
+        let duration = num_frames
+            .map(|frames| Duration::from_secs_f64(frames as f64 / f64::from(sample_rate.get())));
         let channels = params
             .channels
+            .as_ref()
             .and_then(|c| ChannelCount::new(c.count() as u16))
             .ok_or("unknown channel layout")?;
-        let duration = match (params.n_frames, params.sample_rate) {
-            (Some(frames), Some(rate)) if rate > 0 => {
-                Some(Duration::from_secs_f64(frames as f64 / rate as f64))
-            }
-            _ => None,
-        };
 
-        let decoder = symphonia::default::get_codecs()
-            .make(&params, &DecoderOptions::default())
+        let decoder = codecs()
+            .make_audio_decoder(&params, &AudioDecoderOptions::default())
             .map_err(|e| e.to_string())?;
 
         Ok(Self {
@@ -89,6 +103,7 @@ impl SymphoniaSource {
             cursor: 0,
             finished: false,
             skip_samples: 0,
+            error,
         })
     }
 
@@ -96,23 +111,24 @@ impl SymphoniaSource {
     fn decode_next_packet(&mut self) {
         loop {
             let packet = match self.format.next_packet() {
-                Ok(packet) => packet,
-                Err(_) => {
+                Ok(Some(packet)) => packet,
+                // The end of the stream is normal, not an error.
+                Ok(None) => {
                     self.finished = true;
                     return;
                 }
+                Err(e) => {
+                    self.fail(e.to_string());
+                    return;
+                }
             };
-            if packet.track_id() != self.track_id {
+            if packet.track_id != self.track_id {
                 continue;
             }
             match self.decoder.decode(&packet) {
                 Ok(decoded) => {
-                    let capacity = decoded.capacity() as u64;
-                    let spec = *decoded.spec();
-                    let mut buffer = SampleBuffer::<f32>::new(capacity, spec);
-                    buffer.copy_interleaved_ref(decoded);
                     self.samples.clear();
-                    self.samples.extend_from_slice(buffer.samples());
+                    decoded.copy_to_vec_interleaved(&mut self.samples);
                     // After an accurate seek the packet starts before the target.
                     let drop = self.skip_samples.min(self.samples.len());
                     self.samples.drain(..drop);
@@ -120,13 +136,26 @@ impl SymphoniaSource {
                     self.cursor = 0;
                     return;
                 }
-                // A corrupt packet is skipped; the rest of the file still plays.
+                // A damaged packet is skipped; the rest of the file still plays.
                 Err(DecodeError::DecodeError(_)) => continue,
-                Err(_) => {
-                    self.finished = true;
+                // The decoder asks to be reset; carry on with the next packet.
+                Err(DecodeError::ResetRequired) => {
+                    self.decoder.reset();
+                    continue;
+                }
+                Err(e) => {
+                    self.fail(e.to_string());
                     return;
                 }
             }
+        }
+    }
+
+    /// Stop the track and record why.
+    fn fail(&mut self, message: String) {
+        self.finished = true;
+        if let Ok(mut slot) = self.error.lock() {
+            *slot = Some(message);
         }
     }
 }
@@ -166,21 +195,23 @@ impl Source for SymphoniaSource {
     }
 
     fn try_seek(&mut self, pos: Duration) -> Result<(), SeekError> {
+        let not_supported = || SeekError::NotSupported {
+            underlying_source: "symphonia",
+        };
+        let time = Time::try_from_secs_f64(pos.as_secs_f64()).ok_or_else(not_supported)?;
         let seeked = self
             .format
             .seek(
                 SeekMode::Accurate,
                 SeekTo::Time {
-                    time: Time::from(pos),
+                    time,
                     track_id: Some(self.track_id),
                 },
             )
-            .map_err(|_| SeekError::NotSupported {
-                underlying_source: "symphonia",
-            })?;
+            .map_err(|_| not_supported())?;
         // Timestamps count frames; convert the gap to interleaved samples.
-        let frames_to_skip = seeked.required_ts.saturating_sub(seeked.actual_ts);
-        self.skip_samples = frames_to_skip as usize * self.channels.get() as usize;
+        let frames_to_skip = (seeked.required_ts.get() - seeked.actual_ts.get()).max(0) as usize;
+        self.skip_samples = frames_to_skip * self.channels.get() as usize;
         self.decoder.reset();
         self.samples.clear();
         self.cursor = 0;

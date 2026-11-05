@@ -35,7 +35,7 @@ fn temp_wav(name: &str, seconds: u32) -> PathBuf {
 #[test]
 fn decodes_wav_with_expected_format_and_length() {
     let path = temp_wav("length", 2);
-    let source = SymphoniaSource::open(&path).unwrap();
+    let source = SymphoniaSource::open(&path, Default::default()).unwrap();
     assert_eq!(source.sample_rate().get(), 8_000);
     assert_eq!(source.channels().get(), 1);
     let total = source.total_duration().unwrap();
@@ -50,7 +50,7 @@ fn decodes_wav_with_expected_format_and_length() {
 #[test]
 fn seeks_into_the_middle_and_plays_the_rest() {
     let path = temp_wav("seek", 2);
-    let mut source = SymphoniaSource::open(&path).unwrap();
+    let mut source = SymphoniaSource::open(&path, Default::default()).unwrap();
     source.try_seek(Duration::from_secs(1)).unwrap();
     let remaining = source.count();
     // Roughly one second of samples should be left after seeking to 1 s of a 2 s file.
@@ -65,7 +65,7 @@ fn seeks_into_the_middle_and_plays_the_rest() {
 fn unsupported_file_is_an_error_not_a_panic() {
     let path = std::env::temp_dir().join("player-test-not-audio.mp3");
     fs::write(&path, b"this is not audio").unwrap();
-    assert!(SymphoniaSource::open(&path).is_err());
+    assert!(SymphoniaSource::open(&path, Default::default()).is_err());
     fs::remove_file(path).ok();
 }
 
@@ -74,7 +74,7 @@ fn unsupported_file_is_an_error_not_a_panic() {
 #[ignore]
 fn decodes_a_real_file_from_env() {
     let path = std::env::var("PLAYER_TEST_FILE").expect("set PLAYER_TEST_FILE");
-    let source = SymphoniaSource::open(Path::new(&path)).unwrap();
+    let source = SymphoniaSource::open(Path::new(&path), Default::default()).unwrap();
     let rate = source.sample_rate().get();
     let channels = source.channels().get();
     let samples = source.count();

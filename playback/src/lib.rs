@@ -52,4 +52,9 @@ pub trait Player {
     /// Total length, or `None` when unknown or nothing is loaded.
     fn duration(&self) -> Option<Duration>;
     fn state(&self) -> PlayerState;
+
+    /// Why the current track stopped before its end, if it did. Cleared when a track loads.
+    fn last_error(&self) -> Option<String> {
+        None
+    }
 }
