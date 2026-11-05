@@ -16,10 +16,13 @@ publish = false
 directories = { version = "6.0.0", default-features = false }
 eframe = { version = "0.37.0", default-features = false, features = ["glow", "default_fonts", "accesskit", "clipboard", "links", "system_fonts"] }
 lofty = { version = "0.25.5", default-features = false, features = ["id3v2_compression_support"] }
+rayon = { version = "1.12.0", default-features = false }
+notify = { version = "8.2.1", default-features = false, features = ["macos_fsevent"] }
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png"] }
 rfd = { version = "0.17.2", default-features = false }
 rodio = { version = "0.23.0", default-features = false, features = ["playback"] }
 symphonia = { version = "0.6.1", default-features = false, features = ["mp3", "flac", "isomp4", "aac", "alac", "vorbis", "ogg", "wav", "pcm", "aiff", "adpcm"] }
-rusqlite = { version = "0.41.1", default-features = false, features = ["bundled"] }
+rusqlite = { version = "0.41.1", default-features = false, features = ["bundled", "cache"] }
 serde = { version = "1.0.229", default-features = false, features = ["derive", "std"] }
 serde_json = { version = "1.0.154", default-features = false, features = ["std"] }
 symphonia-adapter-opus-rs = { version = "0.1.1" }
@@ -29,6 +32,10 @@ walkdir = { version = "2.5.0", default-features = false }
 player-core = { path = "core" }
 player-playback = { path = "playback" }
 player-ui = { path = "ui" }
+
+# Dependencies are optimised in debug builds too, so decoding and the UI stay fast while developing.
+[profile.dev.package."*"]
+opt-level = 2
 
 # Performance-optimised release build (`just release`, `just cross`).
 # Slower to compile than the default, but faster at runtime and smaller.

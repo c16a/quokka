@@ -6,12 +6,13 @@ mod movies;
 mod playback;
 mod settings_view;
 
-use std::path::PathBuf;
-use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::path::{Path, PathBuf};
+use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use eframe::egui;
+use notify::{RecursiveMode, Watcher};
 use player_core::{Library, ScanStats, Settings, Theme};
 
 use playback::Playback;
@@ -31,6 +32,9 @@ enum Tab {
 
 type ScanResult = Result<ScanStats, String>;
 
+/// How long the library must stay quiet after a file change before rescanning.
+const RESCAN_DELAY: Duration = Duration::from_secs(2);
+
 struct App {
     paths: Paths,
     settings: Settings,
@@ -41,6 +45,12 @@ struct App {
     playback: Playback,
     /// Set while a background scan is running.
     scan: Option<Receiver<ScanResult>>,
+    /// Watches the library folder. Dropping it stops the watch.
+    watcher: Option<notify::RecommendedWatcher>,
+    change_tx: Sender<()>,
+    changes: Receiver<()>,
+    /// When to rescan after changes, once the library has been quiet for a while.
+    rescan_at: Option<Instant>,
     status: String,
 }
 
@@ -87,6 +97,7 @@ impl App {
         } else {
             Tab::Settings
         };
+        let (change_tx, changes) = mpsc::channel();
         let mut app = Self {
             paths,
             settings,
@@ -96,11 +107,18 @@ impl App {
             movies: Default::default(),
             playback: Playback::new(),
             scan: None,
+            watcher: None,
+            change_tx,
+            changes,
+            rescan_at: None,
             status: String::new(),
         };
         app.reload_views();
         match app.settings.library_root.clone() {
-            Some(root) => app.start_scan(&ctx, root),
+            Some(root) => {
+                app.watch(&ctx, &root);
+                app.start_scan(&ctx, root);
+            }
             None => app.status = "Choose your library folder to get started.".into(),
         }
         app
@@ -132,6 +150,46 @@ impl App {
         self.status = format!("Scanning {}…", status_root.display());
     }
 
+    /// Watch `root` for changes. A change schedules a rescan after a short quiet period.
+    fn watch(&mut self, ctx: &egui::Context, root: &Path) {
+        let tx = self.change_tx.clone();
+        let ctx = ctx.clone();
+        let watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+            // Reads don't change the library, so they don't need a rescan.
+            if let Ok(event) = event
+                && !event.kind.is_access()
+            {
+                let _ = tx.send(());
+                ctx.request_repaint();
+            }
+        })
+        .and_then(|mut watcher| {
+            watcher.watch(root, RecursiveMode::Recursive)?;
+            Ok(watcher)
+        });
+        // If the folder can't be watched, the library still updates at startup and on Rescan.
+        self.watcher = watcher.ok();
+    }
+
+    /// Start a rescan once the library has been quiet for `RESCAN_DELAY`.
+    fn handle_changes(&mut self, ctx: &egui::Context) {
+        while self.changes.try_recv().is_ok() {
+            self.rescan_at = Some(Instant::now() + RESCAN_DELAY);
+        }
+        let Some(at) = self.rescan_at else {
+            return;
+        };
+        let now = Instant::now();
+        if now < at {
+            ctx.request_repaint_after(at - now);
+        } else if self.scan.is_none() {
+            self.rescan_at = None;
+            if let Some(root) = self.settings.library_root.clone() {
+                self.start_scan(ctx, root);
+            }
+        }
+    }
+
     fn poll_scan(&mut self) {
         let Some(rx) = &self.scan else {
             return;
@@ -161,6 +219,7 @@ impl App {
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.poll_scan();
+        self.handle_changes(ui.ctx());
         self.playback.advance_if_finished();
         let ctx = ui.ctx().clone();
         if self.playback.is_playing() {
@@ -169,8 +228,11 @@ impl eframe::App for App {
         }
 
         let mut next_tab = self.tab;
-        egui::Panel::top("tabs").show(ui, |ui| {
-            ui.horizontal(|ui| {
+        egui::Panel::left("sidebar")
+            .default_size(180.0)
+            .resizable(false)
+            .show(ui, |ui| {
+                ui.add_space(12.0);
                 for (tab, label) in [
                     (Tab::Albums, "Albums"),
                     (Tab::Movies, "Movies"),
@@ -180,12 +242,13 @@ impl eframe::App for App {
                         next_tab = tab;
                     }
                 }
-                if self.scan.is_some() {
-                    ui.spinner();
-                    ui.weak("Scanning…");
-                }
+                ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
+                    if self.scan.is_some() {
+                        ui.weak("Scanning…");
+                        ui.spinner();
+                    }
+                });
             });
-        });
         self.tab = next_tab;
 
         if self.playback.has_current() {
@@ -215,7 +278,10 @@ impl eframe::App for App {
             Some(settings_view::Action::ChooseFolder(root)) => {
                 self.settings.library_root = Some(root.clone());
                 match self.settings.save(&self.paths.settings) {
-                    Ok(()) => self.start_scan(&ctx, root),
+                    Ok(()) => {
+                        self.watch(&ctx, &root);
+                        self.start_scan(&ctx, root);
+                    }
                     Err(e) => self.status = format!("Could not save settings: {e}"),
                 }
             }

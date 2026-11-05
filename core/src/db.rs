@@ -10,6 +10,8 @@ pub(crate) fn configure(conn: &Connection) -> Result<()> {
     conn.pragma_update(None, "foreign_keys", true)?;
     // WAL is not available for in-memory databases; ignore the result there.
     let _ = conn.pragma_update(None, "journal_mode", "WAL");
+    // With WAL, NORMAL keeps the database consistent after a crash and commits much faster.
+    conn.pragma_update(None, "synchronous", "NORMAL")?;
 
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
     if version < 1 {

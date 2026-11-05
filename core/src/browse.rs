@@ -1,6 +1,7 @@
 //! Queries that group the library for browsing: albums (audio) and movies (video).
 
 use std::collections::{BTreeSet, HashMap};
+use std::path::Path;
 
 use crate::{COLUMNS, Library, MediaItem, MediaKind, Result, row_to_item};
 
@@ -84,6 +85,20 @@ impl Library {
         let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map([album.unwrap_or("")], row_to_item)?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Embedded cover art for an album. Tries the first few tracks, since not all of them carry one.
+    pub fn album_cover(&self, album: Option<&str>) -> Result<Option<Vec<u8>>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT path FROM media WHERE kind = 'audio' AND COALESCE(album, '') = ?1 \
+             ORDER BY track IS NULL, track, path LIMIT 5",
+        )?;
+        let paths: Vec<String> = stmt
+            .query_map([album.unwrap_or("")], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        Ok(paths
+            .iter()
+            .find_map(|p| crate::cover::read_cover(Path::new(p))))
     }
 
     /// All video items, sorted by title (falling back to file name).

@@ -2,6 +2,9 @@
 //! full-text search and tags. Pure Rust, no UI and no playback dependencies.
 
 mod browse;
+mod cover;
+
+pub use cover::read_cover;
 mod db;
 mod metadata;
 mod scan;

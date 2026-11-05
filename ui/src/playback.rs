@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use eframe::egui;
@@ -10,7 +11,7 @@ use crate::format;
 pub struct Playback {
     /// `None` when no audio output device could be opened.
     player: Option<RodioPlayer>,
-    queue: Vec<MediaItem>,
+    queue: Vec<Arc<MediaItem>>,
     index: usize,
     /// Slider position in seconds. Follows the player unless the user is dragging.
     seek_secs: f64,
@@ -61,7 +62,7 @@ impl Playback {
 
     /// Replace the queue with `tracks` and start playing at `index`.
     pub fn play_queue(&mut self, tracks: Vec<MediaItem>, index: usize) {
-        self.queue = tracks;
+        self.queue = tracks.into_iter().map(Arc::new).collect();
         self.index = index.min(self.queue.len().saturating_sub(1));
         self.start_current();
     }
@@ -80,7 +81,7 @@ impl Playback {
         }
     }
 
-    fn current(&self) -> Option<&MediaItem> {
+    fn current(&self) -> Option<&Arc<MediaItem>> {
         self.queue.get(self.index)
     }
 
@@ -189,6 +190,7 @@ impl Playback {
             self.seek_secs = position.as_secs_f64().min(total);
         }
 
+        let animate = state == PlayerState::Playing;
         let mut command = None;
         egui::Frame::new()
             .inner_margin(egui::Margin::symmetric(12, 10))
@@ -232,6 +234,7 @@ impl Playback {
                                         &format::title(item),
                                         egui::FontId::proportional(14.0),
                                         title_color,
+                                        animate,
                                     );
                                     let artist = item
                                         .artist
@@ -244,6 +247,7 @@ impl Playback {
                                         artist,
                                         egui::FontId::proportional(12.0),
                                         artist_color,
+                                        animate,
                                     );
                                 }
                                 None => {
@@ -253,6 +257,7 @@ impl Playback {
                                         "Nothing playing",
                                         egui::FontId::proportional(12.0),
                                         artist_color,
+                                        animate,
                                     );
                                 }
                             }
@@ -447,13 +452,20 @@ const SCROLL_GAP: f32 = 48.0;
 
 /// One line of text in a fixed-width box. A short line is centred. A line wider than the
 /// box scrolls in a loop, and the window keeps redrawing while it does.
-fn marquee(ui: &mut egui::Ui, width: f32, text: &str, font: egui::FontId, color: egui::Color32) {
+fn marquee(
+    ui: &mut egui::Ui,
+    width: f32,
+    text: &str,
+    font: egui::FontId,
+    color: egui::Color32,
+    animate: bool,
+) {
     let galley = ui.painter().layout_no_wrap(text.to_owned(), font, color);
     let text_width = galley.size().x;
     let (rect, _) =
         ui.allocate_exact_size(egui::vec2(width, galley.size().y), egui::Sense::hover());
     let painter = ui.painter_at(rect);
-    if text_width <= width {
+    if text_width <= width || !animate {
         let x = rect.left();
         painter.galley(egui::pos2(x, rect.top()), galley, color);
     } else {

@@ -8,6 +8,8 @@ publish.workspace = true
 
 [dependencies]
 eframe.workspace = true
+image.workspace = true
+notify.workspace = true
 player-core.workspace = true
 player-playback.workspace = true
 rfd.workspace = true
