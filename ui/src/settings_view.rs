@@ -20,6 +20,8 @@ pub enum Action {
 pub fn show(ui: &mut egui::Ui, settings: &Settings, busy: bool, status: &str) -> Option<Action> {
     let mut action = None;
 
+    crate::fonts::page_title(ui, "Settings");
+    ui.add_space(12.0);
     ui.heading("Library");
     if !status.is_empty() {
         ui.add_space(2.0);

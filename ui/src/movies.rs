@@ -18,6 +18,7 @@ impl MoviesView {
     }
 
     pub fn show(&mut self, ui: &mut egui::Ui) {
+        crate::fonts::page_title(ui, "Movies");
         if self.movies.is_empty() {
             ui.label("No movies yet. Choose your library folder in Settings.");
             return;

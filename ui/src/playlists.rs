@@ -93,7 +93,7 @@ impl PlaylistsView {
 
     /// The list of playlists, with a field to create one.
     fn list(&mut self, ui: &mut egui::Ui, library: &Library) {
-        ui.heading("Playlists");
+        crate::fonts::page_title(ui, "Playlists");
         ui.add_space(8.0);
         ui.horizontal(|ui| {
             // The same filled field as the search box, with a plus in place of the magnifier.
@@ -262,7 +262,7 @@ impl PlaylistsView {
                 }
             }),
             None => ui.horizontal(|ui| {
-                ui.heading(&name);
+                crate::fonts::page_title(ui, &name);
                 if ui.small_button("Rename").clicked() {
                     start_rename = true;
                 }

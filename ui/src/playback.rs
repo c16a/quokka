@@ -823,7 +823,8 @@ impl Playback {
                     let response = ui.add(
                         egui::Slider::new(&mut secs, 0.0..=total)
                             .show_value(false)
-                            .trailing_fill(true),
+                            .trailing_fill(true)
+                            .handle_shape(egui::style::HandleShape::Circle),
                     );
                     ui.add_sized(
                         [48.0, 16.0],
@@ -947,8 +948,11 @@ impl Playback {
                     // Right: information, lyrics, queue, then sound. Added right to left.
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.spacing_mut().slider_width = 80.0;
-                        let volume = ui
-                            .add(egui::Slider::new(&mut self.volume, 0.0..=1.0).show_value(false));
+                        let volume = ui.add(
+                            egui::Slider::new(&mut self.volume, 0.0..=1.0)
+                                .show_value(false)
+                                .handle_shape(egui::style::HandleShape::Circle),
+                        );
                         if volume.changed() {
                             command = Some(Command::SetVolume(self.volume));
                         }

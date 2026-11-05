@@ -35,6 +35,8 @@ impl RecentView {
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
+                crate::fonts::page_title(ui, "Recent");
+                ui.add_space(12.0);
                 let rows = [
                     (
                         "Recently added",

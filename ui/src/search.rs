@@ -51,6 +51,7 @@ impl SearchView {
         let ctx = ui.ctx().clone();
         let mut outcome = SearchOutcome::default();
 
+        crate::fonts::page_title(ui, "Search");
         ui.add_space(8.0);
         egui::Frame::new()
             .fill(search_fill(ui))

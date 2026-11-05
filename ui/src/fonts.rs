@@ -89,6 +89,11 @@ pub fn bold_family() -> FontFamily {
     FontFamily::Name(BOLD.into())
 }
 
+/// A page title, styled as the Radio page's: bold, 34 pt, in the text colour.
+pub fn page_title(ui: &mut egui::Ui, text: &str) {
+    ui.label(egui::RichText::new(text).size(34.0).family(bold_family()));
+}
+
 /// Bold text, for emphasis.
 pub fn bold(text: impl Into<String>) -> egui::RichText {
     egui::RichText::new(text).family(bold_family())

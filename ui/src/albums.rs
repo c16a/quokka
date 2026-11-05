@@ -123,6 +123,7 @@ impl AlbumsView {
         playlists: &[PlaylistSummary],
     ) -> Option<PlayRequest> {
         if self.selected.is_none() {
+            crate::fonts::page_title(ui, "Albums");
             self.toolbar(ui, library);
         }
         if self.albums.is_empty() {

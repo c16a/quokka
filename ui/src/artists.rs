@@ -76,7 +76,7 @@ impl ArtistsView {
 
     /// Every artist, as a tile showing their photo, or the cover of their first album.
     fn grid(&mut self, ui: &mut egui::Ui, albums: &mut AlbumsView, library: &Library) {
-        ui.heading("Artists");
+        crate::fonts::page_title(ui, "Artists");
         ui.add_space(12.0);
         let ctx = ui.ctx().clone();
         self.photos.poll(&ctx);
@@ -126,7 +126,7 @@ impl ArtistsView {
             return None;
         }
         ui.add_space(12.0);
-        ui.heading(&name);
+        crate::fonts::page_title(ui, &name);
         ui.weak(format!("{} albums", album_ids.len()));
         ui.add_space(12.0);
 
