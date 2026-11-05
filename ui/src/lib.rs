@@ -4,6 +4,7 @@ mod albums;
 mod format;
 mod movies;
 mod playback;
+mod search;
 mod settings_view;
 
 use std::collections::VecDeque;
@@ -26,6 +27,7 @@ pub struct Paths {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Tab {
+    Search,
     Albums,
     Movies,
     Settings,
@@ -43,6 +45,7 @@ struct App {
     library: Library,
     tab: Tab,
     albums: albums::AlbumsView,
+    search: search::SearchView,
     movies: movies::MoviesView,
     playback: Playback,
     /// The folder being scanned now, and the channel its result arrives on.
@@ -110,6 +113,7 @@ impl App {
             library,
             tab,
             albums: Default::default(),
+            search: Default::default(),
             movies: Default::default(),
             playback: Playback::new(),
             scan: None,
@@ -303,6 +307,7 @@ impl eframe::App for App {
                 widgets.hovered.expansion = 0.0;
                 widgets.active.expansion = 0.0;
                 for (tab, label) in [
+                    (Tab::Search, "Search"),
                     (Tab::Albums, "Albums"),
                     (Tab::Movies, "Movies"),
                     (Tab::Settings, "Settings"),
@@ -323,6 +328,9 @@ impl eframe::App for App {
                     }
                 });
             });
+        if next_tab == Tab::Search && self.tab != Tab::Search {
+            self.search.focus();
+        }
         self.tab = next_tab;
 
         if self.playback.has_current() {
@@ -331,6 +339,7 @@ impl eframe::App for App {
             });
         }
         let mut action = None;
+        let mut search_outcome = None;
         let mut play = None;
         egui::CentralPanel::default().show(ui, |ui| match self.tab {
             Tab::Albums => {
@@ -338,12 +347,29 @@ impl eframe::App for App {
                     .albums
                     .show(ui, &self.library, self.playback.current_id());
             }
+            Tab::Search => {
+                search_outcome = Some(self.search.show(
+                    ui,
+                    &mut self.albums,
+                    &self.library,
+                    self.playback.current_id(),
+                ));
+            }
             Tab::Movies => self.movies.show(ui),
             Tab::Settings => {
                 action = settings_view::show(ui, &self.settings, self.scan.is_some(), &self.status);
             }
         });
 
+        if let Some(outcome) = search_outcome {
+            if outcome.play.is_some() {
+                play = outcome.play;
+            }
+            if let Some(i) = outcome.open_album {
+                self.albums.open(&self.library, i);
+                self.tab = Tab::Albums;
+            }
+        }
         if let Some(request) = play {
             self.playback.play_queue(request.tracks, request.index);
         }

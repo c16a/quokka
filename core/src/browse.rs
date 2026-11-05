@@ -3,6 +3,8 @@
 use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 
+use rusqlite::params;
+
 use crate::{COLUMNS, Library, MediaItem, MediaKind, Result, row_to_item};
 
 /// One album: all audio items sharing an album tag. Tracks with different track
@@ -99,6 +101,24 @@ impl Library {
         Ok(paths
             .iter()
             .find_map(|p| crate::cover::read_cover(Path::new(p))))
+    }
+
+    /// Audio tracks whose title contains `text` (case-insensitive), sorted by title.
+    pub fn songs_matching(&self, text: &str, limit: usize) -> Result<Vec<MediaItem>> {
+        let escaped = text
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_");
+        let pattern = format!("%{escaped}%");
+        let sql = format!(
+            "SELECT {COLUMNS} FROM media \
+             WHERE kind = 'audio' AND title LIKE ?1 ESCAPE '\\' \
+             ORDER BY title COLLATE NOCASE \
+             LIMIT ?2"
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(params![pattern, limit as i64], row_to_item)?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
     /// All video items, sorted by title (falling back to file name).

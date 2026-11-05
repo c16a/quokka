@@ -15,7 +15,7 @@ const TILE_COVER: f32 = 160.0;
 const COVER_DETAIL: f32 = 240.0;
 /// Space under a grid tile's cover for its title and composer, and the gap between tiles.
 const TILE_TEXT: f32 = 44.0;
-const TILE_GAP: f32 = 20.0;
+pub(crate) const TILE_GAP: f32 = 20.0;
 /// Largest side of a decoded cover. Bigger covers are scaled down to save memory.
 const COVER_MAX_SIDE: u32 = 256;
 
@@ -36,6 +36,30 @@ pub struct AlbumsView {
 }
 
 impl AlbumsView {
+    /// All albums, in the order the grid shows them.
+    pub fn albums(&self) -> &[AlbumSummary] {
+        &self.albums
+    }
+
+    /// The cover of album `index`, decoded on first use.
+    pub fn cover(
+        &mut self,
+        ctx: &egui::Context,
+        library: &Library,
+        index: usize,
+    ) -> Option<egui::TextureHandle> {
+        let album = self.albums.get(index)?;
+        cover_texture(&mut self.covers, ctx, library, index, album)
+    }
+
+    /// Show album `index` in its detail view.
+    pub fn open(&mut self, library: &Library, index: usize) {
+        if index < self.albums.len() {
+            self.selected = Some(index);
+            self.load_tracks(library);
+        }
+    }
+
     pub fn reload(&mut self, library: &Library) {
         self.covers.clear();
         self.albums = library.albums().unwrap_or_else(|e| {
@@ -296,7 +320,7 @@ fn cover_image(ui: &mut egui::Ui, texture: Option<&egui::TextureHandle>, size: f
 }
 
 /// A grid tile: square cover, then the album name and its composers. Text that doesn't fit is clipped.
-fn album_tile(
+pub(crate) fn album_tile(
     ui: &mut egui::Ui,
     cover: Option<&egui::TextureHandle>,
     album: &AlbumSummary,
