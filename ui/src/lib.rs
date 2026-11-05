@@ -1,16 +1,20 @@
-//! Desktop UI (egui via eframe): Albums, Movies and Settings views.
+//! Desktop UI (egui via eframe): Albums, Movies, Settings views, and the playback bar.
 
 mod albums;
 mod format;
 mod movies;
+mod playback;
 mod settings_view;
 
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
+use std::time::Duration;
 
 use eframe::egui;
-use player_core::{Library, ScanStats, Settings};
+use player_core::{Library, ScanStats, Settings, Theme};
+
+use playback::Playback;
 
 /// Where the app keeps its library database and settings file.
 pub struct Paths {
@@ -34,6 +38,7 @@ struct App {
     tab: Tab,
     albums: albums::AlbumsView,
     movies: movies::MoviesView,
+    playback: Playback,
     /// Set while a background scan is running.
     scan: Option<Receiver<ScanResult>>,
     status: String,
@@ -65,8 +70,18 @@ pub fn run(paths: Paths) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// Map the saved theme onto egui's preference.
+fn preference(theme: Theme) -> egui::ThemePreference {
+    match theme {
+        Theme::System => egui::ThemePreference::System,
+        Theme::Light => egui::ThemePreference::Light,
+        Theme::Dark => egui::ThemePreference::Dark,
+    }
+}
+
 impl App {
     fn new(ctx: egui::Context, paths: Paths, settings: Settings, library: Library) -> Self {
+        ctx.set_theme(preference(settings.theme));
         let tab = if settings.library_root.is_some() {
             Tab::Albums
         } else {
@@ -79,6 +94,7 @@ impl App {
             tab,
             albums: Default::default(),
             movies: Default::default(),
+            playback: Playback::new(),
             scan: None,
             status: String::new(),
         };
@@ -145,7 +161,12 @@ impl App {
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.poll_scan();
+        self.playback.advance_if_finished();
         let ctx = ui.ctx().clone();
+        if self.playback.is_playing() {
+            // Keep the slider moving while audio plays.
+            ctx.request_repaint_after(Duration::from_millis(200));
+        }
 
         let mut next_tab = self.tab;
         egui::Panel::top("tabs").show(ui, |ui| {
@@ -167,18 +188,28 @@ impl eframe::App for App {
         });
         self.tab = next_tab;
 
-        egui::Panel::bottom("status").show(ui, |ui| {
-            ui.weak(&self.status);
-        });
-
+        if self.playback.has_current() {
+            egui::Panel::bottom("now_playing").show(ui, |ui| {
+                self.playback.show(ui);
+            });
+        }
         let mut action = None;
+        let mut play = None;
         egui::CentralPanel::default().show(ui, |ui| match self.tab {
-            Tab::Albums => self.albums.show(ui, &self.library),
+            Tab::Albums => {
+                play = self
+                    .albums
+                    .show(ui, &self.library, self.playback.current_id());
+            }
             Tab::Movies => self.movies.show(ui),
             Tab::Settings => {
-                action = settings_view::show(ui, &self.settings, self.scan.is_some());
+                action = settings_view::show(ui, &self.settings, self.scan.is_some(), &self.status);
             }
         });
+
+        if let Some(request) = play {
+            self.playback.play_queue(request.tracks, request.index);
+        }
 
         match action {
             Some(settings_view::Action::ChooseFolder(root)) => {
@@ -191,6 +222,13 @@ impl eframe::App for App {
             Some(settings_view::Action::Rescan) => {
                 if let Some(root) = self.settings.library_root.clone() {
                     self.start_scan(&ctx, root);
+                }
+            }
+            Some(settings_view::Action::SetTheme(theme)) => {
+                self.settings.theme = theme;
+                ctx.set_theme(preference(theme));
+                if let Err(e) = self.settings.save(&self.paths.settings) {
+                    self.status = format!("Could not save settings: {e}");
                 }
             }
             None => {}

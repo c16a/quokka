@@ -1,6 +1,6 @@
 use std::fs;
 
-use player_core::{Library, Settings};
+use player_core::{Library, Settings, Theme};
 
 #[test]
 fn albums_group_tracks_and_movies_list_videos() {
@@ -36,6 +36,7 @@ fn settings_round_trip_and_default_when_missing() {
 
     let settings = Settings {
         library_root: Some(dir.path().join("music")),
+        theme: Theme::Dark,
     };
     settings.save(&path).unwrap();
     assert_eq!(Settings::load(&path).unwrap(), settings);

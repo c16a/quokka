@@ -35,3 +35,96 @@ pub fn size(bytes: i64) -> String {
         format!("{:.0} MB", bytes / MB)
     }
 }
+
+/// Playback time as `m:ss` (or `h:mm:ss`), from seconds.
+pub fn clock(secs: f64) -> String {
+    duration(Some((secs.max(0.0) * 1000.0) as i64))
+}
+
+/// Bit depth and sample rate, such as "24-bit / 96 kHz". Missing parts are left out.
+pub fn sample_format(bit_depth: Option<i64>, sample_rate: Option<i64>) -> Option<String> {
+    let rate = sample_rate.map(|r| {
+        if r % 1000 == 0 {
+            format!("{} kHz", r / 1000)
+        } else {
+            format!("{:.1} kHz", r as f64 / 1000.0)
+        }
+    });
+    match (bit_depth, rate) {
+        (Some(bits), Some(rate)) => Some(format!("{bits}-bit / {rate}")),
+        (Some(bits), None) => Some(format!("{bits}-bit")),
+        (None, Some(rate)) => Some(rate),
+        (None, None) => None,
+    }
+}
+
+/// Average bitrate with a thousands separator, such as "1,842 kbps".
+pub fn kbps(value: i64) -> String {
+    let digits = value.to_string();
+    let mut grouped = String::new();
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            grouped.push(',');
+        }
+        grouped.push(c);
+    }
+    format!("{grouped} kbps")
+}
+
+/// Channel layout as a word where there is one, otherwise a count.
+pub fn channels(count: i64) -> String {
+    match count {
+        1 => "Mono".into(),
+        2 => "Stereo".into(),
+        n => format!("{n} ch"),
+    }
+}
+
+/// Hi-res: more than 16 bits, or a sample rate above 48 kHz.
+pub fn is_hi_res(bit_depth: Option<i64>, sample_rate: Option<i64>) -> bool {
+    bit_depth.is_some_and(|b| b > 16) || sample_rate.is_some_and(|r| r > 48_000)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sample_format_handles_missing_parts() {
+        assert_eq!(
+            sample_format(Some(24), Some(96_000)).as_deref(),
+            Some("24-bit / 96 kHz")
+        );
+        assert_eq!(
+            sample_format(Some(16), Some(44_100)).as_deref(),
+            Some("16-bit / 44.1 kHz")
+        );
+        assert_eq!(sample_format(None, Some(48_000)).as_deref(), Some("48 kHz"));
+        assert_eq!(sample_format(Some(16), None).as_deref(), Some("16-bit"));
+        assert_eq!(sample_format(None, None), None);
+    }
+
+    #[test]
+    fn kbps_groups_thousands() {
+        assert_eq!(kbps(1842), "1,842 kbps");
+        assert_eq!(kbps(320), "320 kbps");
+        assert_eq!(kbps(1_000_000), "1,000,000 kbps");
+    }
+
+    #[test]
+    fn hi_res_is_above_16_bit_or_48_khz() {
+        assert!(is_hi_res(Some(24), Some(96_000)));
+        assert!(is_hi_res(Some(16), Some(96_000)));
+        assert!(is_hi_res(Some(24), Some(44_100)));
+        assert!(!is_hi_res(Some(16), Some(44_100)));
+        assert!(!is_hi_res(Some(16), Some(48_000)));
+        assert!(!is_hi_res(None, None));
+    }
+
+    #[test]
+    fn channels_are_named() {
+        assert_eq!(channels(1), "Mono");
+        assert_eq!(channels(2), "Stereo");
+        assert_eq!(channels(6), "6 ch");
+    }
+}

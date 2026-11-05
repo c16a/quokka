@@ -14,7 +14,7 @@ use thiserror::Error;
 
 pub use browse::AlbumSummary;
 pub use scan::ScanStats;
-pub use settings::Settings;
+pub use settings::{Settings, Theme};
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -83,6 +83,12 @@ pub struct MediaItem {
     pub album_artist: Option<String>,
     pub composer: Option<String>,
     pub genre: Option<String>,
+    /// Codec label, such as "FLAC".
+    pub codec: Option<String>,
+    pub bit_depth: Option<i64>,
+    pub sample_rate: Option<i64>,
+    pub channels: Option<i64>,
+    pub bitrate_kbps: Option<i64>,
     pub track: Option<i64>,
     pub year: Option<i64>,
 }
@@ -194,8 +200,8 @@ impl Library {
     }
 }
 
-const COLUMNS: &str = "id, path, kind, size, duration_ms, title, artist, album, genre, track, year, album_artist, composer";
-const M_COLUMNS: &str = "m.id, m.path, m.kind, m.size, m.duration_ms, m.title, m.artist, m.album, m.genre, m.track, m.year, m.album_artist, m.composer";
+const COLUMNS: &str = "id, path, kind, size, duration_ms, title, artist, album, genre, track, year, album_artist, composer, codec, bit_depth, sample_rate, channels, bitrate_kbps";
+const M_COLUMNS: &str = "m.id, m.path, m.kind, m.size, m.duration_ms, m.title, m.artist, m.album, m.genre, m.track, m.year, m.album_artist, m.composer, m.codec, m.bit_depth, m.sample_rate, m.channels, m.bitrate_kbps";
 
 pub(crate) fn row_to_item(r: &rusqlite::Row<'_>) -> rusqlite::Result<MediaItem> {
     let kind: String = r.get(2)?;
@@ -213,6 +219,11 @@ pub(crate) fn row_to_item(r: &rusqlite::Row<'_>) -> rusqlite::Result<MediaItem> 
         year: r.get(10)?,
         album_artist: r.get(11)?,
         composer: r.get(12)?,
+        codec: r.get(13)?,
+        bit_depth: r.get(14)?,
+        sample_rate: r.get(15)?,
+        channels: r.get(16)?,
+        bitrate_kbps: r.get(17)?,
     })
 }
 

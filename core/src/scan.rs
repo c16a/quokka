@@ -106,18 +106,22 @@ pub(crate) fn scan(conn: &mut Connection, root: &Path) -> Result<ScanStats> {
             continue;
         }
 
-        let info = metadata::read(path);
+        let info = metadata::read(path, size);
         tx.execute(
             "INSERT INTO media \
                (path, kind, size, mtime, duration_ms, title, artist, album, album_artist, \
-                genre, composer, track, year) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13) \
+                genre, composer, track, year, codec, bit_depth, sample_rate, channels, \
+                bitrate_kbps) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18) \
              ON CONFLICT(path) DO UPDATE SET \
                kind = excluded.kind, size = excluded.size, mtime = excluded.mtime, \
                duration_ms = excluded.duration_ms, title = excluded.title, \
                artist = excluded.artist, album = excluded.album, \
                album_artist = excluded.album_artist, genre = excluded.genre, \
-               composer = excluded.composer, track = excluded.track, year = excluded.year",
+               composer = excluded.composer, track = excluded.track, year = excluded.year, \
+               codec = excluded.codec, bit_depth = excluded.bit_depth, \
+               sample_rate = excluded.sample_rate, channels = excluded.channels, \
+               bitrate_kbps = excluded.bitrate_kbps",
             params![
                 key,
                 kind.as_str(),
@@ -132,6 +136,11 @@ pub(crate) fn scan(conn: &mut Connection, root: &Path) -> Result<ScanStats> {
                 info.composer,
                 info.track,
                 info.year,
+                info.codec,
+                info.bit_depth,
+                info.sample_rate,
+                info.channels,
+                info.bitrate_kbps,
             ],
         )?;
         stats.indexed += 1;

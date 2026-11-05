@@ -2,6 +2,8 @@
 //! [`Player`]; concrete backends (libmpv first, FFmpeg later) implement it.
 
 mod mock;
+mod rodio_backend;
+mod symphonia_source;
 
 use std::path::Path;
 use std::time::Duration;
@@ -9,6 +11,8 @@ use std::time::Duration;
 use thiserror::Error;
 
 pub use mock::MockPlayer;
+pub use rodio_backend::RodioPlayer;
+pub use symphonia_source::SymphoniaSource;
 
 #[derive(Debug, Error)]
 pub enum PlaybackError {

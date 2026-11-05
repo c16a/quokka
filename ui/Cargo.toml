@@ -9,6 +9,7 @@ publish.workspace = true
 [dependencies]
 eframe.workspace = true
 player-core.workspace = true
+player-playback.workspace = true
 rfd.workspace = true
 
 # Linux windowing and folder-picker backends. Other platforms need no extra features.

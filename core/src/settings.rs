@@ -5,12 +5,24 @@ use serde::{Deserialize, Serialize};
 
 use crate::Result;
 
+/// Light, dark, or follow the operating system.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Theme {
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+
 /// User settings, stored as JSON.
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Settings {
     /// Folder the library scans. `None` until the user chooses one.
     #[serde(default)]
     pub library_root: Option<PathBuf>,
+    #[serde(default)]
+    pub theme: Theme,
 }
 
 impl Settings {
