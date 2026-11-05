@@ -12,7 +12,7 @@ fn unsupported_formats_are_not_indexed() {
 #[test]
 fn supported_formats_are_indexed() {
     for name in [
-        "a.mp3", "a.flac", "a.m4a", "a.ogg", "a.opus", "a.wav", "a.aiff",
+        "a.mp3", "a.flac", "a.m4a", "a.ogg", "a.opus", "a.wav", "a.aiff", "a.mka",
     ] {
         assert_eq!(
             MediaKind::from_path(Path::new(name)),

@@ -48,9 +48,8 @@ impl MediaKind {
     pub fn from_path(path: &Path) -> Option<Self> {
         let ext = path.extension()?.to_str()?.to_ascii_lowercase();
         match ext.as_str() {
-            "mp3" | "flac" | "m4a" | "aac" | "ogg" | "oga" | "opus" | "wav" | "aif" | "aiff" => {
-                Some(Self::Audio)
-            }
+            "mp3" | "flac" | "m4a" | "aac" | "ogg" | "oga" | "opus" | "wav" | "aif" | "aiff"
+            | "mka" => Some(Self::Audio),
             "mp4" | "m4v" | "mkv" | "webm" | "mov" | "avi" | "wmv" | "flv" | "ts" | "mpg"
             | "mpeg" => Some(Self::Video),
             _ => None,

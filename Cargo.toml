@@ -22,7 +22,7 @@ image = { version = "0.25.10", default-features = false, features = ["jpeg", "pn
 rfd = { version = "0.17.2", default-features = false }
 rodio = { version = "0.23.0", default-features = false, features = ["playback"] }
 souvlaki = { version = "0.9.3", default-features = false, features = ["use_dbus"] }
-symphonia = { version = "0.6.1", default-features = false, features = ["mp3", "flac", "isomp4", "aac", "alac", "vorbis", "ogg", "wav", "pcm", "aiff", "adpcm"] }
+symphonia = { version = "0.6.1", default-features = false, features = ["mp3", "flac", "isomp4", "mkv", "aac", "alac", "vorbis", "ogg", "wav", "pcm", "aiff", "adpcm"] }
 rusqlite = { version = "0.41.1", default-features = false, features = ["bundled", "cache"] }
 serde = { version = "1.0.229", default-features = false, features = ["derive", "std"] }
 serde_json = { version = "1.0.154", default-features = false, features = ["std"] }
