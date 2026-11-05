@@ -1,0 +1,17 @@
+[package]
+name = "player-ui"
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+eframe.workspace = true
+player-core.workspace = true
+rfd.workspace = true
+
+# Linux windowing and folder-picker backends. Other platforms need no extra features.
+[target.'cfg(target_os = "linux")'.dependencies]
+eframe = { workspace = true, features = ["wayland", "x11"] }
+rfd = { workspace = true, features = ["xdg-portal"] }
