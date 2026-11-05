@@ -15,6 +15,18 @@ pub enum Theme {
     Dark,
 }
 
+/// How tracks are levelled with their ReplayGain tags. Off plays every track as it was mastered.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ReplayGainMode {
+    #[default]
+    Off,
+    /// Each track gets its own gain.
+    Track,
+    /// Tracks keep the album's relative loudness, using the album gain.
+    Album,
+}
+
 /// User settings, stored as JSON.
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Settings {
@@ -27,6 +39,8 @@ pub struct Settings {
     pub legacy_root: Option<PathBuf>,
     #[serde(default)]
     pub theme: Theme,
+    #[serde(default)]
+    pub replay_gain: ReplayGainMode,
 }
 
 impl Settings {

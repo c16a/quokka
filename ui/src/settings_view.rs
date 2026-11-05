@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use eframe::egui;
-use player_core::{Settings, Theme};
+use player_core::{ReplayGainMode, Settings, Theme};
 
 /// Something the user asked for on the Settings screen.
 pub enum Action {
@@ -11,6 +11,7 @@ pub enum Action {
     RescanFolder(usize),
     RescanAll,
     SetTheme(Theme),
+    SetReplayGain(ReplayGainMode),
 }
 
 /// Settings screen. Returns the action the user chose this frame, if any.
@@ -69,6 +70,21 @@ pub fn show(ui: &mut egui::Ui, settings: &Settings, busy: bool, status: &str) ->
     });
     if theme != settings.theme {
         action = Some(Action::SetTheme(theme));
+    }
+
+    ui.add_space(24.0);
+    ui.heading("Playback");
+    ui.add_space(4.0);
+    ui.label("ReplayGain, which levels tracks using the loudness tags in each file:");
+    ui.add_space(4.0);
+    let mut mode = settings.replay_gain;
+    ui.horizontal(|ui| {
+        ui.selectable_value(&mut mode, ReplayGainMode::Off, "Off");
+        ui.selectable_value(&mut mode, ReplayGainMode::Track, "Track");
+        ui.selectable_value(&mut mode, ReplayGainMode::Album, "Album");
+    });
+    if mode != settings.replay_gain {
+        action = Some(Action::SetReplayGain(mode));
     }
 
     action

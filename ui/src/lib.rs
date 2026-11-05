@@ -133,6 +133,7 @@ impl App {
             rescan_at: None,
             status: String::new(),
         };
+        app.playback.set_replay_gain(app.settings.replay_gain);
         app.reload_views();
         if app.settings.library_roots.is_empty() {
             app.status = "Add a folder to get started.".into();
@@ -438,6 +439,13 @@ impl eframe::App for App {
             Some(settings_view::Action::RescanAll) => {
                 let roots = self.settings.library_roots.clone();
                 self.enqueue(&ctx, roots);
+            }
+            Some(settings_view::Action::SetReplayGain(mode)) => {
+                self.settings.replay_gain = mode;
+                self.playback.set_replay_gain(mode);
+                if let Err(e) = self.settings.save(&self.paths.settings) {
+                    self.status = format!("Could not save settings: {e}");
+                }
             }
             Some(settings_view::Action::SetTheme(theme)) => {
                 self.settings.theme = theme;

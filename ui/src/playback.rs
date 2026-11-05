@@ -3,8 +3,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use eframe::egui;
-use player_core::MediaItem;
-use player_playback::{Player, PlayerState, RodioPlayer};
+use player_core::{MediaItem, ReplayGainMode};
+use player_playback::{Player, PlayerState, RodioPlayer, output_device_names};
 
 use crate::format;
 
@@ -55,6 +55,15 @@ pub struct Playback {
     row_widths: [f32; 3],
     /// Whether the queue panel is open. The bar's queue button toggles it.
     pub queue_open: bool,
+    replay_gain: ReplayGainMode,
+    /// The output chosen for this session. `None` follows the system default.
+    output: Option<String>,
+    /// Output names offered in the bar's menu, refreshed when the menu is opened.
+    outputs: Vec<String>,
+    /// Level factor from the current track's ReplayGain tags. 1.0 when there is none.
+    gain: f32,
+    /// The queue index of the track armed to follow the current one, if any.
+    armed: Option<usize>,
 }
 
 /// What the bar asked for this frame. Applied after drawing.
@@ -90,6 +99,11 @@ impl Playback {
             error,
             row_widths: [0.0; 3],
             queue_open: false,
+            replay_gain: ReplayGainMode::Off,
+            output: None,
+            outputs: output_device_names(),
+            gain: 1.0,
+            armed: None,
         }
     }
 
@@ -250,6 +264,49 @@ impl Playback {
         self.repeat = self.repeat.cycle();
     }
 
+    /// Switch the audio output. The current track carries on from the same position, in the
+    /// same state (playing, paused or finished).
+    pub fn set_output(&mut self, device: Option<String>) {
+        if device == self.output && self.player.is_some() {
+            return;
+        }
+        let position = self.position();
+        let state = self.state();
+        let had_track = self.current().is_some();
+        match RodioPlayer::open(device.as_deref()) {
+            Ok(player) => {
+                // The old player is dropped here, which stops its audio.
+                self.player = Some(player);
+                self.output = device;
+                self.error = None;
+            }
+            Err(e) => {
+                self.error = Some(format!("Could not switch output: {e}"));
+                return;
+            }
+        }
+        if had_track {
+            self.start_current();
+            if state != PlayerState::Ended
+                && let Some(at) = position
+            {
+                self.seek(at.as_secs_f64());
+            }
+            if state != PlayerState::Playing {
+                self.pause();
+            }
+        }
+    }
+
+    /// Choose how tracks are levelled with their ReplayGain tags. Applies to the current track too.
+    pub fn set_replay_gain(&mut self, mode: ReplayGainMode) {
+        self.replay_gain = mode;
+        self.gain = self.current().map_or(1.0, |item| {
+            player_core::replay_gain_factor(&item.path, mode)
+        });
+        self.apply_volume();
+    }
+
     pub fn set_volume(&mut self, volume: f32) {
         self.volume = volume.clamp(0.0, 1.0);
         self.apply_volume();
@@ -267,6 +324,7 @@ impl Playback {
 
     /// Move on when a track has finished, and say why if it stopped early.
     pub fn advance_if_finished(&mut self) {
+        self.sync_gapless();
         if self.state() != PlayerState::Ended {
             return;
         }
@@ -352,6 +410,55 @@ impl Playback {
         self.current().cloned()
     }
 
+    /// Keep the output one track ahead, so the next track follows without a gap. Called every
+    /// frame. When the output has moved on to the armed track, the queue position follows it.
+    fn sync_gapless(&mut self) {
+        let started = match self.player.as_mut() {
+            Some(player) => player.take_started().is_some(),
+            None => false,
+        };
+        if started {
+            if let Some(index) = self.armed.take() {
+                self.index = index;
+            }
+            self.seek_secs = 0.0;
+            self.gain = self.current().map_or(1.0, |item| {
+                player_core::replay_gain_factor(&item.path, self.replay_gain)
+            });
+            self.apply_volume();
+        }
+
+        let want = self.next_index();
+        if want == self.armed {
+            return;
+        }
+        let path = want
+            .and_then(|i| self.queue.get(i))
+            .map(|item| item.path.clone());
+        if let Some(player) = self.player.as_mut() {
+            match path {
+                Some(path) => {
+                    // A track that can't be opened is simply not followed; the normal path then
+                    // reports the error when it is reached.
+                    let _ = player.arm_next(&path);
+                }
+                None => player.disarm_next(),
+            }
+        }
+        // Recorded even when opening failed, so the same track isn't retried every frame.
+        self.armed = want;
+    }
+
+    /// The queue index that plays after the current one, following the repeat mode.
+    fn next_index(&self) -> Option<usize> {
+        self.current()?;
+        match self.repeat {
+            Repeat::Track => Some(self.index),
+            Repeat::Queue if self.index + 1 >= self.queue.len() => Some(0),
+            _ => (self.index + 1 < self.queue.len()).then_some(self.index + 1),
+        }
+    }
+
     fn current(&self) -> Option<&Arc<MediaItem>> {
         self.queue.get(self.index)
     }
@@ -379,7 +486,11 @@ impl Playback {
 
     /// Apply the output level: zero when muted, otherwise the chosen volume.
     fn apply_volume(&mut self) {
-        let level = if self.muted { 0.0 } else { self.volume };
+        let level = if self.muted {
+            0.0
+        } else {
+            self.volume * self.gain
+        };
         self.with_player(|p| p.set_volume(level));
     }
 
@@ -402,6 +513,7 @@ impl Playback {
         let Some(item) = self.current().cloned() else {
             return;
         };
+        self.armed = None;
         // The output may not have been available at launch (e.g. headphones connected later).
         if self.player.is_none() {
             self.player = RodioPlayer::new().ok();
@@ -415,6 +527,8 @@ impl Playback {
             Ok(()) => None,
             Err(e) => Some(format!("Could not play {}: {e}", format::title(&item))),
         };
+        self.gain = player_core::replay_gain_factor(&item.path, self.replay_gain);
+        self.apply_volume();
         self.dragging = false;
         self.seek_secs = 0.0;
     }
@@ -435,6 +549,8 @@ impl Playback {
 
         let animate = state == PlayerState::Playing;
         let mut command = None;
+        let mut choice: Option<Option<String>> = None;
+        let mut refresh = false;
         egui::Frame::new()
             .inner_margin(egui::Margin::symmetric(12, 10))
             .show(ui, |ui| {
@@ -605,6 +721,35 @@ impl Playback {
                             if format::is_hi_res(item.bit_depth, item.sample_rate) {
                                 hi_res_badge(ui);
                             }
+                            ui.add_space(4.0);
+                            let label = format!(
+                                "Output: {}",
+                                short_name(self.output.as_deref().unwrap_or("System default"))
+                            );
+                            let menu = ui.menu_button(label, |ui| {
+                                if ui
+                                    .selectable_label(self.output.is_none(), "System default")
+                                    .clicked()
+                                {
+                                    choice = Some(None);
+                                    ui.close();
+                                }
+                                for name in &self.outputs {
+                                    if ui
+                                        .selectable_label(
+                                            self.output.as_deref() == Some(name),
+                                            name,
+                                        )
+                                        .clicked()
+                                    {
+                                        choice = Some(Some(name.clone()));
+                                        ui.close();
+                                    }
+                                }
+                            });
+                            if menu.response.clicked() {
+                                refresh = true;
+                            }
                         });
                     }
 
@@ -615,6 +760,12 @@ impl Playback {
                 });
             });
 
+        if refresh {
+            self.outputs = output_device_names();
+        }
+        if let Some(device) = choice {
+            self.set_output(device);
+        }
         match command {
             Some(Command::Toggle) => self.toggle(),
             Some(Command::Next) => self.next(),
@@ -681,6 +832,17 @@ pub fn shuffle<T>(items: &mut [T]) {
         state ^= state << 17;
         let j = (state % (i as u64 + 1)) as usize;
         items.swap(i, j);
+    }
+}
+
+/// A device name cut short so it fits in the bar.
+fn short_name(name: &str) -> String {
+    const MAX: usize = 22;
+    if name.chars().count() <= MAX {
+        name.to_owned()
+    } else {
+        let head: String = name.chars().take(MAX - 1).collect();
+        format!("{head}…")
     }
 }
 
@@ -998,6 +1160,11 @@ mod tests {
             error: None,
             row_widths: [0.0; 3],
             queue_open: false,
+            replay_gain: ReplayGainMode::Off,
+            output: None,
+            outputs: Vec::new(),
+            gain: 1.0,
+            armed: None,
         };
         p.play_queue((1..=n).map(item).collect(), 0);
         p

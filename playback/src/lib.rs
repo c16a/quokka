@@ -1,6 +1,7 @@
 //! Playback abstraction. The UI and the library talk to playback only through
 //! [`Player`]; concrete backends (libmpv first, FFmpeg later) implement it.
 
+mod chain;
 mod mock;
 mod rodio_backend;
 mod symphonia_source;
@@ -11,7 +12,7 @@ use std::time::Duration;
 use thiserror::Error;
 
 pub use mock::MockPlayer;
-pub use rodio_backend::RodioPlayer;
+pub use rodio_backend::{RodioPlayer, output_device_names};
 pub use symphonia_source::SymphoniaSource;
 
 #[derive(Debug, Error)]

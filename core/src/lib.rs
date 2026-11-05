@@ -8,6 +8,7 @@ pub use cover::read_cover;
 mod db;
 mod favorites;
 mod metadata;
+mod replaygain;
 mod scan;
 mod settings;
 
@@ -18,8 +19,9 @@ use thiserror::Error;
 
 pub use browse::AlbumSummary;
 pub use favorites::FavoriteKind;
+pub use replaygain::replay_gain_factor;
 pub use scan::ScanStats;
-pub use settings::{Settings, Theme};
+pub use settings::{ReplayGainMode, Settings, Theme};
 
 #[derive(Debug, Error)]
 pub enum Error {

@@ -1,6 +1,6 @@
 use std::fs;
 
-use player_core::{Library, Settings, Theme};
+use player_core::{Library, ReplayGainMode, Settings, Theme};
 
 #[test]
 fn albums_group_tracks_and_movies_list_videos() {
@@ -38,6 +38,7 @@ fn settings_round_trip_and_default_when_missing() {
         library_roots: vec![dir.path().join("music"), dir.path().join("films")],
         legacy_root: None,
         theme: Theme::Dark,
+        replay_gain: ReplayGainMode::Album,
     };
     settings.save(&path).unwrap();
     assert_eq!(Settings::load(&path).unwrap(), settings);
