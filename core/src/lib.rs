@@ -6,11 +6,14 @@ mod cover;
 
 pub use cover::read_cover;
 mod db;
+mod details;
 mod favorites;
+mod history;
 mod metadata;
 mod playlist;
 mod replaygain;
 mod scan;
+mod search;
 mod session;
 mod settings;
 
@@ -19,11 +22,14 @@ use std::path::{Path, PathBuf};
 use rusqlite::{Connection, OptionalExtension, params};
 use thiserror::Error;
 
-pub use browse::AlbumSummary;
+pub use browse::{AlbumFilter, AlbumSort, AlbumSummary};
+pub use details::{TrackDetails, track_details};
 pub use favorites::FavoriteKind;
+pub use history::Recent;
 pub use playlist::PlaylistSummary;
 pub use replaygain::replay_gain_factor;
 pub use scan::ScanStats;
+pub use search::SongQuery;
 pub use session::{RepeatMode, Session};
 pub use settings::{ReplayGainMode, Settings, Theme};
 

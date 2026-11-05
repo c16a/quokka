@@ -20,6 +20,16 @@ pub enum MenuRequest {
     },
 }
 
+/// The side panel open beside the main view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Panel {
+    #[default]
+    Closed,
+    Queue,
+    Lyrics,
+    Info,
+}
+
 /// The queue the user is listening through, and the player that plays it.
 pub struct Playback {
     /// `None` when no audio output device could be opened.
@@ -40,7 +50,7 @@ pub struct Playback {
     /// Measured widths of the centred rows, from the previous frame.
     row_widths: [f32; 3],
     /// Whether the queue panel is open. The bar's queue button toggles it.
-    pub queue_open: bool,
+    pub panel: Panel,
     replay_gain: ReplayGainMode,
     /// The output chosen for this session. `None` follows the system default.
     output: Option<String>,
@@ -62,7 +72,7 @@ enum Command {
     ToggleMute,
     ToggleShuffle,
     CycleRepeat,
-    ToggleQueue,
+    TogglePanel(Panel),
 }
 
 impl Playback {
@@ -84,7 +94,7 @@ impl Playback {
             dragging: false,
             error,
             row_widths: [0.0; 3],
-            queue_open: false,
+            panel: Panel::Closed,
             replay_gain: ReplayGainMode::Off,
             output: None,
             outputs: output_device_names(),
@@ -708,11 +718,23 @@ impl Playback {
                             volume_to = Some(volume_level);
                         }
                         ui.add_space(4.0);
-                        if queue_button(ui, self.queue_open)
-                            .on_hover_text("Queue")
+                        if panel_button(ui, Panel::Queue, self.panel == Panel::Queue)
+                            .on_hover_text("Up next")
                             .clicked()
                         {
-                            command = Some(Command::ToggleQueue);
+                            command = Some(Command::TogglePanel(Panel::Queue));
+                        }
+                        if panel_button(ui, Panel::Lyrics, self.panel == Panel::Lyrics)
+                            .on_hover_text("Lyrics")
+                            .clicked()
+                        {
+                            command = Some(Command::TogglePanel(Panel::Lyrics));
+                        }
+                        if panel_button(ui, Panel::Info, self.panel == Panel::Info)
+                            .on_hover_text("Track info")
+                            .clicked()
+                        {
+                            command = Some(Command::TogglePanel(Panel::Info));
                         }
                     });
                     self.seek_secs = secs;
@@ -798,7 +820,13 @@ impl Playback {
             Some(Command::ToggleMute) => self.toggle_mute(),
             Some(Command::ToggleShuffle) => self.set_shuffle(!self.shuffle),
             Some(Command::CycleRepeat) => self.cycle_repeat(),
-            Some(Command::ToggleQueue) => self.queue_open = !self.queue_open,
+            Some(Command::TogglePanel(panel)) => {
+                self.panel = if self.panel == panel {
+                    Panel::Closed
+                } else {
+                    panel
+                };
+            }
             None => {}
         }
     }
@@ -1016,8 +1044,8 @@ fn mode_button(ui: &mut egui::Ui, icon: ModeIcon, active: bool) -> egui::Respons
     response
 }
 
-/// Round button with a list icon. It opens and closes the queue panel.
-fn queue_button(ui: &mut egui::Ui, active: bool) -> egui::Response {
+/// Round button with an icon for a side panel. It is tinted when that panel is open.
+fn panel_button(ui: &mut egui::Ui, panel: Panel, active: bool) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(28.0, 28.0), egui::Sense::click());
     let visuals = ui.style().interact(&response);
     let color = if active {
@@ -1028,15 +1056,41 @@ fn queue_button(ui: &mut egui::Ui, active: bool) -> egui::Response {
     let painter = ui.painter();
     painter.rect_filled(rect, 14.0, visuals.weak_bg_fill);
     let c = rect.center();
-    for dy in [-5.0, 0.0, 5.0] {
-        painter.circle_filled(egui::pos2(c.x - 5.0, c.y + dy), 1.2, color);
-        painter.line_segment(
-            [
-                egui::pos2(c.x - 2.0, c.y + dy),
-                egui::pos2(c.x + 6.0, c.y + dy),
-            ],
-            egui::Stroke::new(1.4, color),
-        );
+    let stroke = egui::Stroke::new(1.4, color);
+    match panel {
+        Panel::Queue => {
+            for dy in [-5.0, 0.0, 5.0] {
+                painter.circle_filled(egui::pos2(c.x - 5.0, c.y + dy), 1.2, color);
+                painter.line_segment(
+                    [
+                        egui::pos2(c.x - 2.0, c.y + dy),
+                        egui::pos2(c.x + 6.0, c.y + dy),
+                    ],
+                    stroke,
+                );
+            }
+        }
+        Panel::Lyrics => {
+            // Three lines of text, the last one shorter.
+            for (dy, half) in [(-5.0, 6.0), (0.0, 6.0), (5.0, 3.5)] {
+                painter.line_segment(
+                    [
+                        egui::pos2(c.x - half, c.y + dy),
+                        egui::pos2(c.x + half, c.y + dy),
+                    ],
+                    stroke,
+                );
+            }
+        }
+        Panel::Info => {
+            painter.circle_stroke(c, 7.0, stroke);
+            painter.circle_filled(egui::pos2(c.x, c.y - 3.5), 1.2, color);
+            painter.line_segment(
+                [egui::pos2(c.x, c.y - 0.5), egui::pos2(c.x, c.y + 4.0)],
+                stroke,
+            );
+        }
+        Panel::Closed => {}
     }
     response
 }
@@ -1182,7 +1236,7 @@ mod tests {
             dragging: false,
             error: None,
             row_widths: [0.0; 3],
-            queue_open: false,
+            panel: Panel::Closed,
             replay_gain: ReplayGainMode::Off,
             output: None,
             outputs: Vec::new(),

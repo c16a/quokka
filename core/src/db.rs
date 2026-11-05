@@ -3,7 +3,7 @@ use rusqlite::Connection;
 use crate::Result;
 
 /// Bump when the schema changes and add a matching migration step below.
-const SCHEMA_VERSION: i64 = 5;
+const SCHEMA_VERSION: i64 = 6;
 
 /// Per-connection settings and schema migration.
 pub(crate) fn configure(conn: &Connection) -> Result<()> {
@@ -28,6 +28,9 @@ pub(crate) fn configure(conn: &Connection) -> Result<()> {
     }
     if version < 5 {
         conn.execute_batch(SCHEMA_V5)?;
+    }
+    if version < 6 {
+        conn.execute_batch(SCHEMA_V6)?;
     }
     if version != SCHEMA_VERSION {
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
@@ -131,4 +134,18 @@ CREATE TABLE playlist_track (
     media_id    INTEGER NOT NULL REFERENCES media(id) ON DELETE CASCADE,
     PRIMARY KEY (playlist_id, position)
 );
+";
+
+/// When each file was first added, and a history of plays. Files indexed before this version
+/// count as added at the time of the upgrade.
+const SCHEMA_V6: &str = "
+ALTER TABLE media ADD COLUMN added INTEGER NOT NULL DEFAULT 0;
+UPDATE media SET added = strftime('%s', 'now');
+
+CREATE TABLE play_history (
+    id        INTEGER PRIMARY KEY,
+    media_id  INTEGER NOT NULL REFERENCES media(id) ON DELETE CASCADE,
+    played_at INTEGER NOT NULL
+);
+CREATE INDEX play_history_by_media ON play_history(media_id);
 ";

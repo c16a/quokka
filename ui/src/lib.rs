@@ -8,8 +8,10 @@ mod movies;
 mod playback;
 mod playlists;
 mod queue;
+mod recent;
 mod search;
 mod settings_view;
+mod side;
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -21,7 +23,7 @@ use eframe::egui;
 use notify::{RecursiveMode, Watcher};
 use player_core::{Library, ScanStats, Session, Settings, Theme};
 
-use playback::{MenuRequest, Playback};
+use playback::{MenuRequest, Panel, Playback};
 
 /// Where the app keeps its library database and settings file.
 pub struct Paths {
@@ -35,6 +37,7 @@ pub struct Paths {
 enum Tab {
     Search,
     Albums,
+    Recent,
     Artists,
     Playlists,
     Movies,
@@ -58,6 +61,10 @@ struct App {
     playback: Playback,
     queue_view: queue::QueueView,
     artists: artists::ArtistsView,
+    recent: recent::RecentView,
+    side: side::SidePanels,
+    /// The track last logged as played, so one track is logged once per start.
+    last_played: Option<i64>,
     playlists: playlists::PlaylistsView,
     /// System media keys and now-playing display. `None` when the system has none.
     media: Option<media::Media>,
@@ -135,6 +142,9 @@ impl App {
             playback: Playback::new(),
             queue_view: Default::default(),
             artists: Default::default(),
+            recent: Default::default(),
+            side: Default::default(),
+            last_played: None,
             playlists: Default::default(),
             media,
             scan: None,
@@ -197,6 +207,21 @@ impl App {
         self.session_saved = Some(self.playback.session());
     }
 
+    /// Log each track as it starts playing, and refresh the recent lists when one does.
+    fn record_plays(&mut self) {
+        let current = self.playback.current_id();
+        if current.is_none() || current == self.last_played || !self.playback.is_playing() {
+            return;
+        }
+        if let Some(id) = current
+            && let Err(e) = self.library.record_play(id)
+        {
+            eprintln!("player: could not record play: {e}");
+        }
+        self.last_played = current;
+        self.recent.reload(&self.library, self.albums.albums());
+    }
+
     /// Save the playback state if it has changed since the last save.
     fn save_session(&mut self) {
         let session = self.playback.session();
@@ -214,6 +239,7 @@ impl App {
         self.movies.reload(&self.library);
         self.playlists.reload(&self.library);
         self.artists.reload(self.albums.albums());
+        self.recent.reload(&self.library, self.albums.albums());
     }
 
     /// Add folders to the scan queue. Each folder is scanned on its own. A folder that is
@@ -347,6 +373,7 @@ impl eframe::App for App {
         self.playback.advance_if_finished();
         let ctx = ui.ctx().clone();
         playback::handle_keys(&ctx, &mut self.playback);
+        self.record_plays();
         if self.last_save.elapsed() >= Duration::from_secs(2) {
             self.last_save = Instant::now();
             self.save_session();
@@ -393,6 +420,7 @@ impl eframe::App for App {
                 for (tab, label) in [
                     (Tab::Search, "Search"),
                     (Tab::Albums, "Albums"),
+                    (Tab::Recent, "Recent"),
                     (Tab::Artists, "Artists"),
                     (Tab::Playlists, "Playlists"),
                     (Tab::Movies, "Movies"),
@@ -424,20 +452,26 @@ impl eframe::App for App {
                 self.playback.show(ui);
             });
         }
-        if self.playback.has_current() && self.playback.queue_open {
-            egui::Panel::right("queue")
-                .default_size(300.0)
+        let panel = self.playback.panel;
+        if self.playback.has_current() && panel != Panel::Closed {
+            egui::Panel::right("side_panel")
+                .default_size(320.0)
                 .resizable(false)
                 .show_separator_line(false)
                 .frame(egui::Frame::new().fill(sidebar_fill))
-                .show(ui, |ui| {
-                    queue::show(ui, &mut self.queue_view, &mut self.playback);
+                .show(ui, |ui| match panel {
+                    Panel::Queue => queue::show(ui, &mut self.queue_view, &mut self.playback),
+                    Panel::Lyrics => self
+                        .side
+                        .lyrics(ui, self.playback.current_item().as_deref()),
+                    Panel::Info => self.side.info(ui, self.playback.current_item().as_deref()),
+                    Panel::Closed => {}
                 });
         }
         let mut queue_requests: Vec<MenuRequest> = Vec::new();
         let mut action = None;
         let mut search_outcome = None;
-        let mut artist_album = None;
+        let mut opened_album = None;
         let mut play = None;
         egui::CentralPanel::default().show(ui, |ui| match self.tab {
             Tab::Albums => {
@@ -459,8 +493,11 @@ impl eframe::App for App {
                     self.playlists.summaries(),
                 ));
             }
+            Tab::Recent => {
+                opened_album = self.recent.show(ui, &mut self.albums, &self.library);
+            }
             Tab::Artists => {
-                artist_album = self.artists.show(ui, &mut self.albums, &self.library);
+                opened_album = self.artists.show(ui, &mut self.albums, &self.library);
             }
             Tab::Playlists => {
                 if let Some(request) =
@@ -485,7 +522,7 @@ impl eframe::App for App {
                 self.tab = Tab::Albums;
             }
         }
-        if let Some(i) = artist_album {
+        if let Some(i) = opened_album {
             self.albums.open(&self.library, i);
             self.tab = Tab::Albums;
         }

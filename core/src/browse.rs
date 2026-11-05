@@ -4,8 +4,28 @@ use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 
 use rusqlite::params;
+use rusqlite::types::Value;
 
 use crate::{COLUMNS, Library, MediaItem, MediaKind, Result, row_to_item};
+
+/// How the album grid is ordered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AlbumSort {
+    /// By album name, untagged albums last.
+    #[default]
+    Name,
+    /// Oldest first, untagged years last.
+    Year,
+    /// Most recently added first.
+    Added,
+}
+
+/// Which albums the grid keeps. An album passes a genre if any of its tracks has that genre.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AlbumFilter {
+    pub genre: Option<String>,
+    pub year: Option<i64>,
+}
 
 /// One album: all audio items sharing an album tag. Tracks with different track
 /// or album artists are merged into one album, so the same album name appears once.
@@ -25,13 +45,39 @@ pub struct AlbumSummary {
 impl Library {
     /// All albums, sorted by name. Untagged albums sort last.
     pub fn albums(&self) -> Result<Vec<AlbumSummary>> {
-        let mut stmt = self.conn.prepare(
+        self.albums_by(AlbumSort::Name, &AlbumFilter::default())
+    }
+
+    /// Albums in `sort` order, keeping only those that pass `filter`.
+    pub fn albums_by(&self, sort: AlbumSort, filter: &AlbumFilter) -> Result<Vec<AlbumSummary>> {
+        let mut values: Vec<Value> = Vec::new();
+        let mut where_sql = String::from("kind = 'audio'");
+        if let Some(genre) = &filter.genre {
+            values.push(Value::Text(genre.clone()));
+            where_sql.push_str(&format!(
+                " AND COALESCE(album, '') IN \
+                  (SELECT COALESCE(album, '') FROM media WHERE kind = 'audio' AND genre = ?{})",
+                values.len()
+            ));
+        }
+        let mut having_sql = String::new();
+        if let Some(year) = filter.year {
+            values.push(Value::Integer(year));
+            having_sql = format!(" HAVING MAX(year) = ?{}", values.len());
+        }
+        let order_sql = match sort {
+            AlbumSort::Name => "COALESCE(album, '') = '', COALESCE(album, '') COLLATE NOCASE",
+            AlbumSort::Year => "MAX(year) IS NULL, MAX(year), COALESCE(album, '') COLLATE NOCASE",
+            AlbumSort::Added => "MIN(added) DESC, COALESCE(album, '') COLLATE NOCASE",
+        };
+        let sql = format!(
             "SELECT COALESCE(album, ''), MAX(year), COUNT(*) \
-             FROM media WHERE kind = 'audio' \
-             GROUP BY COALESCE(album, '') \
-             ORDER BY COALESCE(album, '') = '', COALESCE(album, '') COLLATE NOCASE",
-        )?;
-        let rows = stmt.query_map([], |r| {
+             FROM media WHERE {where_sql} \
+             GROUP BY COALESCE(album, '') {having_sql} \
+             ORDER BY {order_sql}"
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(values.iter()), |r| {
             let album: String = r.get(0)?;
             Ok((album, r.get::<_, Option<i64>>(1)?, r.get::<_, i64>(2)?))
         })?;
@@ -75,6 +121,29 @@ impl Library {
                 }
             })
             .collect())
+    }
+
+    /// Every genre tagged on an audio file, sorted.
+    pub fn genres(&self) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT genre FROM media \
+             WHERE kind = 'audio' AND genre IS NOT NULL AND genre <> '' \
+             ORDER BY genre COLLATE NOCASE",
+        )?;
+        Ok(stmt
+            .query_map([], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// Every year tagged on an audio file, newest first.
+    pub fn years(&self) -> Result<Vec<i64>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT year FROM media WHERE kind = 'audio' AND year IS NOT NULL \
+             ORDER BY year DESC",
+        )?;
+        Ok(stmt
+            .query_map([], |r| r.get(0))?
+            .collect::<rusqlite::Result<_>>()?)
     }
 
     /// Tracks of one album in track-number order. `None` matches untagged albums.

@@ -141,8 +141,8 @@ pub(crate) fn scan(conn: &mut Connection, root: &Path) -> Result<ScanStats> {
             "INSERT INTO media \
                (path, kind, size, mtime, duration_ms, title, artist, album, album_artist, \
                 genre, composer, track, year, codec, bit_depth, sample_rate, channels, \
-                bitrate_kbps) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18) \
+                bitrate_kbps, added) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, strftime('%s', 'now')) \
              ON CONFLICT(path) DO UPDATE SET \
                kind = excluded.kind, size = excluded.size, mtime = excluded.mtime, \
                duration_ms = excluded.duration_ms, title = excluded.title, \

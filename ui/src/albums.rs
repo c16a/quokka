@@ -1,7 +1,9 @@
 use std::collections::{HashMap, HashSet};
 
 use eframe::egui;
-use player_core::{AlbumSummary, FavoriteKind, Library, MediaItem, PlaylistSummary};
+use player_core::{
+    AlbumFilter, AlbumSort, AlbumSummary, FavoriteKind, Library, MediaItem, PlaylistSummary,
+};
 
 use crate::format;
 use crate::playback::MenuRequest;
@@ -14,6 +16,15 @@ const TRACK_PADDING: f32 = 6.0;
 
 /// Colour of a favourite star.
 const FAVORITE_COLOR: egui::Color32 = egui::Color32::from_rgb(255, 196, 64);
+
+/// The name of a sort order, as shown in the grid's menu.
+fn sort_label(sort: AlbumSort) -> &'static str {
+    match sort {
+        AlbumSort::Name => "Name",
+        AlbumSort::Year => "Year",
+        AlbumSort::Added => "Date added",
+    }
+}
 
 /// Square side of a cover in the album grid, and in the album detail view.
 pub(crate) const TILE_COVER: f32 = 160.0;
@@ -41,6 +52,12 @@ pub struct AlbumsView {
     /// Keys of favourite tracks (file paths) and albums (album names).
     favorite_tracks: HashSet<String>,
     favorite_albums: HashSet<String>,
+    /// How the grid is ordered, and which albums it keeps.
+    sort: AlbumSort,
+    filter: AlbumFilter,
+    /// Choices offered by the filter menus.
+    genres: Vec<String>,
+    years: Vec<i64>,
 }
 
 impl AlbumsView {
@@ -72,10 +89,14 @@ impl AlbumsView {
         self.covers.clear();
         self.favorite_tracks = library.favorites(FavoriteKind::Track).unwrap_or_default();
         self.favorite_albums = library.favorites(FavoriteKind::Album).unwrap_or_default();
-        self.albums = library.albums().unwrap_or_else(|e| {
-            eprintln!("player: could not load albums: {e}");
-            Vec::new()
-        });
+        self.genres = library.genres().unwrap_or_default();
+        self.years = library.years().unwrap_or_default();
+        self.albums = library
+            .albums_by(self.sort, &self.filter)
+            .unwrap_or_else(|e| {
+                eprintln!("player: could not load albums: {e}");
+                Vec::new()
+            });
         if self.selected.is_some_and(|i| i >= self.albums.len()) {
             self.selected = None;
         }
@@ -103,8 +124,15 @@ impl AlbumsView {
         queue: &mut Vec<MenuRequest>,
         playlists: &[PlaylistSummary],
     ) -> Option<PlayRequest> {
+        if self.selected.is_none() {
+            self.toolbar(ui, library);
+        }
         if self.albums.is_empty() {
-            ui.label("No albums yet. Choose your library folder in Settings.");
+            if self.filter_active() {
+                ui.label("No albums match these filters.");
+            } else {
+                ui.label("No albums yet. Choose your library folder in Settings.");
+            }
             return None;
         }
         let ctx = ui.ctx().clone();
@@ -130,6 +158,53 @@ impl AlbumsView {
             self.load_tracks(library);
         }
         play
+    }
+
+    /// Whether a genre or year filter is narrowing the grid.
+    fn filter_active(&self) -> bool {
+        self.filter.genre.is_some() || self.filter.year.is_some()
+    }
+
+    /// Sort and filter menus above the grid. Changing one reloads the grid.
+    fn toolbar(&mut self, ui: &mut egui::Ui, library: &Library) {
+        let (sort, genre, year) = (self.sort, self.filter.genre.clone(), self.filter.year);
+        let mut sort_to = sort;
+        let mut genre_to = genre.clone();
+        let mut year_to = year;
+        ui.horizontal(|ui| {
+            egui::ComboBox::from_id_salt("album_sort")
+                .selected_text(sort_label(sort_to))
+                .show_ui(ui, |ui| {
+                    for option in [AlbumSort::Name, AlbumSort::Year, AlbumSort::Added] {
+                        ui.selectable_value(&mut sort_to, option, sort_label(option));
+                    }
+                });
+            egui::ComboBox::from_id_salt("album_genre")
+                .selected_text(genre_to.clone().unwrap_or_else(|| "All genres".into()))
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut genre_to, None, "All genres");
+                    for name in &self.genres {
+                        ui.selectable_value(&mut genre_to, Some(name.clone()), name.as_str());
+                    }
+                });
+            egui::ComboBox::from_id_salt("album_year")
+                .selected_text(year_to.map_or("All years".to_owned(), |y| y.to_string()))
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut year_to, None, "All years");
+                    for &y in &self.years {
+                        ui.selectable_value(&mut year_to, Some(y), y.to_string());
+                    }
+                });
+        });
+        ui.add_space(8.0);
+        if sort_to != sort || genre_to != genre || year_to != year {
+            self.sort = sort_to;
+            self.filter = AlbumFilter {
+                genre: genre_to,
+                year: year_to,
+            };
+            self.reload(library);
+        }
     }
 
     /// The album grid. Returns the album the user clicked, if any.

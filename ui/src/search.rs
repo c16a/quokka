@@ -1,5 +1,5 @@
 use eframe::egui;
-use player_core::{Library, MediaItem, PlaylistSummary};
+use player_core::{AlbumSummary, Library, MediaItem, PlaylistSummary, SongQuery};
 
 use crate::albums::{self, AlbumsView, PlayRequest, TILE_GAP};
 use crate::format;
@@ -75,7 +75,7 @@ impl SearchView {
             self.searched = query.clone();
         }
         if query.is_empty() {
-            ui.weak("Search for an album or a song.");
+            ui.weak("Search for an album or a song. Filters: artist:, album:, genre:, year:, format:flac.");
             return outcome;
         }
         if self.album_hits.is_empty() && self.songs.is_empty() {
@@ -162,30 +162,54 @@ impl SearchView {
         outcome
     }
 
-    /// Rebuild the results for `query`.
+    /// Rebuild the results for `query`, which may contain filters such as `artist:`.
     fn refresh(&mut self, albums: &AlbumsView, library: &Library, query: &str) {
         self.album_hits.clear();
         self.songs.clear();
-        if query.is_empty() {
+        let parsed = SongQuery::parse(query);
+        if parsed.is_empty() {
             return;
         }
-        let needle = query.to_lowercase();
-        self.album_hits = albums
-            .albums()
-            .iter()
-            .enumerate()
-            .filter(|(_, album)| {
-                album
-                    .album
-                    .as_deref()
-                    .is_some_and(|name| name.to_lowercase().contains(&needle))
-            })
-            .map(|(i, _)| i)
-            .collect();
+        // Genre and format describe tracks, not albums, so they only filter songs.
+        if !parsed.has_track_filters() {
+            self.album_hits = albums
+                .albums()
+                .iter()
+                .enumerate()
+                .filter(|(_, album)| album_matches(album, &parsed))
+                .map(|(i, _)| i)
+                .collect();
+        }
         self.songs = library
-            .songs_matching(query, SONG_LIMIT)
+            .search_songs(&parsed, SONG_LIMIT)
             .unwrap_or_default();
     }
+}
+
+/// Whether an album passes every part of a search that is given.
+fn album_matches(album: &AlbumSummary, query: &SongQuery) -> bool {
+    let contains =
+        |haystack: &str, needle: &str| haystack.to_lowercase().contains(&needle.to_lowercase());
+    let name = album.album.as_deref().unwrap_or("");
+    if !query.text.is_empty() && !contains(name, &query.text) {
+        return false;
+    }
+    if let Some(album_name) = &query.album
+        && !contains(name, album_name)
+    {
+        return false;
+    }
+    if let Some(artist) = &query.artist
+        && !album.artists.iter().any(|a| contains(a, artist))
+    {
+        return false;
+    }
+    if let Some(year) = query.year
+        && album.year != Some(year)
+    {
+        return false;
+    }
+    true
 }
 
 /// Play `song` from its album, so the rest of the album follows it.
