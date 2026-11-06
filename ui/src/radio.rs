@@ -601,19 +601,27 @@ fn result_card(ui: &mut egui::Ui, station: &Station, tuned: bool) -> Option<Radi
                     tile_rect = rect;
                     paint_tile(ui.painter(), rect, station);
                     ui.add_space(10.0);
-                    ui.vertical(|ui| {
-                        // Roughly two lines of text: centre them against the tile.
-                        ui.add_space(((CARD_HEIGHT - 24.0) - 38.0) / 2.0);
-                        ui.add(
-                            egui::Label::new(egui::RichText::new(&station.name).strong())
-                                .truncate(),
-                        );
-                        let mut details = card_details(station);
-                        if tuned {
-                            details.push_str("  ·  Tuned in");
-                        }
-                        ui.add(egui::Label::new(egui::RichText::new(details).weak()).truncate());
-                    });
+                    // The text is centred vertically against the tile, within the card's height.
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(ui.available_width(), CARD_HEIGHT - 24.0),
+                        egui::Layout::top_down(egui::Align::Min)
+                            .with_main_align(egui::Align::Center),
+                        |ui| {
+                            // Nudged down: the line boxes sit high against the tile.
+                            ui.add_space(4.0);
+                            ui.add(
+                                egui::Label::new(egui::RichText::new(&station.name).strong())
+                                    .truncate(),
+                            );
+                            let mut details = card_details(station);
+                            if tuned {
+                                details.push_str("  ·  Tuned in");
+                            }
+                            ui.add(
+                                egui::Label::new(egui::RichText::new(details).weak()).truncate(),
+                            );
+                        },
+                    );
                 },
             );
         })

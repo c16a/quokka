@@ -532,17 +532,24 @@ pub(crate) fn playlist_card(ui: &mut egui::Ui, playlist: &PlaylistSummary) -> eg
                         egui::Color32::WHITE,
                     );
                     ui.add_space(10.0);
-                    ui.vertical(|ui| {
-                        // Two lines of text: centre them against the tile.
-                        ui.add_space(((CARD_HEIGHT - 24.0) - 38.0) / 2.0);
-                        ui.add(
-                            egui::Label::new(egui::RichText::new(&playlist.name).strong())
-                                .truncate(),
-                        );
-                        ui.add(egui::Label::new(
-                            egui::RichText::new(format!("{} tracks", playlist.track_count)).weak(),
-                        ));
-                    });
+                    // The text is centred vertically against the tile, within the card's height.
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(ui.available_width(), CARD_HEIGHT - 24.0),
+                        egui::Layout::top_down(egui::Align::Min)
+                            .with_main_align(egui::Align::Center),
+                        |ui| {
+                            // Nudged down: the line boxes sit high against the tile.
+                            ui.add_space(4.0);
+                            ui.add(
+                                egui::Label::new(egui::RichText::new(&playlist.name).strong())
+                                    .truncate(),
+                            );
+                            ui.add(egui::Label::new(
+                                egui::RichText::new(format!("{} tracks", playlist.track_count))
+                                    .weak(),
+                            ));
+                        },
+                    );
                 },
             );
         })
