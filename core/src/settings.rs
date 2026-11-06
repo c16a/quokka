@@ -28,7 +28,7 @@ pub enum ReplayGainMode {
 }
 
 /// User settings, stored as JSON.
-#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Settings {
     /// Folders the library scans, in the order they were added.
     #[serde(default)]
@@ -44,6 +44,30 @@ pub struct Settings {
     /// Whether to look up lyrics on lrclib.net for tracks with no `.lrc` file. Off until the user turns it on.
     #[serde(default)]
     pub lyrics_online: bool,
+    /// Seconds over which each track fades into the next. Zero turns crossfade off.
+    #[serde(default)]
+    pub crossfade_secs: f32,
+    /// Playback speed, where 1.0 is normal. Speeds other than 1.0 also change the pitch.
+    #[serde(default = "default_speed")]
+    pub playback_speed: f32,
+}
+
+fn default_speed() -> f32 {
+    1.0
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            library_roots: Vec::new(),
+            legacy_root: None,
+            theme: Theme::default(),
+            replay_gain: ReplayGainMode::default(),
+            lyrics_online: false,
+            crossfade_secs: 0.0,
+            playback_speed: 1.0,
+        }
+    }
 }
 
 impl Settings {

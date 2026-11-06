@@ -456,6 +456,8 @@ impl eframe::App for App {
         self.poll_station_sync();
         self.handle_changes(ui.ctx());
         self.playback.advance_if_finished();
+        self.playback
+            .set_tempo(self.settings.playback_speed, self.settings.crossfade_secs);
         let ctx = ui.ctx().clone();
         playback::handle_keys(&ctx, &mut self.playback);
         self.record_plays();
@@ -537,6 +539,13 @@ impl eframe::App for App {
             egui::Panel::bottom("now_playing").show(ui, |ui| {
                 self.playback.show(ui);
             });
+        }
+        // A speed chosen in the bar is kept in the settings, like the others.
+        if let Some(speed) = self.playback.take_speed_change() {
+            self.settings.playback_speed = speed;
+            if let Err(e) = self.settings.save(&self.paths.settings) {
+                self.status = format!("Could not save settings: {e}");
+            }
         }
         let panel = self.playback.panel;
         let mut lyrics_outcome = side::LyricsOutcome::default();
@@ -738,6 +747,12 @@ impl eframe::App for App {
                 self.enqueue(&ctx, roots);
             }
             Some(settings_view::Action::SetLyricsOnline(on)) => self.set_lyrics_online(on),
+            Some(settings_view::Action::SetCrossfade(secs)) => {
+                self.settings.crossfade_secs = secs;
+                if let Err(e) = self.settings.save(&self.paths.settings) {
+                    self.status = format!("Could not save settings: {e}");
+                }
+            }
             Some(settings_view::Action::SetReplayGain(mode)) => {
                 self.settings.replay_gain = mode;
                 self.playback.set_replay_gain(mode);

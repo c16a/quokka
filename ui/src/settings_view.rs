@@ -12,6 +12,7 @@ pub enum Action {
     RescanAll,
     SetTheme(Theme),
     SetReplayGain(ReplayGainMode),
+    SetCrossfade(f32),
     SetLyricsOnline(bool),
 }
 
@@ -100,6 +101,23 @@ pub fn show(ui: &mut egui::Ui, settings: &Settings, busy: bool, status: &str) ->
         });
     if mode != settings.replay_gain {
         action = Some(Action::SetReplayGain(mode));
+    }
+
+    ui.add_space(24.0);
+    ui.label(
+        "Crossfade: each track fades into the next over this many seconds. Zero turns it off.",
+    );
+    ui.add_space(4.0);
+    let mut secs = settings.crossfade_secs;
+    if ui
+        .add(
+            egui::Slider::new(&mut secs, 0.0..=12.0)
+                .step_by(0.5)
+                .suffix(" s"),
+        )
+        .changed()
+    {
+        action = Some(Action::SetCrossfade(secs));
     }
 
     ui.add_space(24.0);

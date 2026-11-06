@@ -40,6 +40,8 @@ fn settings_round_trip_and_default_when_missing() {
         theme: Theme::Dark,
         replay_gain: ReplayGainMode::Album,
         lyrics_online: true,
+        crossfade_secs: 4.0,
+        playback_speed: 1.25,
     };
     settings.save(&path).unwrap();
     assert_eq!(Settings::load(&path).unwrap(), settings);

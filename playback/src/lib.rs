@@ -61,6 +61,16 @@ pub trait Player {
         Ok(())
     }
 
+    /// Play at `speed` times normal speed. Speeds other than 1 also change the pitch.
+    fn set_speed(&mut self, _speed: f32) -> Result<()> {
+        Ok(())
+    }
+
+    /// Fade each track into the next over `secs` seconds. Zero turns crossfade off.
+    fn set_crossfade(&mut self, _secs: f32) -> Result<()> {
+        Ok(())
+    }
+
     /// Why the current track stopped before its end, if it did. Cleared when a track loads.
     fn last_error(&self) -> Option<String> {
         None

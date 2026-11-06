@@ -53,6 +53,11 @@ pub struct Playback {
     /// Output level from 0 to 1, applied on top of the system volume.
     volume: f32,
     muted: bool,
+    /// Playback speed and crossfade length, as last applied from the settings.
+    speed: f32,
+    crossfade: f32,
+    /// A speed chosen in the bar, for the app to save to the settings.
+    speed_change: Option<f32>,
     /// Slider position in seconds. Follows the player unless the user is dragging.
     seek_secs: f64,
     dragging: bool,
@@ -112,6 +117,9 @@ impl Playback {
             repeat: Repeat::Off,
             volume: 1.0,
             muted: false,
+            speed: 1.0,
+            crossfade: 0.0,
+            speed_change: None,
             seek_secs: 0.0,
             dragging: false,
             error,
@@ -723,6 +731,25 @@ impl Playback {
         self.queue.extend(tail);
     }
 
+    /// Apply the playback speed and crossfade length from the settings. They reach the player only
+    /// when they differ from what was applied last.
+    pub fn set_tempo(&mut self, speed: f32, crossfade_secs: f32) {
+        if speed == self.speed && crossfade_secs == self.crossfade {
+            return;
+        }
+        self.speed = speed;
+        self.crossfade = crossfade_secs;
+        self.with_player(|p| {
+            p.set_speed(speed)?;
+            p.set_crossfade(crossfade_secs)
+        });
+    }
+
+    /// A speed the user chose in the bar since the last call, if any.
+    pub fn take_speed_change(&mut self) -> Option<f32> {
+        self.speed_change.take()
+    }
+
     /// Apply the output level: zero when muted, otherwise the chosen volume.
     fn apply_volume(&mut self) {
         let level = if self.muted {
@@ -1027,6 +1054,14 @@ impl Playback {
                         {
                             command = Some(Command::TogglePanel(Panel::Lyrics));
                         }
+                        // Playback speed: each click steps to the next preset.
+                        let speed_label = speed_text(self.speed);
+                        if speed_button(ui, &speed_label)
+                            .on_hover_text("Playback speed. Click to change. Speeds other than 1× also change the pitch.")
+                            .clicked()
+                        {
+                            self.speed_change = Some(next_speed(self.speed));
+                        }
                         if panel_button(ui, Panel::Info, self.panel == Panel::Info)
                             .on_hover_text("Track info")
                             .clicked()
@@ -1213,6 +1248,41 @@ fn mode_button(ui: &mut egui::Ui, icon: ModeIcon, active: bool) -> egui::Respons
     response
 }
 
+/// The playback speeds the bar's speed button steps through.
+const SPEEDS: [f32; 5] = [0.75, 1.0, 1.25, 1.5, 2.0];
+
+/// The speed after `speed` in `SPEEDS`, wrapping back to the first.
+fn next_speed(speed: f32) -> f32 {
+    let current = SPEEDS
+        .iter()
+        .position(|s| (s - speed).abs() < 0.01)
+        .unwrap_or(1);
+    SPEEDS[(current + 1) % SPEEDS.len()]
+}
+
+/// A speed as the bar shows it: `1×`, `1.25×`.
+fn speed_text(speed: f32) -> String {
+    let text = format!("{speed:.2}");
+    format!("{}×", text.trim_end_matches('0').trim_end_matches('.'))
+}
+
+/// A small pill button showing the playback speed.
+fn speed_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(40.0, 28.0), egui::Sense::click());
+    let visuals = ui.style().interact(&response);
+    let (fill, colour) = (visuals.weak_bg_fill, visuals.fg_stroke.color);
+    let painter = ui.painter();
+    painter.rect_filled(rect, 14.0, fill);
+    painter.text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        label,
+        egui::FontId::proportional(12.0),
+        colour,
+    );
+    response
+}
+
 /// Round button with an icon for a side panel. It is tinted when that panel is open.
 fn panel_button(ui: &mut egui::Ui, panel: Panel, active: bool) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(28.0, 28.0), egui::Sense::click());
@@ -1310,6 +1380,9 @@ mod tests {
             repeat: Repeat::Off,
             volume: 1.0,
             muted: false,
+            speed: 1.0,
+            crossfade: 0.0,
+            speed_change: None,
             seek_secs: 0.0,
             dragging: false,
             error: None,

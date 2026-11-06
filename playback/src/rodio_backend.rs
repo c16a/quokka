@@ -27,6 +27,10 @@ pub struct RodioPlayer {
     shared: Option<Arc<Shared>>,
     /// How many chained tracks have been reported by `take_started`.
     seen_started: u64,
+    /// Playback speed, where 1 is normal.
+    speed: f32,
+    /// Crossfade length in seconds. Zero is off.
+    fade_secs: f32,
 }
 
 struct Current {
@@ -143,6 +147,8 @@ impl RodioPlayer {
             error: ErrorSlot::default(),
             shared: None,
             seen_started: 0,
+            speed: 1.0,
+            fade_secs: 0.0,
         })
     }
 
@@ -161,8 +167,16 @@ impl RodioPlayer {
             self.rate = sink.config().sample_rate().get();
             // The old output goes first, so nothing plays through a dropped device.
             self.output = Output::connect_new(sink.mixer());
+            self.output.set_speed(self.speed);
             self._device = sink;
         }
+    }
+
+    /// The state for a new track at `rate`, with the crossfade length in force.
+    fn new_shared(&self, rate: u32) -> Arc<Shared> {
+        let shared = Shared::new(rate);
+        shared.set_fade((self.fade_secs * rate as f32).round() as u64);
+        Arc::new(shared)
     }
 
     /// Play a live stream. It has no path or length, so the duration is unknown.
@@ -172,7 +186,7 @@ impl RodioPlayer {
         }
         let rate = source.sample_rate().get();
         self.match_rate(rate);
-        let shared = Arc::new(Shared::new(rate));
+        let shared = self.new_shared(rate);
         self.output.clear();
         self.output.pause();
         self.output.append(Chain::new(source, Arc::clone(&shared)));
@@ -195,7 +209,7 @@ impl RodioPlayer {
         let duration = source.total_duration();
         let rate = source.sample_rate().get();
         self.match_rate(rate);
-        let shared = Arc::new(Shared::new(rate));
+        let shared = self.new_shared(rate);
         self.output.clear();
         self.output.pause();
         self.output.append(Chain::new(source, Arc::clone(&shared)));
@@ -316,6 +330,20 @@ impl Player for RodioPlayer {
 
     fn set_volume(&mut self, volume: f32) -> Result<()> {
         self.output.set_volume(volume);
+        Ok(())
+    }
+
+    fn set_speed(&mut self, speed: f32) -> Result<()> {
+        self.speed = speed;
+        self.output.set_speed(speed);
+        Ok(())
+    }
+
+    fn set_crossfade(&mut self, secs: f32) -> Result<()> {
+        self.fade_secs = secs.max(0.0);
+        if let Some(shared) = &self.shared {
+            shared.set_fade((self.fade_secs * self.rate as f32).round() as u64);
+        }
         Ok(())
     }
 

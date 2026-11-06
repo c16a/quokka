@@ -27,6 +27,8 @@ pub(crate) struct Shared {
     started_count: AtomicU64,
     /// The track the audio thread moved on to last, and its duration.
     started: Mutex<Option<(PathBuf, Option<Duration>)>>,
+    /// Length of a crossfade, in frames. Zero when crossfade is off.
+    fade_frames: AtomicU64,
 }
 
 impl Shared {
@@ -37,7 +39,17 @@ impl Shared {
             next: Mutex::new(None),
             started_count: AtomicU64::new(0),
             started: Mutex::new(None),
+            fade_frames: AtomicU64::new(0),
         }
+    }
+
+    /// Set how long a crossfade lasts, in frames. Zero turns crossfade off.
+    pub(crate) fn set_fade(&self, frames: u64) {
+        self.fade_frames.store(frames, Ordering::Relaxed);
+    }
+
+    pub(crate) fn fade(&self) -> u64 {
+        self.fade_frames.load(Ordering::Relaxed)
     }
 
     /// Position within the current track.
@@ -62,12 +74,19 @@ impl Shared {
     }
 }
 
-/// Plays the first track, then each armed track in turn.
+/// Plays the first track, then each armed track in turn. When crossfade is on, the armed track
+/// starts while the current one is still playing: the current track fades out under it.
 pub(crate) struct Chain {
+    /// The track now playing, which is the one the position is measured in.
     inner: SymphoniaSource,
     shared: Arc<Shared>,
     /// Samples of the current frame already played.
     in_frame: u16,
+    /// The track fading out during a crossfade, if one is happening.
+    outgoing: Option<SymphoniaSource>,
+    /// Frames mixed so far in the crossfade, and the length of the crossfade in frames.
+    fade_done: u64,
+    fade_total: u64,
 }
 
 impl Chain {
@@ -76,6 +95,19 @@ impl Chain {
             inner: first,
             shared,
             in_frame: 0,
+            outgoing: None,
+            fade_done: 0,
+            fade_total: 0,
+        }
+    }
+
+    /// Count one sample of the track now playing, and a frame once all its channels have played.
+    fn count_sample(&mut self) {
+        self.in_frame += 1;
+        if self.in_frame >= self.inner.channels().get() {
+            self.in_frame = 0;
+            self.shared.frames.fetch_add(1, Ordering::Relaxed);
+            self.fade_done += 1;
         }
     }
 
@@ -91,11 +123,73 @@ impl Chain {
         self.inner = source;
         self.in_frame = 0;
         self.shared.frames.store(0, Ordering::Relaxed);
+        self.start_reported(path, duration);
+        Some(())
+    }
+
+    /// Record that the output has moved on to `path`.
+    fn start_reported(&mut self, path: PathBuf, duration: Option<Duration>) {
         if let Ok(mut started) = self.shared.started.lock() {
             *started = Some((path, duration));
         }
         self.shared.started_count.fetch_add(1, Ordering::Release);
-        Some(())
+    }
+
+    /// Begin a crossfade when the current track is within one fade of its end and another track is
+    /// armed with the same format. The armed track becomes the one playing; the old one fades out.
+    fn maybe_start_fade(&mut self) {
+        let fade = self.shared.fade();
+        if fade == 0 {
+            return;
+        }
+        let Some(total) = self.inner.total_duration() else {
+            return;
+        };
+        let total_frames = (total.as_secs_f64() * f64::from(self.shared.rate)).round() as u64;
+        // Never fade for longer than half the track, so a short track can't start fading at once.
+        let fade = fade.min(total_frames / 2);
+        let played = self.shared.frames.load(Ordering::Relaxed);
+        if fade == 0 || total_frames.saturating_sub(played) > fade {
+            return;
+        }
+        let upcoming = {
+            let Ok(mut slot) = self.shared.next.lock() else {
+                return;
+            };
+            let compatible = matches!(
+                slot.as_ref(),
+                Some((_, _, source))
+                    if source.sample_rate() == self.inner.sample_rate()
+                        && source.channels() == self.inner.channels()
+            );
+            if compatible { slot.take() } else { None }
+        };
+        let Some((path, duration, source)) = upcoming else {
+            return;
+        };
+        self.outgoing = Some(std::mem::replace(&mut self.inner, source));
+        self.fade_done = 0;
+        self.fade_total = fade;
+        self.in_frame = 0;
+        self.shared.frames.store(0, Ordering::Relaxed);
+        self.start_reported(path, duration);
+    }
+
+    /// The next sample of a crossfade: the outgoing track fading out, the incoming one fading in.
+    /// `None` when the incoming track has no more samples.
+    fn mix_next(&mut self) -> Option<f32> {
+        let incoming = self.inner.next()?;
+        let outgoing = self.outgoing.as_mut().and_then(|track| track.next());
+        let t = (self.fade_done as f32 / self.fade_total.max(1) as f32).min(1.0);
+        let mixed = match outgoing {
+            Some(out) => out * (1.0 - t) + incoming * t,
+            None => incoming,
+        };
+        self.count_sample();
+        if outgoing.is_none() || self.fade_done >= self.fade_total {
+            self.outgoing = None;
+        }
+        Some(mixed)
     }
 }
 
@@ -103,12 +197,18 @@ impl Iterator for Chain {
     type Item = f32;
 
     fn next(&mut self) -> Option<f32> {
-        if let Some(sample) = self.inner.next() {
-            self.in_frame += 1;
-            if self.in_frame >= self.inner.channels().get() {
-                self.in_frame = 0;
-                self.shared.frames.fetch_add(1, Ordering::Relaxed);
+        if self.outgoing.is_none() {
+            self.maybe_start_fade();
+        }
+        if self.outgoing.is_some() {
+            if let Some(sample) = self.mix_next() {
+                return Some(sample);
             }
+            // The incoming track ended before the fade did, so the fade is over.
+            self.outgoing = None;
+        }
+        if let Some(sample) = self.inner.next() {
+            self.count_sample();
             return Some(sample);
         }
         self.follow_next()?;
@@ -136,6 +236,7 @@ impl Source for Chain {
     fn try_seek(&mut self, pos: Duration) -> Result<(), SeekError> {
         self.inner.try_seek(pos)?;
         self.in_frame = 0;
+        self.outgoing = None;
         let frames = (pos.as_secs_f64() * f64::from(self.shared.rate)).round() as u64;
         self.shared.frames.store(frames, Ordering::Relaxed);
         Ok(())
@@ -217,5 +318,35 @@ mod tests {
         assert_eq!(shared.started_count(), 0);
         let _ = std::fs::remove_file(a);
         let _ = std::fs::remove_file(b);
+    }
+
+    #[test]
+    fn crossfade_mixes_the_end_of_one_track_into_the_next() {
+        let (a, b) = (temp("fade-a"), temp("fade-b"));
+        write_wav(&a, 8000, 1, &[16000; 100]);
+        write_wav(&b, 8000, 1, &[-16000; 50]);
+
+        let shared = Arc::new(Shared::new(8000));
+        shared.set_fade(20);
+        let mut chain = Chain::new(open(&a), Arc::clone(&shared));
+        shared.arm(Some((b.clone(), None, open(&b))));
+        let samples: Vec<f32> = chain.by_ref().collect();
+
+        // The first 80 samples are the first track alone, then 20 mixed, then 30 of the second.
+        assert_eq!(samples.len(), 130);
+        assert!(
+            samples[79] > 0.0,
+            "the first track is still audible before the fade"
+        );
+        assert!(
+            samples[120] < 0.0,
+            "the second track is playing once the fade is over"
+        );
+        assert!(
+            samples[99] < 0.0 && samples[80] > 0.0,
+            "the sign changes inside the fade"
+        );
+        assert_eq!(shared.started_count(), 1);
+        assert_eq!(shared.position(), Duration::from_secs_f64(50.0 / 8000.0));
     }
 }
