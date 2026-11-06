@@ -2,6 +2,7 @@
 
 mod albums;
 mod artists;
+mod covers;
 mod fonts;
 mod format;
 mod icons;

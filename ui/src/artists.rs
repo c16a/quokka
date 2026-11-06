@@ -4,18 +4,18 @@
 //! An artist's tile shows a photo from Wikidata when there is one, in a circle, and otherwise the
 //! cover of their first album. Photos are fetched on a background thread.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 
 use eframe::egui;
-use player_core::{AlbumSummary, ArtistPhoto, Library};
+use player_core::{AlbumSummary, Library};
 
 use crate::albums::{
-    AlbumsView, Cover, TILE_COVER, TILE_GAP, TILE_TEXT, album_tile, back_icon_button,
-    cover_from_bytes, draw_cover,
+    AlbumsView, TILE_COVER, TILE_GAP, TILE_TEXT, album_tile, back_icon_button, draw_cover,
 };
+use crate::covers::{self, COVER_MAX_SIDE, Cover, Decoded, evict, upload};
 
 #[derive(Default)]
 pub struct ArtistsView {
@@ -88,8 +88,9 @@ impl ArtistsView {
                     ui.spacing_mut().item_spacing = egui::vec2(TILE_GAP, TILE_GAP);
                     for (n, (name, album_ids)) in self.artists.iter().enumerate() {
                         let cover = match self.photos.get(&ctx, name) {
-                            Some(photo) => Some(photo),
-                            None => albums.cover(&ctx, library, album_ids[0]),
+                            PhotoState::Photo(photo) => Some(photo),
+                            PhotoState::Loading => None,
+                            PhotoState::Missing => albums.cover(&ctx, library, album_ids[0]),
                         };
                         if artist_tile(ui, cover.as_ref(), name, album_ids.len()).clicked() {
                             chosen = Some(n);
@@ -99,6 +100,7 @@ impl ArtistsView {
                 let credits: Vec<&str> = self
                     .artists
                     .iter()
+                    .filter(|(name, _)| self.photos.shows(name))
                     .filter_map(|(name, _)| self.photos.credits.get(name).map(String::as_str))
                     .collect();
                 if !credits.is_empty() {
@@ -149,55 +151,79 @@ impl ArtistsView {
     }
 }
 
-/// Artist photos, fetched from Wikidata on one background thread. Each photo is decoded once and
-/// kept. An artist with no photo is kept as `None`, so it is not asked for again.
+/// How an artist's photo stands: being fetched, there, or not on Wikidata.
+#[derive(Clone)]
+enum PhotoState {
+    Loading,
+    Photo(Cover),
+    Missing,
+}
+
+/// A photo, decoded, with its credit. `None` means there is no photo.
+type PhotoResult = Option<(Decoded, String)>;
+
+/// Most artist photos kept as textures. Each is two square textures.
+const PHOTO_CAP: usize = 200;
+
+/// Artist photos, fetched from Wikidata on one background thread. The thread also decodes each
+/// photo, so the UI thread only uploads it. The least recently used photos are dropped beyond
+/// `PHOTO_CAP`; a dropped photo is read again from the disk cache when it is next shown.
 #[derive(Default)]
 struct Photos {
     /// Folder the photos are cached in.
     dir: PathBuf,
-    loaded: HashMap<String, Option<Cover>>,
-    /// Artists that have been asked for and not yet answered.
-    pending: HashSet<String>,
+    /// Each artist's photo state, with the tick it was last used on.
+    loaded: HashMap<String, (u64, PhotoState)>,
+    tick: u64,
     /// Credit of each artist's photo, for the line under the grid.
     credits: HashMap<String, String>,
     requests: Option<Sender<String>>,
-    results: Option<Receiver<(String, Option<ArtistPhoto>)>>,
+    results: Option<Receiver<(String, PhotoResult)>>,
 }
 
 impl Photos {
-    /// Take in the photos the worker has finished since the last frame.
+    /// Take in the photos the worker has finished since the last frame, and drop the least
+    /// recently used beyond the cap.
     fn poll(&mut self, ctx: &egui::Context) {
         let Some(results) = &self.results else {
             return;
         };
         let finished: Vec<_> = results.try_iter().collect();
-        for (name, photo) in finished {
-            self.pending.remove(&name);
-            let cover = photo.as_ref().and_then(|photo| {
-                cover_from_bytes(ctx, &format!("artist-photo-{name}"), &photo.bytes)
-            });
-            if cover.is_some()
-                && let Some(photo) = &photo
-            {
-                self.credits.insert(name.clone(), photo.credit.clone());
-            }
-            self.loaded.insert(name, cover);
+        for (name, result) in finished {
+            let state = match result {
+                Some((decoded, credit)) => {
+                    self.credits.insert(name.clone(), credit);
+                    PhotoState::Photo(upload(ctx, &format!("artist-photo-{name}"), decoded))
+                }
+                None => PhotoState::Missing,
+            };
+            self.loaded.insert(name, (self.tick, state));
         }
+        evict(&mut self.loaded, PHOTO_CAP, |state| {
+            !matches!(state, PhotoState::Loading)
+        });
     }
 
-    /// The artist's photo, if it has loaded. The first time an artist is seen, its photo is asked
-    /// for, and it appears on a later frame.
-    fn get(&mut self, ctx: &egui::Context, name: &str) -> Option<Cover> {
-        if let Some(entry) = self.loaded.get(name) {
-            return entry.clone();
+    /// The artist's photo state. The first time an artist is seen, its photo is asked for.
+    fn get(&mut self, ctx: &egui::Context, name: &str) -> PhotoState {
+        self.tick += 1;
+        let tick = self.tick;
+        if let Some((used, state)) = self.loaded.get_mut(name) {
+            *used = tick;
+            return state.clone();
         }
-        if self.pending.insert(name.to_owned()) {
-            self.ensure_worker(ctx);
-            if let Some(requests) = &self.requests {
-                let _ = requests.send(name.to_owned());
-            }
+        self.loaded
+            .insert(name.to_owned(), (tick, PhotoState::Loading));
+        self.ensure_worker(ctx);
+        if let Some(requests) = &self.requests {
+            let _ = requests.send(name.to_owned());
         }
-        None
+        PhotoState::Loading
+    }
+
+    /// Whether the artist's photo is loaded, so its credit belongs under the grid.
+    fn shows(&self, name: &str) -> bool {
+        matches!(self.loaded.get(name), Some((_, PhotoState::Photo(_))))
     }
 
     /// Start the worker thread the first time a photo is wanted.
@@ -212,8 +238,10 @@ impl Photos {
         thread::spawn(move || {
             // Ends when the view is dropped, which closes the request channel.
             for name in request_rx {
-                let bytes = player_core::fetch_artist_photo(&name, &dir);
-                if result_tx.send((name, bytes)).is_err() {
+                let result = player_core::fetch_artist_photo(&name, &dir).and_then(|photo| {
+                    covers::decode(&photo.bytes, COVER_MAX_SIDE).map(|d| (d, photo.credit))
+                });
+                if result_tx.send((name, result)).is_err() {
                     break;
                 }
                 ctx.request_repaint();

@@ -9,6 +9,7 @@ use player_core::{Library, MediaItem, PlaylistSummary};
 use crate::albums::{
     PlayRequest, back_icon_button, play_icon_button, shuffle_icon_button, shuffled,
 };
+use crate::covers::{self, Cover, THUMB_MAX_SIDE, Worker, evict, upload};
 use crate::format;
 use crate::icons;
 use crate::search::search_fill;
@@ -28,7 +29,7 @@ pub struct PlaylistsView {
     /// Index of the track whose grip is being dragged.
     dragging: Option<usize>,
     /// Small covers of the open playlist's tracks, by track id.
-    thumbs: HashMap<i64, Option<egui::TextureHandle>>,
+    thumbs: Thumbs,
     /// The row the pointer was over in the last frame; its remove button is shown.
     hovered_row: Option<usize>,
 }
@@ -225,6 +226,7 @@ impl PlaylistsView {
         let mut play = None;
         let mut back = false;
         let mut remove = None;
+        self.thumbs.poll(ui.ctx());
         let name = self
             .playlists
             .iter()
@@ -309,124 +311,149 @@ impl PlaylistsView {
         });
         ui.add_space(12.0);
 
-        let mut rows: Vec<(usize, egui::Rect)> = Vec::with_capacity(self.tracks.len());
         let mut drag_started = None;
         let mut drag_stopped = None;
         let mut hovered_now = None;
-        egui::ScrollArea::vertical()
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                for (n, track) in self.tracks.iter().enumerate() {
-                    let row_rect = ui
-                        .horizontal(|ui| {
-                            let (grip_rect, grip) =
-                                ui.allocate_exact_size(egui::vec2(14.0, 36.0), egui::Sense::drag());
-                            draw_grip(ui.painter(), grip_rect, ui.visuals().weak_text_color());
-                            if grip.hovered() {
-                                ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
-                            }
-                            if grip.drag_started() {
-                                drag_started = Some(n);
-                            }
-                            if grip.drag_stopped() {
-                                drag_stopped = Some(n);
-                            }
-                            ui.add_space(6.0);
-                            // The position in the playlist, numbered as in the album listing.
-                            let (number, _) = ui
-                                .allocate_exact_size(egui::vec2(28.0, 36.0), egui::Sense::hover());
-                            ui.painter().text(
-                                number.left_center(),
-                                egui::Align2::LEFT_CENTER,
-                                (n + 1).to_string(),
-                                egui::FontId::proportional(13.0),
-                                ui.visuals().weak_text_color(),
-                            );
-                            let texture = track_thumbnail(&mut self.thumbs, ui.ctx(), track);
-                            thumbnail(ui, texture.as_ref());
-                            ui.add_space(8.0);
-                            ui.vertical(|ui| {
-                                let title = format::title(track);
-                                if current == Some(track.id) {
-                                    ui.label(crate::fonts::bold(title));
-                                } else {
-                                    ui.label(title);
-                                }
-                                if let Some(artist) =
-                                    track.artist.as_deref().or(track.album_artist.as_deref())
-                                {
-                                    ui.weak(artist);
-                                }
-                            });
-                            ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::Center),
+        let len = self.tracks.len();
+        // Left and right edges of the list, and the height of its first row, once scrolled.
+        let mut geometry = None;
+        ui.scope(|ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            let output = egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .show_rows(ui, ROW_PITCH, len, |ui, range| {
+                    for n in range {
+                        let track = &self.tracks[n];
+                        let row_rect = ui
+                            .allocate_ui_with_layout(
+                                egui::vec2(ui.available_width(), ROW_HEIGHT),
+                                egui::Layout::left_to_right(egui::Align::Center),
                                 |ui| {
-                                    // The minus appears only while the row is hovered.
-                                    if self.hovered_row == Some(n) {
-                                        let (rect, button) = ui.allocate_exact_size(
-                                            egui::vec2(24.0, 24.0),
-                                            egui::Sense::click(),
-                                        );
-                                        let colour = if button.hovered() {
-                                            ui.visuals().strong_text_color()
-                                        } else {
-                                            ui.visuals().weak_text_color()
-                                        };
-                                        if button.hovered() {
-                                            ui.ctx()
-                                                .set_cursor_icon(egui::CursorIcon::PointingHand);
-                                        }
-                                        icons::paint(
-                                            ui.painter(),
-                                            rect.center(),
-                                            icons::MINUS,
-                                            16.0,
-                                            colour,
-                                        );
-                                        if button.clicked() {
-                                            remove = Some(n);
-                                        }
-                                    } else {
-                                        ui.add_space(24.0);
+                                    let (grip_rect, grip) = ui.allocate_exact_size(
+                                        egui::vec2(14.0, 36.0),
+                                        egui::Sense::drag(),
+                                    );
+                                    draw_grip(
+                                        ui.painter(),
+                                        grip_rect,
+                                        ui.visuals().weak_text_color(),
+                                    );
+                                    if grip.hovered() {
+                                        ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
                                     }
+                                    if grip.drag_started() {
+                                        drag_started = Some(n);
+                                    }
+                                    if grip.drag_stopped() {
+                                        drag_stopped = Some(n);
+                                    }
+                                    ui.add_space(6.0);
+                                    // The position in the playlist, numbered as in the album listing.
+                                    let (number, _) = ui.allocate_exact_size(
+                                        egui::vec2(28.0, 36.0),
+                                        egui::Sense::hover(),
+                                    );
+                                    ui.painter().text(
+                                        number.left_center(),
+                                        egui::Align2::LEFT_CENTER,
+                                        (n + 1).to_string(),
+                                        egui::FontId::proportional(13.0),
+                                        ui.visuals().weak_text_color(),
+                                    );
+                                    let cover = self.thumbs.get(ui.ctx(), track);
+                                    thumbnail(ui, cover.as_ref());
                                     ui.add_space(8.0);
-                                    ui.weak(format::duration(track.duration_ms));
+                                    ui.vertical(|ui| {
+                                        let title = format::title(track);
+                                        if current == Some(track.id) {
+                                            ui.label(crate::fonts::bold(title));
+                                        } else {
+                                            ui.label(title);
+                                        }
+                                        if let Some(artist) = track
+                                            .artist
+                                            .as_deref()
+                                            .or(track.album_artist.as_deref())
+                                        {
+                                            ui.weak(artist);
+                                        }
+                                    });
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            // The minus appears only while the row is hovered.
+                                            if self.hovered_row == Some(n) {
+                                                let (rect, button) = ui.allocate_exact_size(
+                                                    egui::vec2(24.0, 24.0),
+                                                    egui::Sense::click(),
+                                                );
+                                                let colour = if button.hovered() {
+                                                    ui.visuals().strong_text_color()
+                                                } else {
+                                                    ui.visuals().weak_text_color()
+                                                };
+                                                if button.hovered() {
+                                                    ui.ctx().set_cursor_icon(
+                                                        egui::CursorIcon::PointingHand,
+                                                    );
+                                                }
+                                                icons::paint(
+                                                    ui.painter(),
+                                                    rect.center(),
+                                                    icons::MINUS,
+                                                    16.0,
+                                                    colour,
+                                                );
+                                                if button.clicked() {
+                                                    remove = Some(n);
+                                                }
+                                            } else {
+                                                ui.add_space(24.0);
+                                            }
+                                            ui.add_space(8.0);
+                                            ui.weak(format::duration(track.duration_ms));
+                                        },
+                                    );
                                 },
-                            );
-                        })
-                        .response
-                        .rect;
-                    if ui.rect_contains_pointer(row_rect) {
-                        hovered_now = Some(n);
+                            )
+                            .response
+                            .rect;
+                        if ui.rect_contains_pointer(row_rect) {
+                            hovered_now = Some(n);
+                        }
+                        ui.add_space(ROW_PITCH - ROW_HEIGHT);
                     }
-                    rows.push((n, row_rect));
-                    ui.add_space(4.0);
-                }
-            });
+                });
+            let area = output.inner_rect;
+            geometry = Some((
+                area.left(),
+                area.right(),
+                area.top() - output.state.clamped_offset().y,
+            ));
+        });
 
         self.hovered_row = hovered_now;
         if let Some(n) = drag_started {
             self.dragging = Some(n);
         }
         let pointer = ui.ctx().input(|i| i.pointer.interact_pos());
-        let len = self.tracks.len();
         if let (Some(from), Some(_)) = (drag_stopped, self.dragging.take()) {
             // Dropped above the row under the pointer, or at the end of the list.
-            if let Some(p) = pointer {
-                let before = rows
-                    .iter()
-                    .find(|(_, r)| p.y < r.center().y)
-                    .map_or(len, |(i, _)| *i);
+            if let (Some(p), Some((_, _, origin))) = (pointer, geometry) {
+                let before = insertion_index(p.y, origin, len);
                 self.move_track(library, from, before);
             }
         } else if self.dragging.is_some()
-            && let Some(p) = pointer
+            && let (Some(p), Some((left, right, origin))) = (pointer, geometry)
         {
-            let before = rows
-                .iter()
-                .find(|(_, r)| p.y < r.center().y)
-                .map_or(len, |(i, _)| *i);
-            draw_drop_line(ui.painter(), &rows, before, ui.visuals().selection.bg_fill);
+            let before = insertion_index(p.y, origin, len);
+            draw_drop_line(
+                ui.painter(),
+                left,
+                right,
+                origin + before as f32 * ROW_PITCH - 2.0,
+                ui.visuals().selection.bg_fill,
+            );
         }
 
         if back {
@@ -469,6 +496,10 @@ impl PlaylistsView {
         }
     }
 }
+
+/// Height of a track row, and the distance from one row's top to the next.
+const ROW_HEIGHT: f32 = 40.0;
+const ROW_PITCH: f32 = 44.0;
 
 /// Size of a playlist card, and the gap between cards. They match the radio station cards.
 pub(crate) const CARD_WIDTH: f32 = 260.0;
@@ -541,39 +572,76 @@ fn initials(name: &str) -> String {
         .collect()
 }
 
-/// The track's embedded cover as a small texture. It is decoded once per track.
-fn track_thumbnail(
-    thumbs: &mut HashMap<i64, Option<egui::TextureHandle>>,
-    ctx: &egui::Context,
-    track: &MediaItem,
-) -> Option<egui::TextureHandle> {
-    thumbs
-        .entry(track.id)
-        .or_insert_with(|| {
-            let bytes = player_core::read_cover(&track.path)?;
-            let image = image::load_from_memory(&bytes)
-                .ok()?
-                .thumbnail(72, 72)
-                .to_rgba8();
-            let size = [image.width() as usize, image.height() as usize];
-            let colour = egui::ColorImage::from_rgba_unmultiplied(size, image.as_raw());
-            Some(ctx.load_texture(
-                format!("track-thumb-{}", track.id),
-                colour,
-                egui::TextureOptions::LINEAR,
-            ))
-        })
-        .clone()
+/// Most track thumbnails kept as textures.
+const THUMB_CAP: usize = 1000;
+
+/// Where a track's thumbnail stands: being decoded, or done (`None` means there is no cover).
+#[derive(Clone)]
+enum ThumbState {
+    Loading,
+    Ready(Option<Cover>),
 }
 
-/// Draw a 36 px square thumbnail, or a plain square when there is no cover.
-fn thumbnail(ui: &mut egui::Ui, texture: Option<&egui::TextureHandle>) {
+/// Track thumbnails, decoded off the UI thread and kept by track id. The least recently used are
+/// dropped beyond `THUMB_CAP`.
+#[derive(Default)]
+struct Thumbs {
+    entries: HashMap<i64, (u64, ThumbState)>,
+    tick: u64,
+    worker: Option<Worker<i64>>,
+}
+
+impl Thumbs {
+    /// Take in the thumbnails decoded since the last frame, and drop the least recently used
+    /// beyond the cap.
+    fn poll(&mut self, ctx: &egui::Context) {
+        let Some(worker) = &self.worker else {
+            return;
+        };
+        for (id, decoded) in worker.finished() {
+            let cover = decoded.map(|decoded| upload(ctx, &format!("track-thumb-{id}"), decoded));
+            if let Some((_, state)) = self.entries.get_mut(&id) {
+                *state = ThumbState::Ready(cover);
+            }
+        }
+        evict(&mut self.entries, THUMB_CAP, |state| {
+            matches!(state, ThumbState::Ready(_))
+        });
+    }
+
+    /// The track's thumbnail, or `None` while it decodes. The first request queues the decoding.
+    fn get(&mut self, ctx: &egui::Context, track: &MediaItem) -> Option<Cover> {
+        self.tick += 1;
+        let tick = self.tick;
+        if let Some((used, state)) = self.entries.get_mut(&track.id) {
+            *used = tick;
+            return match state {
+                ThumbState::Ready(cover) => cover.clone(),
+                ThumbState::Loading => None,
+            };
+        }
+        let path = track.path.clone();
+        let worker = self.worker.get_or_insert_with(|| Worker::new(ctx));
+        worker.submit(
+            track.id,
+            Box::new(move || {
+                player_core::read_cover(&path)
+                    .and_then(|bytes| covers::decode(&bytes, THUMB_MAX_SIDE))
+            }),
+        );
+        self.entries.insert(track.id, (tick, ThumbState::Loading));
+        None
+    }
+}
+
+/// Draw a 36 px square thumbnail, or a plain square while it loads or when there is no cover.
+fn thumbnail(ui: &mut egui::Ui, cover: Option<&Cover>) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(36.0, 36.0), egui::Sense::hover());
-    match texture {
-        Some(texture) => {
+    match cover {
+        Some(cover) => {
             ui.put(
                 rect,
-                egui::Image::new(texture)
+                egui::Image::new(&cover.colour)
                     .fit_to_exact_size(rect.size())
                     .corner_radius(4.0),
             );
@@ -597,21 +665,16 @@ fn draw_grip(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
 }
 
 /// A line where the dragged row would be inserted.
-fn draw_drop_line(
-    painter: &egui::Painter,
-    rows: &[(usize, egui::Rect)],
-    before: usize,
-    color: egui::Color32,
-) {
-    let Some((_, first)) = rows.first() else {
-        return;
-    };
-    let y = match rows.iter().find(|(i, _)| *i == before) {
-        Some((_, r)) => r.top(),
-        None => rows.last().map_or(first.top(), |(_, r)| r.bottom()),
-    };
+fn draw_drop_line(painter: &egui::Painter, left: f32, right: f32, y: f32, color: egui::Color32) {
     painter.line_segment(
-        [egui::pos2(first.left(), y), egui::pos2(first.right(), y)],
+        [egui::pos2(left, y), egui::pos2(right, y)],
         egui::Stroke::new(2.0, color),
     );
+}
+
+/// The position a row dropped at height `y` goes to: before the first row whose centre is below
+/// `y`. Rows start at `origin` and are `ROW_PITCH` apart.
+fn insertion_index(y: f32, origin: f32, len: usize) -> usize {
+    let index = ((y - origin - ROW_HEIGHT / 2.0) / ROW_PITCH).floor() as isize + 1;
+    index.clamp(0, len as isize) as usize
 }

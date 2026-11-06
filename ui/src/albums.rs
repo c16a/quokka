@@ -5,6 +5,7 @@ use player_core::{
     AlbumFilter, AlbumSort, AlbumSummary, FavoriteKind, Library, MediaItem, PlaylistSummary,
 };
 
+use crate::covers::{self, COVER_MAX_SIDE, Cover, Worker, evict, upload};
 use crate::format;
 use crate::icons;
 use crate::playback::MenuRequest;
@@ -35,8 +36,8 @@ pub(crate) const TILE_TEXT: f32 = 44.0;
 /// Corner radius of a grid cover.
 const TILE_RADIUS: f32 = 14.0;
 pub(crate) const TILE_GAP: f32 = 20.0;
-/// Largest side of a decoded cover. Bigger covers are scaled down to save memory.
-const COVER_MAX_SIDE: u32 = 256;
+/// Most covers kept as textures. The least recently used are dropped beyond this.
+const COVER_CAP: usize = 300;
 
 /// A request to play `tracks`, starting at `index`.
 pub struct PlayRequest {
@@ -50,8 +51,11 @@ pub struct AlbumsView {
     albums: Vec<AlbumSummary>,
     selected: Option<usize>,
     tracks: Vec<MediaItem>,
-    /// Decoded covers by album index, loaded when first shown. `None` means no cover.
-    covers: HashMap<usize, Option<Cover>>,
+    /// Covers by album index, with the tick they were last used on.
+    covers: HashMap<usize, (u64, CoverSlot)>,
+    /// Decodes covers off the UI thread. Started on first use.
+    cover_worker: Option<Worker<usize>>,
+    cover_tick: u64,
     /// Keys of favourite tracks (file paths) and albums (album names).
     favorite_tracks: HashSet<String>,
     favorite_albums: HashSet<String>,
@@ -69,10 +73,55 @@ impl AlbumsView {
         &self.albums
     }
 
-    /// The cover of album `index`, decoded on first use.
+    /// The cover of album `index`. It is decoded on first use, off the UI thread.
     pub fn cover(&mut self, ctx: &egui::Context, library: &Library, index: usize) -> Option<Cover> {
-        let album = self.albums.get(index)?;
-        cover_texture(&mut self.covers, ctx, library, index, album)
+        self.cover_for(ctx, library, index)
+    }
+
+    /// The cover of album `index`, or `None` while it is being decoded or when it has none. The
+    /// first request queues the decoding, and the cover appears on a later frame.
+    fn cover_for(&mut self, ctx: &egui::Context, library: &Library, index: usize) -> Option<Cover> {
+        self.poll_covers(ctx);
+        self.cover_tick += 1;
+        let tick = self.cover_tick;
+        if let Some((used, slot)) = self.covers.get_mut(&index) {
+            *used = tick;
+            return match slot {
+                CoverSlot::Ready(cover) => cover.clone(),
+                CoverSlot::Loading => None,
+            };
+        }
+        let name = self.albums.get(index)?.album.clone();
+        let slot = match library.album_cover(name.as_deref()).ok().flatten() {
+            None => CoverSlot::Ready(None),
+            Some(bytes) => {
+                let worker = self.cover_worker.get_or_insert_with(|| Worker::new(ctx));
+                worker.submit(
+                    index,
+                    Box::new(move || covers::decode(&bytes, COVER_MAX_SIDE)),
+                );
+                CoverSlot::Loading
+            }
+        };
+        self.covers.insert(index, (tick, slot));
+        evict(&mut self.covers, COVER_CAP, |slot| {
+            matches!(slot, CoverSlot::Ready(_))
+        });
+        None
+    }
+
+    /// Take in the covers the worker has decoded, and upload them as textures.
+    fn poll_covers(&mut self, ctx: &egui::Context) {
+        let Some(worker) = &self.cover_worker else {
+            return;
+        };
+        for (index, decoded) in worker.finished() {
+            let cover =
+                decoded.map(|decoded| upload(ctx, &format!("album-cover-{index}"), decoded));
+            if let Some((_, slot)) = self.covers.get_mut(&index) {
+                *slot = CoverSlot::Ready(cover);
+            }
+        }
     }
 
     /// Show album `index` in its detail view.
@@ -225,8 +274,8 @@ impl AlbumsView {
                             if i >= self.albums.len() {
                                 break;
                             }
+                            let cover = self.cover_for(ctx, library, i);
                             let album = &self.albums[i];
-                            let cover = cover_texture(&mut self.covers, ctx, library, i, album);
                             if album_tile(ui, cover.as_ref(), album).clicked() {
                                 opened = Some(i);
                             }
@@ -253,7 +302,7 @@ impl AlbumsView {
         let ctx = ui.ctx().clone();
         let palette = AlbumPalette::of(ui);
         let album = self.albums[i].clone();
-        let cover = cover_texture(&mut self.covers, &ctx, library, i, &album).map(|c| c.colour);
+        let cover = self.cover_for(&ctx, library, i).map(|c| c.colour);
         let album_key = album.album.clone().unwrap_or_default();
         let favorite_album = self.favorite_albums.contains(&album_key);
         let mut toggle_album = false;
@@ -532,57 +581,6 @@ impl AlbumsView {
     }
 }
 
-/// Share of grey in a cover that is not hovered, as in CSS `filter: grayscale(50%)`.
-const COVER_GREY: f32 = 0.5;
-
-/// An album's cover in full colour, and partly grey for tiles that are not hovered.
-#[derive(Clone)]
-pub(crate) struct Cover {
-    pub(crate) colour: egui::TextureHandle,
-    pub(crate) grayscaled: egui::TextureHandle,
-}
-
-/// The pixels of `image` with `amount` of grey, as CSS `grayscale(amount)` mixes each pixel with
-/// its luma. Alpha is kept.
-fn grayscale(image: &image::RgbaImage, amount: f32) -> Vec<u8> {
-    image
-        .pixels()
-        .flat_map(|p| {
-            let [r, g, b, a] = p.0;
-            let (r, g, b) = (r as f32, g as f32, b as f32);
-            // Luma weights from the CSS filter specification.
-            let luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-            let mix = |c: f32| (c * (1.0 - amount) + luma * amount).round() as u8;
-            [mix(r), mix(g), mix(b), a]
-        })
-        .collect()
-}
-
-/// Decode image bytes into a cover: the colour texture, and the grey one. `key` names the
-/// textures.
-pub(crate) fn cover_from_bytes(ctx: &egui::Context, key: &str, bytes: &[u8]) -> Option<Cover> {
-    // Cut the picture to its central square first, so the texture is square and is never
-    // stretched when it fills a square or a circle.
-    let picture = image::load_from_memory(bytes).ok()?;
-    let side = picture.width().min(picture.height());
-    let (x, y) = ((picture.width() - side) / 2, (picture.height() - side) / 2);
-    let image = picture
-        .crop_imm(x, y, side, side)
-        .thumbnail(COVER_MAX_SIDE, COVER_MAX_SIDE)
-        .to_rgba8();
-    let size = [image.width() as usize, image.height() as usize];
-    let colour = egui::ColorImage::from_rgba_unmultiplied(size, image.as_raw());
-    let grayscaled = egui::ColorImage::from_rgba_unmultiplied(size, &grayscale(&image, COVER_GREY));
-    Some(Cover {
-        colour: ctx.load_texture(key, colour, egui::TextureOptions::LINEAR),
-        grayscaled: ctx.load_texture(
-            format!("{key}-grayscaled"),
-            grayscaled,
-            egui::TextureOptions::LINEAR,
-        ),
-    })
-}
-
 /// Draw a cover in grey, with its full-colour version faded in over it while `hovered`. The
 /// fade takes 200 ms with an ease-in. The square in the middle of the cover is shown, rounded to
 /// `radius`, so a radius of half the size makes a circle.
@@ -634,22 +632,10 @@ fn square_uv(size: egui::Vec2) -> egui::Rect {
     egui::Rect::from_min_max(egui::pos2(x, y), egui::pos2(1.0 - x, 1.0 - y))
 }
 
-/// The album's cover as a texture. It is decoded once, then kept in `covers`.
-/// `None` means the album has no readable cover.
-fn cover_texture(
-    covers: &mut HashMap<usize, Option<Cover>>,
-    ctx: &egui::Context,
-    library: &Library,
-    index: usize,
-    album: &AlbumSummary,
-) -> Option<Cover> {
-    covers
-        .entry(index)
-        .or_insert_with(|| {
-            let bytes = library.album_cover(album.album.as_deref()).ok().flatten()?;
-            cover_from_bytes(ctx, &format!("album-cover-{index}"), &bytes)
-        })
-        .clone()
+/// Where a cover stands in the cache: being decoded, or done (`None` means there is no cover).
+enum CoverSlot {
+    Loading,
+    Ready(Option<Cover>),
 }
 
 /// Draw a square cover, or a plain square when there is no cover.
