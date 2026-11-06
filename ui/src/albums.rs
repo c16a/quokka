@@ -353,8 +353,6 @@ impl AlbumsView {
                             if album_back_button(ui).on_hover_text("All albums").clicked() {
                                 back = true;
                             }
-                            ui.add_space(14.0);
-                            ui.label(egui::RichText::new("Albums").size(13.0).color(palette.weak));
                         });
                         ui.add_space(26.0);
 
@@ -596,6 +594,134 @@ impl AlbumsView {
     }
 }
 
+/// Largest tilt of a cover, in radians: 8 degrees, reached when the pointer is at the cover's edge.
+const TILT_MAX: f32 = 0.1396;
+/// How strong the highlight that follows the pointer is, from 0 to 1.
+const SHINE_STRENGTH: f32 = 0.24;
+
+/// The point `p` of a flat cover, tilted by `tilt` (rotation about the vertical and the horizontal
+/// axis) and seen from `dist` away. The result is relative to the cover's centre.
+fn project(p: egui::Vec2, tilt: egui::Vec2, dist: f32) -> egui::Vec2 {
+    let (sa, ca) = tilt.x.sin_cos();
+    let (sb, cb) = tilt.y.sin_cos();
+    // Tilt about the horizontal axis, then about the vertical one. The flat cover starts at z = 0.
+    let y1 = p.y * cb;
+    let z1 = p.y * sb;
+    let x2 = p.x * ca + z1 * sa;
+    let z2 = -p.x * sa + z1 * ca;
+    let scale = dist / (dist - z2);
+    egui::vec2(x2 * scale, y1 * scale)
+}
+
+/// The outline of a rounded rectangle with half-size `half` and corner `radius`, as `per_corner`
+/// points on each corner, going round once.
+fn rounded_outline(half: egui::Vec2, radius: f32, per_corner: usize) -> Vec<egui::Vec2> {
+    let r = radius.min(half.x).min(half.y);
+    let corners: [(f32, f32, f32); 4] = [
+        (half.x - r, half.y - r, 0.0),
+        (-half.x + r, half.y - r, 90.0),
+        (-half.x + r, -half.y + r, 180.0),
+        (half.x - r, -half.y + r, 270.0),
+    ];
+    let mut points = Vec::with_capacity(4 * per_corner);
+    for (cx, cy, start) in corners {
+        for k in 0..per_corner {
+            let a = (start + 90.0 * k as f32 / per_corner as f32).to_radians();
+            points.push(egui::vec2(cx + r * a.cos(), cy + r * a.sin()));
+        }
+    }
+    points
+}
+
+/// Paint a cover tilted toward the pointer, with a highlight that follows the pointer. The tilt and the
+/// highlight ease in on hover and back out when the pointer leaves.
+fn tilted_cover(
+    ui: &egui::Ui,
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    texture: &egui::TextureHandle,
+    response: &egui::Response,
+) {
+    let ctx = ui.ctx();
+    let hovered = response.hovered();
+    let hover = ctx.animate_bool_with_time_and_easing(
+        response.id.with("cover_hover"),
+        hovered,
+        0.2,
+        egui::emath::easing::quadratic_in,
+    );
+
+    // The tilt aims at the pointer, measured from the cover's centre, and eases toward it each frame.
+    let target = match response.hover_pos() {
+        Some(pos) if hovered => {
+            let local = (pos - rect.center()) / (rect.size() / 2.0);
+            let (x, y) = (local.x.clamp(-1.0, 1.0), local.y.clamp(-1.0, 1.0));
+            egui::vec2(-x * TILT_MAX, y * TILT_MAX)
+        }
+        _ => egui::Vec2::ZERO,
+    };
+    let dt = ui.input(|i| i.stable_dt).min(0.1);
+    let ease = 1.0 - (-dt * 14.0).exp();
+    let tilt_id = response.id.with("cover_tilt");
+    let tilt = ctx.data_mut(|data| {
+        let tilt: &mut egui::Vec2 = data.get_temp_mut_or_default(tilt_id);
+        *tilt += (target - *tilt) * ease;
+        *tilt
+    });
+    if hovered || hover > 0.0 || tilt.length() > 1e-4 {
+        ctx.request_repaint();
+    }
+
+    let half = rect.size() / 2.0;
+    let dist = rect.width() * 4.0;
+    let centre = rect.center();
+    let uv_rect = square_uv(texture.size_vec2());
+    let outline = rounded_outline(half, TILE_RADIUS, 16);
+    let screen: Vec<egui::Pos2> = outline
+        .iter()
+        .map(|&p| centre + project(p, tilt, dist))
+        .collect();
+    let uv_of = |p: egui::Vec2| {
+        let t = p / (half * 2.0) + egui::vec2(0.5, 0.5);
+        uv_rect.min + t * uv_rect.size()
+    };
+
+    // A fan of triangles from the centre to the outline, so the tilted shape keeps its rounded corners.
+    let fan = |texture: egui::TextureId, colour_at: &dyn Fn(egui::Pos2) -> egui::Color32| {
+        let mut mesh = egui::Mesh::with_texture(texture);
+        mesh.vertices.push(egui::epaint::Vertex {
+            pos: centre,
+            uv: uv_rect.center(),
+            color: colour_at(centre),
+        });
+        for (local, pos) in outline.iter().zip(&screen) {
+            mesh.vertices.push(egui::epaint::Vertex {
+                pos: *pos,
+                uv: uv_of(*local),
+                color: colour_at(*pos),
+            });
+        }
+        let n = outline.len() as u32;
+        for i in 0..n {
+            mesh.add_triangle(0, 1 + i, 1 + (i + 1) % n);
+        }
+        egui::Shape::mesh(mesh)
+    };
+
+    painter.add(fan(texture.id(), &|_| egui::Color32::WHITE));
+
+    // The highlight: white, brightest at the pointer and fading out across the cover.
+    if hover > 0.0 {
+        let pointer = response.hover_pos().unwrap_or(centre);
+        let reach = rect.width() * 0.8;
+        painter.add(fan(egui::TextureId::default(), &|pos| {
+            let fade = (1.0 - (pos - pointer).length() / reach).clamp(0.0, 1.0);
+            let alpha = fade * fade * SHINE_STRENGTH * hover;
+            egui::Color32::from_white_alpha((alpha * 255.0).round() as u8)
+        }));
+    }
+}
+
 /// Draw a cover in grey, with its full-colour version faded in over it while `hovered`. The
 /// fade takes 200 ms with an ease-in. The square in the middle of the cover is shown, rounded to
 /// `radius`, so a radius of half the size makes a circle.
@@ -653,25 +779,67 @@ enum CoverSlot {
     Ready(Option<Cover>),
 }
 
-/// Draw a square cover, or a plain square when there is no cover.
+/// Draw a square cover with a soft shadow beneath it, or a plain square when there is no cover. The
+/// cover tilts toward the pointer. The shadow is darker in light mode, and stronger in dark mode so it
+/// shows against the dark background.
 fn cover_image(ui: &mut egui::Ui, texture: Option<&egui::TextureHandle>, size: f32) {
-    match texture {
-        Some(texture) => {
-            ui.add(
-                egui::Image::new(texture)
-                    .fit_to_exact_size(egui::vec2(size, size))
-                    .corner_radius(14.0),
-            );
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
+    // A wide, faint shadow that sits a little below the cover, so it looks lifted off the page.
+    let shadow = if ui.visuals().dark_mode {
+        egui::epaint::Shadow {
+            offset: [0, 14],
+            blur: 44,
+            spread: 0,
+            color: egui::Color32::from_black_alpha(130),
         }
+    } else {
+        egui::epaint::Shadow {
+            offset: [0, 12],
+            blur: 40,
+            spread: 0,
+            color: egui::Color32::from_black_alpha(40),
+        }
+    };
+    ui.painter().add(shadow.as_shape(rect, 14.0));
+    match texture {
+        Some(texture) => tilted_cover(ui, ui.painter(), rect, texture, &response),
         None => {
-            let (rect, _) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
             ui.painter()
                 .rect_filled(rect, 14.0, ui.visuals().faint_bg_color);
         }
     }
 }
 
-/// A grid tile: square cover, then the album name and its composers. Text that doesn't fit is clipped.
+/// Gap between a scrolling line and its repeat, in points.
+const SCROLL_GAP: f32 = 40.0;
+/// How fast a line that does not fit the tile scrolls, in points per second.
+const SCROLL_SPEED: f32 = 30.0;
+
+/// Paint one line of a tile at `top`, in the tile whose area is `rect`. A line wider than the tile
+/// scrolls left in a loop, by `offset` points. Otherwise it starts at the tile's left edge, and the
+/// tile's painter clips what does not fit.
+fn tile_line(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    top: f32,
+    text: String,
+    (font, colour): (egui::FontId, egui::Color32),
+    offset: f32,
+) {
+    let galley = painter.layout_no_wrap(text, font, colour);
+    let width = galley.size().x;
+    let mut x = rect.left();
+    if width > rect.width() {
+        let cycle = width + SCROLL_GAP;
+        x -= offset.rem_euclid(cycle);
+        // The repeat sits one cycle behind, so the line loops without a gap.
+        painter.galley(egui::pos2(x + cycle, top), galley.clone(), colour);
+    }
+    painter.galley(egui::pos2(x, top), galley, colour);
+}
+
+/// A grid tile: square cover, then the album name and its composers. Text that doesn't fit is clipped,
+/// unless the tile is hovered, when it scrolls.
 pub(crate) fn album_tile(
     ui: &mut egui::Ui,
     cover: Option<&Cover>,
@@ -700,20 +868,40 @@ pub(crate) fn album_tile(
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
     let text_top = cover_rect.bottom() + 6.0;
-    painter.text(
-        egui::pos2(rect.left(), text_top),
-        egui::Align2::LEFT_TOP,
-        album.album.as_deref().unwrap_or("Unknown album"),
-        egui::FontId::proportional(14.0),
-        ui.visuals().text_color(),
+    // The scroll position starts at the tile's left edge on each hover, moves on while the pointer is
+    // over the tile, and slides back to the start when it leaves. It is kept per tile.
+    let hovered = response.hovered();
+    let step = ui.input(|i| i.stable_dt).min(0.1) * SCROLL_SPEED;
+    let offset = ui.ctx().data_mut(|data| {
+        let offset: &mut f32 = data.get_temp_mut_or_default(response.id.with("scroll_offset"));
+        *offset = if hovered {
+            *offset + step
+        } else {
+            (*offset - step).max(0.0)
+        };
+        *offset
+    });
+    if hovered || offset > 0.0 {
+        ui.ctx().request_repaint();
+    }
+    let name_colour = ui.visuals().text_color();
+    let composer_colour = ui.visuals().weak_text_color();
+    tile_line(
+        &painter,
+        rect,
+        text_top,
+        album.album.as_deref().unwrap_or("Unknown album").to_owned(),
+        (egui::FontId::proportional(14.0), name_colour),
+        offset,
     );
     if !album.composers.is_empty() {
-        painter.text(
-            egui::pos2(rect.left(), text_top + 20.0),
-            egui::Align2::LEFT_TOP,
+        tile_line(
+            &painter,
+            rect,
+            text_top + 20.0,
             album.composers.join(", "),
-            egui::FontId::proportional(12.0),
-            ui.visuals().weak_text_color(),
+            (egui::FontId::proportional(12.0), composer_colour),
+            offset,
         );
     }
     response
@@ -734,11 +922,30 @@ pub(crate) fn play_icon_button(ui: &mut egui::Ui) -> egui::Response {
     response
 }
 
+/// The background of a back button: its resting colour, which eases over 0.2 seconds into a more
+/// prominent one while the button is hovered. The prominent colour is lighter in dark mode and darker
+/// in light mode.
+fn back_background(ui: &egui::Ui, response: &egui::Response, rest: egui::Color32) -> egui::Color32 {
+    let target = if ui.visuals().dark_mode {
+        rest.lerp_to_gamma(egui::Color32::WHITE, 0.14)
+    } else {
+        rest.lerp_to_gamma(egui::Color32::BLACK, 0.12)
+    };
+    let hover = ui.ctx().animate_bool_with_time_and_easing(
+        response.id.with("back_hover"),
+        response.hovered(),
+        0.2,
+        egui::emath::easing::quadratic_in,
+    );
+    rest.lerp_to_gamma(target, hover)
+}
+
 /// Round button with a left chevron, for going back to the album grid.
 pub(crate) fn back_icon_button(ui: &mut egui::Ui) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(32.0, 32.0), egui::Sense::click());
     let visuals = ui.style().interact(&response);
-    ui.painter().rect_filled(rect, 16.0, visuals.weak_bg_fill);
+    let fill = back_background(ui, &response, ui.visuals().widgets.inactive.weak_bg_fill);
+    ui.painter().rect_filled(rect, 16.0, fill);
     icons::paint(
         ui.painter(),
         rect.center(),
@@ -918,8 +1125,9 @@ fn star_circle(ui: &mut egui::Ui, palette: &AlbumPalette, on: bool) -> egui::Res
 fn album_back_button(ui: &mut egui::Ui) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(36.0, 36.0), egui::Sense::click());
     let palette = AlbumPalette::of(ui);
+    let fill = back_background(ui, &response, palette.back);
     let painter = ui.painter();
-    painter.circle_filled(rect.center(), 18.0, palette.back);
+    painter.circle_filled(rect.center(), 18.0, fill);
     let c = rect.center();
     icons::paint(painter, c, icons::CARET_LEFT, 18.0, palette.text);
     response
