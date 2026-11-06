@@ -19,6 +19,8 @@ use crate::icons;
 pub enum MenuRequest {
     PlayNext(MediaItem),
     AddToQueue(MediaItem),
+    /// Show a track in the track info panel.
+    ShowInfo(MediaItem),
     /// Append a track to a saved playlist.
     AddToPlaylist {
         playlist: i64,

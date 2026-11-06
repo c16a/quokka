@@ -20,6 +20,7 @@ mod scan;
 mod search;
 mod session;
 mod settings;
+mod tag_write;
 
 use std::path::{Path, PathBuf};
 
@@ -27,7 +28,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use thiserror::Error;
 
 pub use browse::{AlbumFilter, AlbumSort, AlbumSummary};
-pub use details::{TrackDetails, track_details};
+pub use details::{TagLine, TrackDetails, track_details};
 pub use favorites::FavoriteKind;
 pub use history::Recent;
 pub use lyrics::{
@@ -54,6 +55,12 @@ pub enum Error {
     NotADirectory(PathBuf),
     #[error("invalid tag name")]
     InvalidTag,
+    #[error("the file's tags changed since they were read")]
+    TagsChanged,
+    #[error("the tag {0} can't be edited here")]
+    TagNotEditable(String),
+    #[error("could not write the tags: {0}")]
+    Tag(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -209,6 +216,95 @@ impl Library {
     pub fn get(&self, id: i64) -> Result<Option<MediaItem>> {
         let sql = format!("SELECT {COLUMNS} FROM media WHERE id = ?1");
         Ok(self.conn.query_row(&sql, [id], row_to_item).optional()?)
+    }
+
+    /// Write new text tags into the file at `path`. `expected` is the tag lines as they were when
+    /// the user started editing, and `values` is the new value of each. Before the first edit of a
+    /// file, its tags are kept, so `revert_tags` can put them back.
+    pub fn save_tags(&self, path: &Path, expected: &[TagLine], values: &[String]) -> Result<()> {
+        let key = path.to_string_lossy().into_owned();
+        if !self.has_tag_snapshot(path)? {
+            let json = serde_json::to_string(expected)?;
+            self.conn.execute(
+                "INSERT INTO tag_snapshot(path, tags) VALUES (?1, ?2)",
+                params![key, json],
+            )?;
+        }
+        tag_write::write_tags(path, expected, values)?;
+        self.refresh_media(path)
+    }
+
+    /// Put back the tags the file had before its first edit. Returns `false` when there is nothing
+    /// to put back.
+    pub fn revert_tags(&self, path: &Path) -> Result<bool> {
+        let key = path.to_string_lossy().into_owned();
+        let json: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT tags FROM tag_snapshot WHERE path = ?1",
+                [&key],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let Some(json) = json else {
+            return Ok(false);
+        };
+        let original: Vec<TagLine> = serde_json::from_str(&json)?;
+        let values: Vec<String> = original.iter().map(|line| line.value.clone()).collect();
+        let current = details::track_details(path).ok_or(Error::TagsChanged)?.tags;
+        tag_write::write_tags(path, &current, &values)?;
+        self.conn
+            .execute("DELETE FROM tag_snapshot WHERE path = ?1", [&key])?;
+        self.refresh_media(path)?;
+        Ok(true)
+    }
+
+    /// Whether the file at `path` has tags to revert to.
+    pub fn has_tag_snapshot(&self, path: &Path) -> Result<bool> {
+        let key = path.to_string_lossy().into_owned();
+        let found: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT 1 FROM tag_snapshot WHERE path = ?1",
+                [&key],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(found.is_some())
+    }
+
+    /// Re-read a file's tags into its row, so the library shows what was just written.
+    fn refresh_media(&self, path: &Path) -> Result<()> {
+        let key = path.to_string_lossy().into_owned();
+        let meta = std::fs::metadata(path)?;
+        let size = meta.len() as i64;
+        let mtime = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let info = metadata::read(path, size);
+        self.conn.execute(
+            "UPDATE media SET size = ?2, mtime = ?3, duration_ms = ?4, title = ?5, artist = ?6, \
+               album = ?7, album_artist = ?8, genre = ?9, composer = ?10, track = ?11, year = ?12 \
+             WHERE path = ?1",
+            params![
+                key,
+                size,
+                mtime,
+                info.duration_ms,
+                info.title,
+                info.artist,
+                info.album,
+                info.album_artist,
+                info.genre,
+                info.composer,
+                info.track,
+                info.year
+            ],
+        )?;
+        Ok(())
     }
 
     /// Attach a tag to an item. Names are trimmed and lower-cased.

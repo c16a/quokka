@@ -26,7 +26,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use eframe::egui;
 use notify::{RecursiveMode, Watcher};
-use player_core::{Library, ScanStats, Session, Settings, Theme};
+use player_core::{Library, MediaItem, ScanStats, Session, Settings, Theme};
 
 use playback::{MenuRequest, Panel, Playback};
 
@@ -72,6 +72,8 @@ struct App {
     /// A station index sync running on a background thread, and its result.
     station_sync: Option<std::sync::mpsc::Receiver<Result<usize, String>>>,
     side: side::SidePanels,
+    /// The track the info panel shows, when one was chosen from a menu. Otherwise the playing track.
+    info_track: Option<MediaItem>,
     /// The track last logged as played, so one track is logged once per start.
     last_played: Option<i64>,
     playlists: playlists::PlaylistsView,
@@ -179,6 +181,7 @@ impl App {
             radio: Default::default(),
             station_sync: None,
             side: Default::default(),
+            info_track: None,
             last_played: None,
             playlists: Default::default(),
             media,
@@ -555,11 +558,16 @@ impl eframe::App for App {
                         );
                     }
                     Panel::Info => {
-                        self.side
-                            .info(ui, &self.library, self.playback.current_item().as_deref())
+                        let playing = self.playback.current_item();
+                        let shown = self.info_track.as_ref().or(playing.as_deref());
+                        self.side.info(ui, &self.library, shown)
                     }
                     Panel::Closed => {}
                 });
+        }
+        // Tags written in the info panel change the library, so its views reload.
+        if self.side.take_library_changed() {
+            self.reload_views();
         }
         if let Some(at) = lyrics_outcome.seek {
             self.playback.seek(at.as_secs_f64());
@@ -568,6 +576,7 @@ impl eframe::App for App {
             self.set_lyrics_online(true);
         }
         let mut queue_requests: Vec<MenuRequest> = Vec::new();
+        let playlist_summaries = self.playlists.summaries().to_vec();
         let mut action = None;
         let mut search_outcome = None;
         let mut opened_album = None;
@@ -621,10 +630,13 @@ impl eframe::App for App {
                     );
                 }
                 Tab::Playlists => {
-                    if let Some(request) =
-                        self.playlists
-                            .show(ui, &self.library, self.playback.current_id())
-                    {
+                    if let Some(request) = self.playlists.show(
+                        ui,
+                        &self.library,
+                        self.playback.current_id(),
+                        &mut queue_requests,
+                        &playlist_summaries,
+                    ) {
                         play = Some(request);
                     }
                 }
@@ -638,6 +650,9 @@ impl eframe::App for App {
         if let Some(outcome) = search_outcome {
             if outcome.play.is_some() {
                 play = outcome.play;
+            }
+            if outcome.radio.is_some() {
+                radio_action = outcome.radio;
             }
             if let Some(i) = outcome.open_album {
                 self.albums.open(&self.library, i);
@@ -678,6 +693,10 @@ impl eframe::App for App {
             match request {
                 MenuRequest::PlayNext(item) => self.playback.play_next(item),
                 MenuRequest::AddToQueue(item) => self.playback.add_to_queue(item),
+                MenuRequest::ShowInfo(item) => {
+                    self.info_track = Some(item);
+                    self.playback.panel = Panel::Info;
+                }
                 MenuRequest::AddToPlaylist { playlist, media_id } => {
                     match self.library.add_to_playlist(playlist, &[media_id]) {
                         Ok(()) => self.playlists.reload(&self.library),

@@ -12,6 +12,8 @@ use crate::albums::{
 use crate::covers::{self, Cover, THUMB_MAX_SIDE, Worker, evict, upload};
 use crate::format;
 use crate::icons;
+use crate::playback::MenuRequest;
+use crate::queue;
 use crate::search::search_fill;
 
 /// The playlist list, or the tracks of one playlist when one is open.
@@ -82,13 +84,15 @@ impl PlaylistsView {
         ui: &mut egui::Ui,
         library: &Library,
         current: Option<i64>,
+        queue: &mut Vec<MenuRequest>,
+        playlists: &[PlaylistSummary],
     ) -> Option<PlayRequest> {
         match self.selected {
             None => {
                 self.list(ui, library);
                 None
             }
-            Some(_) => self.detail(ui, library, current),
+            Some(_) => self.detail(ui, library, current, queue, playlists),
         }
     }
 
@@ -222,6 +226,8 @@ impl PlaylistsView {
         ui: &mut egui::Ui,
         library: &Library,
         current: Option<i64>,
+        queue: &mut Vec<MenuRequest>,
+        playlists: &[PlaylistSummary],
     ) -> Option<PlayRequest> {
         let mut play = None;
         let mut back = false;
@@ -464,6 +470,12 @@ impl PlaylistsView {
                             )
                             .response
                             .rect;
+                        ui.interact(
+                            row_rect,
+                            ui.scope_id().with(("playlist_row", n)),
+                            egui::Sense::click(),
+                        )
+                        .context_menu(|ui| queue::track_menu(ui, queue, track, playlists));
                         if current == Some(track.id) {
                             ui.painter().set(
                                 background,

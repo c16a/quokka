@@ -1,5 +1,5 @@
 use eframe::egui;
-use player_core::{AlbumSummary, Library, MediaItem, PlaylistSummary, SongQuery};
+use player_core::{AlbumSummary, Library, MediaItem, PlaylistSummary, SongQuery, Station};
 
 use crate::albums::{self, AlbumsView, PlayRequest, TILE_GAP};
 use crate::format;
@@ -7,9 +7,12 @@ use crate::icons;
 use crate::playback::MenuRequest;
 use crate::playlists::{CARD_GAP, CARD_WIDTH, playlist_card};
 use crate::queue;
+use crate::radio;
 
 /// Most songs listed for one search.
 const SONG_LIMIT: usize = 200;
+/// Most stations listed for one search.
+const STATION_LIMIT: usize = 60;
 
 /// What the search screen asked for this frame.
 #[derive(Default)]
@@ -17,6 +20,8 @@ pub struct SearchOutcome {
     pub play: Option<PlayRequest>,
     pub open_album: Option<usize>,
     pub open_playlist: Option<i64>,
+    /// A station chosen in the results: tune in to it, or play it.
+    pub radio: Option<radio::RadioAction>,
 }
 
 /// The search screen: a field at the top, then the albums and songs whose names match.
@@ -29,6 +34,8 @@ pub struct SearchView {
     album_hits: Vec<usize>,
     /// Playlists whose name matches.
     playlist_hits: Vec<PlaylistSummary>,
+    /// Radio stations whose name, tags or country match.
+    station_hits: Vec<Station>,
     songs: Vec<MediaItem>,
     focus_pending: bool,
 }
@@ -65,7 +72,7 @@ impl SearchView {
                     let field = ui.add(
                         egui::TextEdit::singleline(&mut self.query)
                             .frame(egui::Frame::NONE)
-                            .hint_text("Search albums, songs and playlists")
+                            .hint_text("Search albums, songs, playlists and stations")
                             .margin(egui::Margin::symmetric(10, 6))
                             .align(egui::Align2::LEFT_CENTER)
                             .desired_width(f32::INFINITY),
@@ -83,10 +90,14 @@ impl SearchView {
             self.searched = query.clone();
         }
         if query.is_empty() {
-            ui.weak("Search for an album, a song or a playlist. Filters: artist:, album:, genre:, year:, format:flac.");
+            ui.weak("Search for an album, a song, a playlist or a station. Filters: artist:, album:, genre:, year:, format:flac.");
             return outcome;
         }
-        if self.playlist_hits.is_empty() && self.album_hits.is_empty() && self.songs.is_empty() {
+        if self.station_hits.is_empty()
+            && self.playlist_hits.is_empty()
+            && self.album_hits.is_empty()
+            && self.songs.is_empty()
+        {
             ui.weak(format!("No results for \"{query}\"."));
             return outcome;
         }
@@ -117,6 +128,16 @@ impl SearchView {
                             }
                             ui.end_row();
                         });
+                    ui.add_space(24.0);
+                }
+
+                if !self.station_hits.is_empty() {
+                    ui.heading("Stations");
+                    ui.add_space(8.0);
+                    let tuned = library.tuned_stations().unwrap_or_default();
+                    if let Some(action) = radio::station_cards(ui, &self.station_hits, &tuned) {
+                        outcome.radio = Some(action);
+                    }
                     ui.add_space(24.0);
                 }
 
@@ -206,12 +227,24 @@ impl SearchView {
     ) {
         self.album_hits.clear();
         self.playlist_hits.clear();
+        self.station_hits.clear();
         self.songs.clear();
         let parsed = SongQuery::parse(query);
         if parsed.is_empty() {
             return;
         }
-        // A playlist has only a name, so it matches the words typed and no other filter.
+        // Stations and playlists have a name, so they match the words typed and no other filter.
+        if !parsed.text.is_empty()
+            && parsed.artist.is_none()
+            && parsed.album.is_none()
+            && parsed.genre.is_none()
+            && parsed.year.is_none()
+            && parsed.format.is_none()
+        {
+            self.station_hits = library
+                .search_stations(query.trim(), STATION_LIMIT)
+                .unwrap_or_default();
+        }
         if !parsed.text.is_empty()
             && parsed.artist.is_none()
             && parsed.album.is_none()

@@ -262,6 +262,10 @@ pub fn track_menu(
             }
         }
     });
+    if menu_row(ui, "Track info") {
+        queue.push(MenuRequest::ShowInfo(track.clone()));
+        ui.close();
+    }
 }
 
 /// One full-width entry in a menu, with its label inset from the left edge. Returns true when

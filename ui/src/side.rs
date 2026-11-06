@@ -51,6 +51,27 @@ pub struct SidePanels {
     results: Option<Receiver<LookupResult>>,
     /// The synced line last scrolled into view.
     scrolled: Option<usize>,
+    /// The value of each tag line as it is being edited. Same order as `details.tags`.
+    drafts: Vec<String>,
+    /// Why the last save or revert failed, if it did.
+    tag_error: Option<String>,
+    /// Set when tags were written, so the library views reload.
+    library_changed: bool,
+    /// The track's library row, read again after a save.
+    refreshed: Option<MediaItem>,
+}
+
+/// What the user asked for in the tags section this frame.
+enum TagAction {
+    Save(Vec<String>),
+    Revert,
+}
+
+/// The editable values of a track's tags, as they start out.
+fn draft_values(details: Option<&TrackDetails>) -> Vec<String> {
+    details
+        .map(|d| d.tags.iter().map(|t| t.value.clone()).collect())
+        .unwrap_or_default()
 }
 
 impl SidePanels {
@@ -61,6 +82,9 @@ impl SidePanels {
         }
         self.track = Some(item.id);
         self.details = track_details(&item.path);
+        self.drafts = draft_values(self.details.as_ref());
+        self.tag_error = None;
+        self.refreshed = None;
         self.sidecar = sidecar_lyrics(&item.path);
         self.cached = library.cached_lyrics(item.id).unwrap_or(None);
         self.lookup = Lookup::Idle;
@@ -274,6 +298,11 @@ impl SidePanels {
     }
 
     /// Everything the file says about itself, and a button to show it in the file manager.
+    /// Whether tags were written since this was last asked, so the library views should reload.
+    pub fn take_library_changed(&mut self) -> bool {
+        std::mem::take(&mut self.library_changed)
+    }
+
     pub fn info(&mut self, ui: &mut egui::Ui, library: &Library, item: Option<&MediaItem>) {
         heading(ui, "Track info");
         let Some(item) = item else {
@@ -283,7 +312,21 @@ impl SidePanels {
             return;
         };
         self.load(item, library);
+        let item = self
+            .refreshed
+            .as_ref()
+            .filter(|row| row.id == item.id)
+            .unwrap_or(item);
+        let lines = self
+            .details
+            .as_ref()
+            .map(|d| d.tags.clone())
+            .unwrap_or_default();
+        let can_revert = library.has_tag_snapshot(&item.path).unwrap_or(false);
+        let error = self.tag_error.clone();
         let details = self.details.as_ref();
+        let drafts = &mut self.drafts;
+        let mut action: Option<TagAction> = None;
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
@@ -335,15 +378,65 @@ impl SidePanels {
                             .num_columns(2)
                             .spacing([12.0, 4.0])
                             .show(ui, |ui| {
-                                for (name, value) in &details.tags {
-                                    ui.weak(name);
-                                    ui.add(egui::Label::new(value).wrap());
+                                for (line, draft) in details.tags.iter().zip(drafts.iter_mut()) {
+                                    ui.weak(&line.name);
+                                    if line.editable {
+                                        ui.add(
+                                            egui::TextEdit::singleline(draft)
+                                                .desired_width(f32::INFINITY),
+                                        );
+                                    } else {
+                                        ui.add(egui::Label::new(line.value.as_str()).wrap());
+                                    }
                                     ui.end_row();
                                 }
                             });
+                        ui.add_space(8.0);
+                        let dirty = details
+                            .tags
+                            .iter()
+                            .zip(drafts.iter())
+                            .any(|(line, draft)| line.editable && &line.value != draft);
+                        ui.horizontal(|ui| {
+                            if ui.add_enabled(dirty, egui::Button::new("Save")).clicked() {
+                                action = Some(TagAction::Save(drafts.clone()));
+                            }
+                            if ui
+                                .add_enabled(can_revert, egui::Button::new("Revert"))
+                                .on_hover_text(
+                                    "Put back the tags the file had before it was first edited",
+                                )
+                                .clicked()
+                            {
+                                action = Some(TagAction::Revert);
+                            }
+                        });
+                        if let Some(error) = &error {
+                            ui.colored_label(ui.visuals().error_fg_color, error.as_str());
+                        }
                     });
                 }
             });
+
+        let path = item.path.clone();
+        let id = item.id;
+        let outcome = match action {
+            Some(TagAction::Save(values)) => Some(library.save_tags(&path, &lines, &values)),
+            Some(TagAction::Revert) => Some(library.revert_tags(&path).map(|_| ())),
+            None => None,
+        };
+        if let Some(result) = outcome {
+            match result {
+                Ok(()) => {
+                    self.details = track_details(&path);
+                    self.drafts = draft_values(self.details.as_ref());
+                    self.refreshed = library.get(id).ok().flatten();
+                    self.tag_error = None;
+                    self.library_changed = true;
+                }
+                Err(e) => self.tag_error = Some(e.to_string()),
+            }
+        }
     }
 }
 

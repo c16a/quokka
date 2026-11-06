@@ -579,6 +579,35 @@ fn pill(ui: &mut egui::Ui, text: &str) -> egui::Response {
 
 /// A search result: the station's tile, name and details. Hovering turns the tile into a play
 /// button.
+/// Station cards in a grid, as in the radio results. `tuned` lists the stations already tuned in.
+pub(crate) fn station_cards(
+    ui: &mut egui::Ui,
+    stations: &[Station],
+    tuned: &[Station],
+) -> Option<RadioAction> {
+    const GAP: f32 = 12.0;
+    let mut action = None;
+    let columns = (((ui.available_width() + GAP) / (CARD_WIDTH + GAP)).floor() as usize).max(1);
+    egui::Grid::new("station_cards")
+        .num_columns(columns)
+        .spacing([GAP, GAP])
+        .min_col_width(CARD_WIDTH)
+        .max_col_width(CARD_WIDTH)
+        .show(ui, |ui| {
+            for (n, station) in stations.iter().enumerate() {
+                let is_tuned = tuned.iter().any(|t| t.uuid == station.uuid);
+                if let Some(act) = result_card(ui, station, is_tuned) {
+                    action = Some(act);
+                }
+                if (n + 1) % columns == 0 {
+                    ui.end_row();
+                }
+            }
+            ui.end_row();
+        });
+    action
+}
+
 fn result_card(ui: &mut egui::Ui, station: &Station, tuned: bool) -> Option<RadioAction> {
     let mut action = None;
     let mut tile_rect = egui::Rect::NOTHING;
