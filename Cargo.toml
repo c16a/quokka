@@ -21,6 +21,7 @@ notify = { version = "8.2.1", default-features = false, features = ["macos_fseve
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png"] }
 rfd = { version = "0.17.2", default-features = false }
 rodio = { version = "0.23.0", default-features = false, features = ["playback"] }
+ebur128 = { version = "0.1.11", default-features = false }
 souvlaki = { version = "0.9.3", default-features = false, features = ["use_dbus"] }
 symphonia = { version = "0.6.1", default-features = false, features = ["mp3", "flac", "isomp4", "mkv", "aac", "alac", "vorbis", "ogg", "wav", "pcm", "aiff", "adpcm"] }
 rusqlite = { version = "0.41.1", default-features = false, features = ["bundled", "cache"] }

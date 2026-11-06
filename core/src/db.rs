@@ -3,11 +3,13 @@ use rusqlite::Connection;
 use crate::Result;
 
 /// Bump when the schema changes and add a matching migration step below.
-const SCHEMA_VERSION: i64 = 10;
+const SCHEMA_VERSION: i64 = 11;
 
 /// Per-connection settings and schema migration.
 pub(crate) fn configure(conn: &Connection) -> Result<()> {
     conn.pragma_update(None, "foreign_keys", true)?;
+    // The loudness measurer writes from its own thread, so wait for a busy database.
+    conn.busy_timeout(std::time::Duration::from_secs(5))?;
     // WAL is not available for in-memory databases; ignore the result there.
     let _ = conn.pragma_update(None, "journal_mode", "WAL");
     // With WAL, NORMAL keeps the database consistent after a crash and commits much faster.
@@ -43,6 +45,9 @@ pub(crate) fn configure(conn: &Connection) -> Result<()> {
     }
     if version < 10 {
         conn.execute_batch(SCHEMA_V10)?;
+    }
+    if version < 11 {
+        conn.execute_batch(SCHEMA_V11)?;
     }
     if version != SCHEMA_VERSION {
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
@@ -211,6 +216,17 @@ CREATE TABLE meta (
 /// stored before this version get it at the next sync.
 const SCHEMA_V9: &str = "
 ALTER TABLE station ADD COLUMN countrycode TEXT NOT NULL DEFAULT '';
+";
+
+/// The measured loudness of each file, with its modification time, so a changed file is measured
+/// again.
+const SCHEMA_V11: &str = "
+CREATE TABLE loudness (
+    path  TEXT PRIMARY KEY,
+    lufs  REAL NOT NULL,
+    peak  REAL NOT NULL,
+    mtime INTEGER NOT NULL
+);
 ";
 
 /// The tags each file had before the first edit made here, as JSON, until they are reverted.

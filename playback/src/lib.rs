@@ -2,6 +2,7 @@
 //! [`Player`]; concrete backends (libmpv first, FFmpeg later) implement it.
 
 mod chain;
+mod loudness;
 mod mock;
 mod rodio_backend;
 mod stream;
@@ -12,6 +13,7 @@ use std::time::Duration;
 
 use thiserror::Error;
 
+pub use loudness::{Loudness, measure_loudness};
 pub use mock::MockPlayer;
 pub use rodio_backend::{RodioPlayer, output_device_names};
 pub use stream::open_stream;

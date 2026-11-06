@@ -85,7 +85,7 @@ pub fn show(ui: &mut egui::Ui, settings: &Settings, busy: bool, status: &str) ->
     ui.add_space(24.0);
     ui.heading("Playback");
     ui.add_space(4.0);
-    ui.label("ReplayGain, which levels tracks using the loudness tags in each file:");
+    ui.label("Levels tracks to the same loudness. Files with ReplayGain tags use them; other files are measured in the background as they play, and keep their own level until then:");
     ui.add_space(4.0);
     let mut mode = settings.replay_gain;
     egui::ComboBox::from_id_salt("replay_gain")

@@ -11,15 +11,17 @@ use crate::settings::ReplayGainMode;
 /// The factor to multiply a track's output level by. `1.0` means no change, which is the answer
 /// when the mode is off or the file has no ReplayGain tags.
 pub fn replay_gain_factor(path: &Path, mode: ReplayGainMode) -> f32 {
+    tag_gain(path, mode).unwrap_or(1.0)
+}
+
+/// The factor the file's ReplayGain tags give, or `None` when the mode is off or the file has no
+/// such tags.
+pub fn tag_gain(path: &Path, mode: ReplayGainMode) -> Option<f32> {
     if mode == ReplayGainMode::Off {
-        return 1.0;
+        return None;
     }
-    let Ok(tagged) = lofty::read_from_path(path) else {
-        return 1.0;
-    };
-    let Some(tag) = tagged.primary_tag().or_else(|| tagged.first_tag()) else {
-        return 1.0;
-    };
+    let tagged = lofty::read_from_path(path).ok()?;
+    let tag = tagged.primary_tag().or_else(|| tagged.first_tag())?;
     let gain = |key| tag.get_string(key).and_then(parse_db);
     let peak = |key| {
         tag.get_string(key)
@@ -39,9 +41,7 @@ pub fn replay_gain_factor(path: &Path, mode: ReplayGainMode) -> f32 {
         ReplayGainMode::Album => album.or(track),
         _ => track.or(album),
     };
-    let Some((gain_db, peak)) = chosen else {
-        return 1.0;
-    };
+    let (gain_db, peak) = chosen?;
 
     let mut factor = 10f32.powf(gain_db / 20.0);
     // Never push the loudest sample past full scale.
@@ -50,7 +50,20 @@ pub fn replay_gain_factor(path: &Path, mode: ReplayGainMode) -> f32 {
     {
         factor = factor.min(1.0 / peak);
     }
-    factor
+    Some(factor)
+}
+
+/// The level tracks are brought to when they are measured, in LUFS (the ReplayGain 2 reference).
+const TARGET_LUFS: f64 = -18.0;
+
+/// The factor that brings a measured track to `TARGET_LUFS`, without pushing its peak past full
+/// scale. `peak` is the highest sample level as a linear amplitude.
+pub fn loudness_factor(lufs: f64, peak: f64) -> f32 {
+    let mut factor = 10f64.powf((TARGET_LUFS - lufs) / 20.0);
+    if peak > 0.0 {
+        factor = factor.min(1.0 / peak);
+    }
+    factor as f32
 }
 
 /// A gain such as "-6.48 dB" in decibels. Anything that isn't a finite number is ignored.

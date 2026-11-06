@@ -37,7 +37,7 @@ pub use lyrics::{
 };
 pub use playlist::PlaylistSummary;
 pub use radio::{Station, fetch_all_stations, parse_stations};
-pub use replaygain::replay_gain_factor;
+pub use replaygain::{loudness_factor, replay_gain_factor, tag_gain};
 pub use scan::ScanStats;
 pub use search::SongQuery;
 pub use session::{RepeatMode, Session};
@@ -216,6 +216,36 @@ impl Library {
     pub fn get(&self, id: i64) -> Result<Option<MediaItem>> {
         let sql = format!("SELECT {COLUMNS} FROM media WHERE id = ?1");
         Ok(self.conn.query_row(&sql, [id], row_to_item).optional()?)
+    }
+
+    /// The measured loudness of the file at `path`, as `(LUFS, peak)`. `None` when it hasn't been
+    /// measured, or the file has changed since.
+    pub fn loudness(&self, path: &Path) -> Result<Option<(f64, f64)>> {
+        let key = path.to_string_lossy().into_owned();
+        let row: Option<(f64, f64, i64)> = self
+            .conn
+            .query_row(
+                "SELECT lufs, peak, mtime FROM loudness WHERE path = ?1",
+                [&key],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?;
+        Ok(row.and_then(|(lufs, peak, mtime)| {
+            (file_mtime(path) == Some(mtime)).then_some((lufs, peak))
+        }))
+    }
+
+    /// Store the measured loudness of the file at `path`, as of its current modification time.
+    pub fn set_loudness(&self, path: &Path, lufs: f64, peak: f64) -> Result<()> {
+        let key = path.to_string_lossy().into_owned();
+        let mtime = file_mtime(path).unwrap_or(0);
+        self.conn.execute(
+            "INSERT INTO loudness(path, lufs, peak, mtime) VALUES (?1, ?2, ?3, ?4) \
+             ON CONFLICT(path) DO UPDATE SET lufs = excluded.lufs, peak = excluded.peak, \
+             mtime = excluded.mtime",
+            params![key, lufs, peak, mtime],
+        )?;
+        Ok(())
     }
 
     /// Write new text tags into the file at `path`. `expected` is the tag lines as they were when
@@ -399,4 +429,15 @@ fn normalise_tag(name: &str) -> Result<String> {
     } else {
         Ok(name)
     }
+}
+
+/// The modification time of the file at `path`, in whole seconds since the epoch.
+fn file_mtime(path: &Path) -> Option<i64> {
+    std::fs::metadata(path)
+        .ok()?
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .map(|d| d.as_secs() as i64)
 }

@@ -9,7 +9,8 @@ use player_core::{MediaItem, ReplayGainMode, Session};
 use player_playback::{
     Player, PlayerState, RodioPlayer, SymphoniaSource, open_stream, output_device_names,
 };
-use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::path::{Path, PathBuf};
+use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::thread;
 
 use crate::format;
@@ -58,6 +59,13 @@ pub struct Playback {
     crossfade: f32,
     /// A speed chosen in the bar, for the app to save to the settings.
     speed_change: Option<f32>,
+    /// The library database, where measured loudness is kept.
+    library: Option<PathBuf>,
+    /// Files asked to be measured, so each is asked once.
+    measuring: HashSet<PathBuf>,
+    /// The background measurer: the files to measure, and the ones it has finished.
+    measure_tx: Option<Sender<PathBuf>>,
+    measured_rx: Option<Receiver<PathBuf>>,
     /// Slider position in seconds. Follows the player unless the user is dragging.
     seek_secs: f64,
     dragging: bool,
@@ -120,6 +128,10 @@ impl Playback {
             speed: 1.0,
             crossfade: 0.0,
             speed_change: None,
+            library: None,
+            measuring: HashSet::new(),
+            measure_tx: None,
+            measured_rx: None,
             seek_secs: 0.0,
             dragging: false,
             error,
@@ -518,9 +530,10 @@ impl Playback {
     /// Choose how tracks are levelled with their ReplayGain tags. Applies to the current track too.
     pub fn set_replay_gain(&mut self, mode: ReplayGainMode) {
         self.replay_gain = mode;
-        self.gain = self.current().map_or(1.0, |item| {
-            player_core::replay_gain_factor(&item.path, mode)
-        });
+        self.gain = match self.current().map(|item| item.path.clone()) {
+            Some(path) => self.track_gain(&path),
+            None => 1.0,
+        };
         self.apply_volume();
     }
 
@@ -657,6 +670,7 @@ impl Playback {
     /// Keep the output one track ahead, so the next track follows without a gap. Called every
     /// frame. When the output has moved on to the armed track, the queue position follows it.
     fn sync_gapless(&mut self) {
+        self.poll_measured();
         if self.radio.is_some() {
             return;
         }
@@ -669,9 +683,10 @@ impl Playback {
                 self.index = index;
             }
             self.seek_secs = 0.0;
-            self.gain = self.current().map_or(1.0, |item| {
-                player_core::replay_gain_factor(&item.path, self.replay_gain)
-            });
+            self.gain = match self.current().map(|item| item.path.clone()) {
+                Some(path) => self.track_gain(&path),
+                None => 1.0,
+            };
             self.apply_volume();
         }
 
@@ -729,6 +744,71 @@ impl Playback {
                 .unwrap_or(usize::MAX)
         });
         self.queue.extend(tail);
+    }
+
+    /// Set the library database, where measured loudness is kept.
+    pub fn set_library(&mut self, db: PathBuf) {
+        self.library = Some(db);
+    }
+
+    /// The level change for a track. Its ReplayGain tags come first. A file without them is levelled
+    /// by its measured loudness, and a file not measured yet plays at its own level until it is.
+    fn track_gain(&mut self, path: &Path) -> f32 {
+        if self.replay_gain == ReplayGainMode::Off {
+            return 1.0;
+        }
+        if let Some(gain) = player_core::tag_gain(path, self.replay_gain) {
+            return gain;
+        }
+        if let Some((lufs, peak)) = self.stored_loudness(path) {
+            return player_core::loudness_factor(lufs, peak);
+        }
+        self.request_measure(path);
+        1.0
+    }
+
+    /// The loudness stored for a file, if it has been measured.
+    fn stored_loudness(&self, path: &Path) -> Option<(f64, f64)> {
+        let db = self.library.as_ref()?;
+        player_core::Library::open(db)
+            .ok()?
+            .loudness(path)
+            .ok()
+            .flatten()
+    }
+
+    /// Ask the background measurer for a file's loudness, once per file.
+    fn request_measure(&mut self, path: &Path) {
+        if self.measuring.contains(path) {
+            return;
+        }
+        let Some(db) = self.library.clone() else {
+            return;
+        };
+        if self.measure_tx.is_none() {
+            let (requests, done) = spawn_measurer(db);
+            self.measure_tx = Some(requests);
+            self.measured_rx = Some(done);
+        }
+        self.measuring.insert(path.to_path_buf());
+        if let Some(tx) = &self.measure_tx {
+            let _ = tx.send(path.to_path_buf());
+        }
+    }
+
+    /// Apply the loudness of a file the background measurer has finished, if it is the track
+    /// playing now.
+    fn poll_measured(&mut self) {
+        let Some(done) = &self.measured_rx else {
+            return;
+        };
+        let finished: Vec<PathBuf> = done.try_iter().collect();
+        for path in finished {
+            if self.current().is_some_and(|item| item.path == path) {
+                self.gain = self.track_gain(&path);
+                self.apply_volume();
+            }
+        }
     }
 
     /// Apply the playback speed and crossfade length from the settings. They reach the player only
@@ -802,7 +882,8 @@ impl Playback {
             Ok(()) => None,
             Err(e) => Some(format!("Could not play {}: {e}", format::title(&item))),
         };
-        self.gain = player_core::replay_gain_factor(&item.path, self.replay_gain);
+        let path = item.path.clone();
+        self.gain = self.track_gain(&path);
         self.apply_volume();
         self.dragging = false;
         self.seek_secs = 0.0;
@@ -1248,6 +1329,27 @@ fn mode_button(ui: &mut egui::Ui, icon: ModeIcon, active: bool) -> egui::Respons
     response
 }
 
+/// A background thread that measures the files it is sent, and stores each result in the library at
+/// `db`. It sends each file back once it is stored, so the player can apply the loudness.
+fn spawn_measurer(db: PathBuf) -> (Sender<PathBuf>, Receiver<PathBuf>) {
+    let (requests, queued) = mpsc::channel::<PathBuf>();
+    let (done_tx, done) = mpsc::channel::<PathBuf>();
+    thread::spawn(move || {
+        // Ends when the player is dropped, which closes the request channel.
+        for path in queued {
+            if let Some(measured) = player_playback::measure_loudness(&path)
+                && let Ok(library) = player_core::Library::open(&db)
+            {
+                let _ = library.set_loudness(&path, measured.lufs, measured.peak);
+            }
+            if done_tx.send(path).is_err() {
+                break;
+            }
+        }
+    });
+    (requests, done)
+}
+
 /// The playback speeds the bar's speed button steps through.
 const SPEEDS: [f32; 5] = [0.75, 1.0, 1.25, 1.5, 2.0];
 
@@ -1383,6 +1485,10 @@ mod tests {
             speed: 1.0,
             crossfade: 0.0,
             speed_change: None,
+            library: None,
+            measuring: HashSet::new(),
+            measure_tx: None,
+            measured_rx: None,
             seek_secs: 0.0,
             dragging: false,
             error: None,

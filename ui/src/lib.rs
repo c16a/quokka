@@ -134,6 +134,8 @@ fn preference(theme: Theme) -> egui::ThemePreference {
 
 impl App {
     fn new(ctx: egui::Context, paths: Paths, settings: Settings, library: Library) -> Self {
+        let mut playback = Playback::new();
+        playback.set_library(paths.db.clone());
         // Artist photos are cached beside the library database.
         let photo_dir = paths
             .db
@@ -174,7 +176,7 @@ impl App {
             albums: Default::default(),
             search: Default::default(),
             movies: Default::default(),
-            playback: Playback::new(),
+            playback,
             queue_view: Default::default(),
             artists: artists::ArtistsView::new(photo_dir),
             recent: Default::default(),
