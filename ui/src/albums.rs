@@ -13,6 +13,8 @@ use crate::queue;
 
 /// Height of a track row's content. Vertical padding comes from the row's frame.
 const TRACK_ROW_HEIGHT: f32 = 52.0;
+/// Gap between a track's title line and its artist line.
+const TITLE_GAP: f32 = 2.0;
 
 /// Colour of a favourite star.
 const FAVORITE_COLOR: egui::Color32 = egui::Color32::from_rgb(255, 196, 64);
@@ -29,7 +31,7 @@ fn sort_label(sort: AlbumSort) -> &'static str {
 /// Square side of a cover in the album grid, and in the album detail view.
 pub(crate) const TILE_COVER: f32 = 160.0;
 const COVER_DETAIL: f32 = 220.0;
-/// Codecs that are lossless, shown as "lossless" in an album's details.
+/// Codecs that are lossless. Their details show the codec alone, with no bitrate.
 const LOSSLESS: [&str; 7] = ["FLAC", "ALAC", "WAV", "AIFF", "APE", "WAVPACK", "PCM"];
 /// Space under a grid tile's cover for its title and composer, and the gap between tiles.
 pub(crate) const TILE_TEXT: f32 = 44.0;
@@ -125,6 +127,11 @@ impl AlbumsView {
     }
 
     /// Show album `index` in its detail view.
+    /// Whether an album's detail page is open rather than the grid.
+    pub fn showing_detail(&self) -> bool {
+        self.selected.is_some()
+    }
+
     pub fn open(&mut self, library: &Library, index: usize) {
         if index < self.albums.len() {
             self.selected = Some(index);
@@ -308,138 +315,123 @@ impl AlbumsView {
         let mut toggle_album = false;
         let mut toggle_track: Option<(String, bool)> = None;
 
-        // The page sits 36 px from the sidebar and 26 px from the top, as in the design.
-        egui::Frame::new()
-            .inner_margin(egui::Margin::symmetric(12, 6))
+        // The page sits 36 px from the sidebar and 26 px from the top, as in the design. The whole
+        // page scrolls, the header and the tracks together.
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
             .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    if album_back_button(ui).on_hover_text("All albums").clicked() {
-                        back = true;
-                    }
-                    ui.add_space(14.0);
-                    ui.label(egui::RichText::new("Albums").size(13.0).color(palette.weak));
-                });
-                ui.add_space(26.0);
+                egui::Frame::new()
+                    .inner_margin(egui::Margin::symmetric(36, 26))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            if album_back_button(ui).on_hover_text("All albums").clicked() {
+                                back = true;
+                            }
+                            ui.add_space(14.0);
+                            ui.label(egui::RichText::new("Albums").size(13.0).color(palette.weak));
+                        });
+                        ui.add_space(26.0);
 
-                // Cover on the left; the title block sits at the bottom of the cover's height.
-                let title = album
-                    .album
-                    .clone()
-                    .unwrap_or_else(|| "Unknown album".into());
-                let artist = album.artists.join(", ");
-                let total_ms: i64 = self.tracks.iter().filter_map(|t| t.duration_ms).sum();
-                let first = self.tracks.first();
-                let codec = first.and_then(|t| t.codec.clone());
-                let mut meta = Vec::new();
-                if let Some(year) = album.year {
-                    meta.push(year.to_string());
-                }
-                meta.push(format!("{} tracks", album.track_count));
-                if total_ms > 0 {
-                    meta.push(format::long_duration(total_ms));
-                }
-                if let Some(codec) = codec {
-                    let lossless = LOSSLESS.iter().any(|c| codec.eq_ignore_ascii_case(c));
-                    let kbps = first.and_then(|t| t.bitrate_kbps);
-                    meta.push(match kbps {
-                        _ if lossless => format!("{codec} lossless"),
-                        Some(kbps) => format!("{codec} {kbps} kbps"),
-                        None => codec,
-                    });
-                }
-                let meta = meta.join(" · ");
-
-                ui.horizontal(|ui| {
-                    cover_image(ui, cover.as_ref(), COVER_DETAIL);
-                    ui.add_space(28.0);
-                    ui.allocate_ui_with_layout(
-                        egui::vec2(ui.available_width(), COVER_DETAIL),
-                        egui::Layout::bottom_up(egui::Align::Min),
-                        |ui| {
-                            // Bottom-up: the actions come first, so they sit lowest.
-                            ui.spacing_mut().item_spacing.y = 10.0;
-                            ui.horizontal(|ui| {
-                                if pill(ui, &palette, "Play", PillIcon::Play, true).clicked() {
-                                    play = Some(PlayRequest {
-                                        tracks: self.tracks.clone(),
-                                        index: 0,
-                                    });
-                                }
-                                ui.add_space(10.0);
-                                if pill(ui, &palette, "Shuffle", PillIcon::Shuffle, false).clicked()
-                                {
-                                    play = Some(PlayRequest {
-                                        tracks: shuffled(self.tracks.clone()),
-                                        index: 0,
-                                    });
-                                }
-                                ui.add_space(10.0);
-                                let tip = if favorite_album {
-                                    "Remove from favourites"
-                                } else {
-                                    "Add to favourites"
-                                };
-                                if star_circle(ui, &palette, favorite_album)
-                                    .on_hover_text(tip)
-                                    .clicked()
-                                {
-                                    toggle_album = true;
-                                }
+                        // Cover on the left; the title block sits at the bottom of the cover's height.
+                        let title = album
+                            .album
+                            .clone()
+                            .unwrap_or_else(|| "Unknown album".into());
+                        let artist = album.artists.join(", ");
+                        let total_ms: i64 = self.tracks.iter().filter_map(|t| t.duration_ms).sum();
+                        let first = self.tracks.first();
+                        let codec = first.and_then(|t| t.codec.clone());
+                        let mut meta = Vec::new();
+                        if let Some(year) = album.year {
+                            meta.push(year.to_string());
+                        }
+                        // The genres of the album's tracks, each once, in the order they first appear.
+                        let mut genres: Vec<&str> = Vec::new();
+                        for genre in self.tracks.iter().filter_map(|t| t.genre.as_deref()) {
+                            if !genres.contains(&genre) {
+                                genres.push(genre);
+                            }
+                        }
+                        if !genres.is_empty() {
+                            meta.push(genres.join(", "));
+                        }
+                        if total_ms > 0 {
+                            meta.push(format::long_duration(total_ms));
+                        }
+                        if let Some(codec) = codec {
+                            let lossless = LOSSLESS.iter().any(|c| codec.eq_ignore_ascii_case(c));
+                            let kbps = first.and_then(|t| t.bitrate_kbps);
+                            meta.push(match kbps {
+                                _ if lossless => codec,
+                                Some(kbps) => format!("{codec} {kbps} kbps"),
+                                None => codec,
                             });
-                            ui.label(egui::RichText::new(meta).size(13.0).color(palette.weak));
-                            ui.label(egui::RichText::new(artist).size(16.0).color(palette.text));
-                            ui.label(
-                                egui::RichText::new(title)
-                                    .size(36.0)
-                                    .family(crate::fonts::bold_family())
-                                    .color(palette.text),
+                        }
+                        let meta = meta.join(" · ");
+
+                        ui.horizontal(|ui| {
+                            cover_image(ui, cover.as_ref(), COVER_DETAIL);
+                            ui.add_space(28.0);
+                            ui.allocate_ui_with_layout(
+                                egui::vec2(ui.available_width(), COVER_DETAIL),
+                                egui::Layout::bottom_up(egui::Align::Min),
+                                |ui| {
+                                    // Bottom-up: the actions come first, so they sit lowest.
+                                    ui.spacing_mut().item_spacing.y = 10.0;
+                                    ui.horizontal(|ui| {
+                                        if pill(ui, &palette, "Play", PillIcon::Play, true)
+                                            .clicked()
+                                        {
+                                            play = Some(PlayRequest {
+                                                tracks: self.tracks.clone(),
+                                                index: 0,
+                                            });
+                                        }
+                                        ui.add_space(10.0);
+                                        if pill(ui, &palette, "Shuffle", PillIcon::Shuffle, false)
+                                            .clicked()
+                                        {
+                                            play = Some(PlayRequest {
+                                                tracks: shuffled(self.tracks.clone()),
+                                                index: 0,
+                                            });
+                                        }
+                                        ui.add_space(10.0);
+                                        let tip = if favorite_album {
+                                            "Remove from favourites"
+                                        } else {
+                                            "Add to favourites"
+                                        };
+                                        if star_circle(ui, &palette, favorite_album)
+                                            .on_hover_text(tip)
+                                            .clicked()
+                                        {
+                                            toggle_album = true;
+                                        }
+                                    });
+                                    ui.label(
+                                        egui::RichText::new(meta).size(13.0).color(palette.weak),
+                                    );
+                                    ui.label(
+                                        egui::RichText::new(artist).size(16.0).color(palette.text),
+                                    );
+                                    ui.label(
+                                        egui::RichText::new(title)
+                                            .size(36.0)
+                                            .family(crate::fonts::bold_family())
+                                            .color(palette.text),
+                                    );
+                                    ui.label(
+                                        egui::RichText::new("ALBUM").size(11.0).color(palette.weak),
+                                    );
+                                },
                             );
-                            ui.label(egui::RichText::new("ALBUM").size(11.0).color(palette.weak));
-                        },
-                    );
-                });
+                        });
 
-                // Track list: a header row, then the tracks.
-                ui.add_space(26.0);
-                let width = ui.available_width();
-                let (header, _) =
-                    ui.allocate_exact_size(egui::vec2(width, 30.0), egui::Sense::hover());
-                let painter = ui.painter();
-                let header_font = egui::FontId::proportional(11.0);
-                painter.text(
-                    egui::pos2(header.left() + 14.0, header.center().y),
-                    egui::Align2::LEFT_CENTER,
-                    "#",
-                    header_font.clone(),
-                    palette.weak,
-                );
-                painter.text(
-                    egui::pos2(header.left() + 62.0, header.center().y),
-                    egui::Align2::LEFT_CENTER,
-                    "TITLE",
-                    header_font.clone(),
-                    palette.weak,
-                );
-                painter.text(
-                    egui::pos2(header.right() - 58.0, header.center().y),
-                    egui::Align2::RIGHT_CENTER,
-                    "TIME",
-                    header_font,
-                    palette.weak,
-                );
-                painter.line_segment(
-                    [
-                        egui::pos2(header.left(), header.bottom()),
-                        egui::pos2(header.right(), header.bottom()),
-                    ],
-                    egui::Stroke::new(1.0, palette.line),
-                );
-
-                let count = self.tracks.len();
-                egui::ScrollArea::vertical()
-                    .auto_shrink([false, false])
-                    .show_rows(ui, TRACK_ROW_HEIGHT, count, |ui, range| {
-                        for n in range {
+                        // The tracks, one row each.
+                        ui.add_space(26.0);
+                        let count = self.tracks.len();
+                        for n in 0..count {
                             let track = &self.tracks[n];
                             let is_current = current == Some(track.id);
                             let width = ui.available_width();
@@ -465,7 +457,7 @@ impl AlbumsView {
                                 painter.rect_filled(row, 8.0, palette.row);
                                 equaliser(
                                     &painter,
-                                    egui::pos2(row.left() + 14.0, centre_y + 8.0),
+                                    egui::pos2(row.left() + 22.0, centre_y),
                                     palette.accent,
                                 );
                             } else {
@@ -496,9 +488,15 @@ impl AlbumsView {
                             } else {
                                 (egui::FontId::proportional(14.0), palette.text)
                             };
+                            // The title and artist are one block, centred on the row.
+                            let artist_font = egui::FontId::proportional(12.0);
+                            let (title_h, artist_h) = ui.fonts_mut(|f| {
+                                (f.row_height(&title_font), f.row_height(&artist_font))
+                            });
+                            let block_top = centre_y - (title_h + TITLE_GAP + artist_h) / 2.0;
                             painter_clip.text(
-                                egui::pos2(title_x, centre_y - 9.0),
-                                egui::Align2::LEFT_CENTER,
+                                egui::pos2(title_x, block_top),
+                                egui::Align2::LEFT_TOP,
                                 format::title(track),
                                 title_font,
                                 title_colour,
@@ -509,10 +507,10 @@ impl AlbumsView {
                                 .or(track.album_artist.as_deref())
                                 .unwrap_or("");
                             painter_clip.text(
-                                egui::pos2(title_x, centre_y + 9.0),
-                                egui::Align2::LEFT_CENTER,
+                                egui::pos2(title_x, block_top + title_h + TITLE_GAP),
+                                egui::Align2::LEFT_TOP,
                                 track_artist,
-                                egui::FontId::proportional(12.0),
+                                artist_font,
                                 palette.weak,
                             );
 
@@ -533,15 +531,6 @@ impl AlbumsView {
                                 toggle_track = Some((key, !favorite));
                             }
 
-                            if !is_current && n + 1 < count {
-                                painter.line_segment(
-                                    [
-                                        egui::pos2(row.left(), row.bottom()),
-                                        egui::pos2(row.right(), row.bottom()),
-                                    ],
-                                    egui::Stroke::new(1.0, palette.line),
-                                );
-                            }
                             // Double-click anywhere on the row to play from this track, except on the star.
                             if response.double_clicked() && !star_response.hovered() {
                                 play = Some(PlayRequest {
@@ -788,7 +777,6 @@ struct AlbumPalette {
     text: egui::Color32,
     weak: egui::Color32,
     accent: egui::Color32,
-    line: egui::Color32,
     row: egui::Color32,
     fill: egui::Color32,
     on_fill: egui::Color32,
@@ -804,7 +792,6 @@ impl AlbumPalette {
                 text: egui::Color32::from_rgb(0xf2, 0xf2, 0xf4),
                 weak: egui::Color32::from_rgb(0x9a, 0x9a, 0xa2),
                 accent: egui::Color32::from_rgb(0x4d, 0xa3, 0xff),
-                line: egui::Color32::from_rgb(0x2a, 0x2a, 0x2f),
                 row: egui::Color32::from_rgb(0x1f, 0x1f, 0x23),
                 fill: egui::Color32::from_rgb(0xf2, 0xf2, 0xf4),
                 on_fill: egui::Color32::from_rgb(0x14, 0x14, 0x16),
@@ -816,7 +803,6 @@ impl AlbumPalette {
                 text: v.text_color(),
                 weak: v.weak_text_color(),
                 accent: v.hyperlink_color,
-                line: v.widgets.noninteractive.bg_stroke.color,
                 row: v.faint_bg_color,
                 fill: v.strong_text_color(),
                 on_fill: v.panel_fill,
@@ -913,8 +899,7 @@ fn album_back_button(ui: &mut egui::Ui) -> egui::Response {
     response
 }
 
-/// Three bars, bottom-aligned at `bottom`, marking the track that is playing.
-fn equaliser(painter: &egui::Painter, bottom: egui::Pos2, colour: egui::Color32) {
-    let centre = egui::pos2(bottom.x + 8.0, bottom.y - 8.0);
+/// The equaliser icon, centred on `centre`, marking the track that is playing.
+fn equaliser(painter: &egui::Painter, centre: egui::Pos2, colour: egui::Color32) {
     icons::paint(painter, centre, icons::EQUALIZER, 16.0, colour);
 }

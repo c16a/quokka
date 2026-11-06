@@ -324,6 +324,7 @@ impl PlaylistsView {
                 .show_rows(ui, ROW_PITCH, len, |ui, range| {
                     for n in range {
                         let track = &self.tracks[n];
+                        let background = ui.painter().add(egui::Shape::Noop);
                         let row_rect = ui
                             .allocate_ui_with_layout(
                                 egui::vec2(ui.available_width(), ROW_HEIGHT),
@@ -348,36 +349,81 @@ impl PlaylistsView {
                                         drag_stopped = Some(n);
                                     }
                                     ui.add_space(6.0);
-                                    // The position in the playlist, numbered as in the album listing.
+                                    // The position in the playlist, as in the album listing. The track
+                                    // that is playing shows the equaliser instead.
                                     let (number, _) = ui.allocate_exact_size(
                                         egui::vec2(28.0, 36.0),
                                         egui::Sense::hover(),
                                     );
-                                    ui.painter().text(
-                                        number.left_center(),
-                                        egui::Align2::LEFT_CENTER,
-                                        (n + 1).to_string(),
-                                        egui::FontId::proportional(13.0),
-                                        ui.visuals().weak_text_color(),
-                                    );
+                                    if current == Some(track.id) {
+                                        icons::paint(
+                                            ui.painter(),
+                                            number.center(),
+                                            icons::EQUALIZER,
+                                            16.0,
+                                            ui.visuals().hyperlink_color,
+                                        );
+                                    } else {
+                                        ui.painter().text(
+                                            number.left_center(),
+                                            egui::Align2::LEFT_CENTER,
+                                            (n + 1).to_string(),
+                                            egui::FontId::proportional(13.0),
+                                            ui.visuals().weak_text_color(),
+                                        );
+                                    }
                                     let cover = self.thumbs.get(ui.ctx(), track);
                                     thumbnail(ui, cover.as_ref());
                                     ui.add_space(8.0);
-                                    ui.vertical(|ui| {
-                                        let title = format::title(track);
-                                        if current == Some(track.id) {
-                                            ui.label(crate::fonts::bold(title));
-                                        } else {
-                                            ui.label(title);
-                                        }
-                                        if let Some(artist) = track
-                                            .artist
-                                            .as_deref()
-                                            .or(track.album_artist.as_deref())
-                                        {
-                                            ui.weak(artist);
-                                        }
-                                    });
+                                    // Title and artist: one block, centred on the row by the ink of its glyphs.
+                                    let (block, _) = ui.allocate_exact_size(
+                                        egui::vec2(240.0, ROW_HEIGHT),
+                                        egui::Sense::hover(),
+                                    );
+                                    let title = format::title(track);
+                                    let artist = track
+                                        .artist
+                                        .as_deref()
+                                        .or(track.album_artist.as_deref())
+                                        .unwrap_or("")
+                                        .to_owned();
+                                    let (title_colour, title_font) = if current == Some(track.id) {
+                                        (
+                                            ui.visuals().hyperlink_color,
+                                            egui::FontId::new(14.0, crate::fonts::bold_family()),
+                                        )
+                                    } else {
+                                        (
+                                            ui.visuals().text_color(),
+                                            egui::FontId::proportional(14.0),
+                                        )
+                                    };
+                                    let artist_colour = ui.visuals().weak_text_color();
+                                    let painter = ui.painter();
+                                    let title_galley =
+                                        painter.layout_no_wrap(title, title_font, title_colour);
+                                    let artist_galley = painter.layout_no_wrap(
+                                        artist,
+                                        egui::FontId::proportional(12.0),
+                                        artist_colour,
+                                    );
+                                    // The ink runs from the top of the title's glyphs to the bottom of the artist's.
+                                    let ink_top = title_galley.mesh_bounds.top();
+                                    let ink_bottom = title_galley.size().y
+                                        + TITLE_GAP
+                                        + artist_galley.mesh_bounds.bottom();
+                                    let top = block.center().y - (ink_top + ink_bottom) / 2.0;
+                                    let artist_top = top + title_galley.size().y + TITLE_GAP;
+                                    painter.galley(
+                                        egui::pos2(block.left(), top),
+                                        title_galley,
+                                        title_colour,
+                                    );
+                                    painter.galley(
+                                        egui::pos2(block.left(), artist_top),
+                                        artist_galley,
+                                        artist_colour,
+                                    );
                                     ui.with_layout(
                                         egui::Layout::right_to_left(egui::Align::Center),
                                         |ui| {
@@ -418,6 +464,16 @@ impl PlaylistsView {
                             )
                             .response
                             .rect;
+                        if current == Some(track.id) {
+                            ui.painter().set(
+                                background,
+                                egui::Shape::rect_filled(
+                                    row_rect,
+                                    8.0,
+                                    ui.visuals().faint_bg_color,
+                                ),
+                            );
+                        }
                         if ui.rect_contains_pointer(row_rect) {
                             hovered_now = Some(n);
                         }
@@ -498,8 +554,10 @@ impl PlaylistsView {
 }
 
 /// Height of a track row, and the distance from one row's top to the next.
-const ROW_HEIGHT: f32 = 40.0;
-const ROW_PITCH: f32 = 44.0;
+const ROW_HEIGHT: f32 = 52.0;
+/// Gap between a track's title line and its artist line.
+const TITLE_GAP: f32 = 2.0;
+const ROW_PITCH: f32 = 56.0;
 
 /// Size of a playlist card, and the gap between cards. They match the radio station cards.
 pub(crate) const CARD_WIDTH: f32 = 260.0;

@@ -574,7 +574,10 @@ impl eframe::App for App {
         let mut radio_action = None;
         let mut play = None;
         // The Radio page pads its own content, so its scrollbar can reach the window edge.
-        let main_frame = if self.tab == Tab::Radio {
+        // The album page scrolls with the window's right edge, so it keeps its own padding.
+        let full_width =
+            self.tab == Tab::Radio || (self.tab == Tab::Albums && self.albums.showing_detail());
+        let main_frame = if full_width {
             egui::Frame::central_panel(ui.style()).inner_margin(egui::Margin::same(0))
         } else {
             egui::Frame::central_panel(ui.style()).inner_margin(egui::Margin::symmetric(24, 20))
