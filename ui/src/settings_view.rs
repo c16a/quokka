@@ -82,6 +82,31 @@ fn card(ui: &mut egui::Ui, colours: &LibraryColours, add_contents: impl FnOnce(&
         });
 }
 
+/// The width below which a setting's control goes under its label instead of beside it.
+const STACK_BELOW: f32 = 480.0;
+
+/// A setting row: the label on the left and the control on the right. In a narrow card the control goes
+/// under the label instead, so it cannot run past the card's left edge.
+fn setting_row(
+    ui: &mut egui::Ui,
+    align: egui::Align,
+    leading: impl FnOnce(&mut egui::Ui),
+    trailing: impl FnOnce(&mut egui::Ui),
+) {
+    if ui.available_width() < STACK_BELOW {
+        ui.vertical(|ui| {
+            leading(ui);
+            ui.add_space(10.0);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), trailing);
+        });
+    } else {
+        ui.horizontal(|ui| {
+            ui.vertical(leading);
+            ui.with_layout(egui::Layout::right_to_left(align), trailing);
+        });
+    }
+}
+
 /// A row of options drawn as one pill-shaped segmented control. The chosen option is filled. Returns
 /// the option the user picked, if it is a different one.
 fn segmented<T: Copy + PartialEq>(
@@ -91,13 +116,19 @@ fn segmented<T: Copy + PartialEq>(
     current: T,
 ) -> Option<T> {
     let mut picked = None;
+    // Tighter pills in a narrow card, so the options fit beside or under the label.
+    let padding = if ui.available_width() < 300.0 {
+        12.0
+    } else {
+        22.0
+    };
     egui::Frame::new()
         .fill(colours.segment)
         .corner_radius(999.0)
         .inner_margin(egui::Margin::symmetric(3, 3))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.spacing_mut().button_padding.x = 22.0;
+                ui.spacing_mut().button_padding.x = padding;
                 for &(value, label) in options {
                     let selected = value == current;
                     let (fill, text) = if selected {
@@ -216,7 +247,11 @@ fn folder_row(
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
-                // Laid out right to left: the buttons keep their room, and the path takes what is left.
+                // The icon sits on the left. The buttons keep their room on the right, and the path takes what is
+                // left between them. The icon comes first so the path, which fills its space, cannot push it out.
+                let (icon, _) =
+                    ui.allocate_exact_size(egui::vec2(20.0, 20.0), egui::Sense::hover());
+                folder_icon(ui.painter(), icon, colours.text);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if row_button(ui, "Remove", egui::Color32::TRANSPARENT, colours.red) {
                         action = Some(Action::RemoveFolder(index));
@@ -240,9 +275,6 @@ fn folder_row(
                                 .color(colours.weak),
                         );
                     });
-                    let (icon, _) =
-                        ui.allocate_exact_size(egui::vec2(20.0, 20.0), egui::Sense::hover());
-                    folder_icon(ui.painter(), icon, colours.text);
                 });
             });
             if unset {
@@ -299,7 +331,7 @@ pub fn show(
         .show(ui, |ui| {
     // The padding is inside the scroll area, so the scrollbar sits at the window's edge.
     egui::Frame::new()
-        .inner_margin(egui::Margin::symmetric(24, 20))
+        .inner_margin(egui::Margin::symmetric(32, 32))
         .show(ui, |ui| {
     crate::fonts::page_title(ui, "Settings");
     ui.add_space(12.0);
@@ -312,8 +344,10 @@ pub fn show(
         .unwrap_or(LibraryKind::Music);
 
     ui.add_enabled_ui(!busy, |ui| {
-        ui.horizontal(|ui| {
-            ui.vertical(|ui| {
+        setting_row(
+            ui,
+            egui::Align::Center,
+            |ui| {
                 ui.heading("Library");
                 let summary = match folders {
                     0 => "No folders yet.".to_owned(),
@@ -321,9 +355,9 @@ pub fn show(
                     n => format!("{n} folders · {files} files"),
                 };
                 ui.label(egui::RichText::new(summary).size(14.0).color(colours.weak));
-            });
-            if folders > 0 {
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            },
+            |ui| {
+                if folders > 0 {
                     // Wider than the other buttons, so the label has room on each side.
                     let clicked = ui
                         .scope(|ui| {
@@ -334,9 +368,9 @@ pub fn show(
                     if clicked {
                         action = Some(Action::RescanAll);
                     }
-                });
-            }
-        });
+                }
+            },
+        );
         if !status.is_empty() {
             ui.add_space(4.0);
             ui.label(egui::RichText::new(status).size(13.0).color(colours.weak));
@@ -480,9 +514,13 @@ pub fn show(
     card(ui, &colours, |ui| {
         ui.label(egui::RichText::new("Appearance").size(16.0).strong());
         ui.add_space(14.0);
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("Theme").size(14.0).color(colours.weak));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        setting_row(
+            ui,
+            egui::Align::Center,
+            |ui| {
+                ui.label(egui::RichText::new("Theme").size(14.0).color(colours.weak));
+            },
+            |ui| {
                 // Listed in reverse: the row is right-to-left, so the first option ends up rightmost.
                 let themes = [
                     (Theme::Dark, "Dark"),
@@ -492,21 +530,23 @@ pub fn show(
                 if let Some(theme) = segmented(ui, &colours, &themes, settings.theme) {
                     action = Some(Action::SetTheme(theme));
                 }
-            });
-        });
+            },
+        );
     });
 
     ui.add_space(14.0);
     card(ui, &colours, |ui| {
         ui.label(egui::RichText::new("Playback").size(16.0).strong());
         ui.add_space(14.0);
-        ui.horizontal(|ui| {
-            ui.vertical(|ui| {
-                ui.set_max_width(420.0);
+        setting_row(
+            ui,
+            egui::Align::Min,
+            |ui| {
+                ui.set_max_width(ui.available_width().min(420.0));
                 ui.label(egui::RichText::new("Loudness").size(14.0).color(colours.text));
                 ui.label(egui::RichText::new("Levels tracks to the same loudness. Files with ReplayGain tags use them; other files are measured in the background as they play, and keep their own level until then.").size(13.0).color(colours.weak));
-            });
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+            },
+            |ui| {
                 // Listed in reverse, as above.
                 let modes = [
                     (ReplayGainMode::Album, "Album"),
@@ -516,8 +556,8 @@ pub fn show(
                 if let Some(mode) = segmented(ui, &colours, &modes, settings.replay_gain) {
                     action = Some(Action::SetReplayGain(mode));
                 }
-            });
-        });
+            },
+        );
         ui.add_space(16.0);
         ui.separator();
         ui.add_space(16.0);
@@ -541,14 +581,18 @@ pub fn show(
     card(ui, &colours, |ui| {
         ui.label(egui::RichText::new("Lyrics").size(16.0).strong());
         ui.add_space(14.0);
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("Look up synced lyrics on lrclib.net").size(14.0).color(colours.text));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        setting_row(
+            ui,
+            egui::Align::Center,
+            |ui| {
+                ui.label(egui::RichText::new("Look up synced lyrics on lrclib.net").size(14.0).color(colours.text));
+            },
+            |ui| {
                 if switch(ui, &colours, settings.lyrics_online) {
                     action = Some(Action::SetLyricsOnline(!settings.lyrics_online));
                 }
-            });
-        });
+            },
+        );
         ui.add_space(8.0);
         ui.label(egui::RichText::new("For tracks with no .lrc file beside them. Sends each track's title, artist, album and length to lrclib.net. Lyrics found are cached in the library. A .lrc file always takes priority.").size(13.0).color(colours.weak));
     });

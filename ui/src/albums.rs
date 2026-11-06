@@ -31,6 +31,9 @@ fn sort_label(sort: AlbumSort) -> &'static str {
 /// Square side of a cover in the album grid, and in the album detail view.
 pub(crate) const TILE_COVER: f32 = 160.0;
 const COVER_DETAIL: f32 = 220.0;
+/// The album cover on a narrow page, and the width below which the page is laid out as a phone column.
+const COVER_PHONE: f32 = 220.0;
+const NARROW_DETAIL: f32 = 560.0;
 /// Codecs that are lossless. Their details show the codec alone, with no bitrate.
 const LOSSLESS: [&str; 7] = ["FLAC", "ALAC", "WAV", "AIFF", "APE", "WAVPACK", "PCM"];
 /// Space under a grid tile's cover for its title and composer, and the gap between tiles.
@@ -204,25 +207,26 @@ impl AlbumsView {
         queue: &mut Vec<MenuRequest>,
         playlists: &[PlaylistSummary],
     ) -> Option<PlayRequest> {
-        if self.selected.is_none() {
-            crate::fonts::page_title(ui, "Albums");
-            self.toolbar(ui, library);
-        }
-        if self.albums.is_empty() {
-            if self.filter_active() {
-                ui.label("No albums match these filters.");
-            } else {
-                ui.label("No albums yet. Choose your library folder in Settings.");
-            }
-            return None;
-        }
         let ctx = ui.ctx().clone();
-
         let mut play = None;
         let mut back = false;
         let mut open = None;
         match self.selected {
-            None => open = self.grid(ui, &ctx, library),
+            None => {
+                open = crate::page(ui, egui::Margin::symmetric(0, 0), |ui| {
+                    crate::fonts::page_title(ui, "Albums");
+                    self.toolbar(ui, library);
+                    if self.albums.is_empty() {
+                        if self.filter_active() {
+                            ui.label("No albums match these filters.");
+                        } else {
+                            ui.label("No albums yet. Choose your library folder in Settings.");
+                        }
+                        return None;
+                    }
+                    self.grid(ui, &ctx, library)
+                });
+            }
             Some(i) => {
                 let (request, go_back) = self.detail(ui, library, current, i, queue, playlists);
                 play = request;
@@ -288,34 +292,31 @@ impl AlbumsView {
         }
     }
 
-    /// The album grid. Returns the album the user clicked, if any.
+    /// The album grid, as rows of tiles. It sits inside the page's scroll area. Returns the album the user
+    /// clicked, if any.
     fn grid(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, library: &Library) -> Option<usize> {
         let columns = ((ui.available_width() + TILE_GAP) / (TILE_COVER + TILE_GAP))
             .floor()
             .max(1.0) as usize;
-        let row_height = TILE_COVER + TILE_TEXT + TILE_GAP;
-        let rows = self.albums.len().div_ceil(columns);
+        let count = self.albums.len();
         let mut opened = None;
-        egui::ScrollArea::vertical()
-            .auto_shrink([false, false])
-            .show_rows(ui, row_height, rows, |ui, range| {
-                for row in range {
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = TILE_GAP;
-                        for column in 0..columns {
-                            let i = row * columns + column;
-                            if i >= self.albums.len() {
-                                break;
-                            }
-                            let cover = self.cover_for(ctx, library, i);
-                            let album = &self.albums[i];
-                            if album_tile(ui, cover.as_ref(), album).clicked() {
-                                opened = Some(i);
-                            }
-                        }
-                    });
+        for row in 0..count.div_ceil(columns) {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = TILE_GAP;
+                for column in 0..columns {
+                    let i = row * columns + column;
+                    if i >= count {
+                        break;
+                    }
+                    let cover = self.cover_for(ctx, library, i);
+                    let album = &self.albums[i];
+                    if album_tile(ui, cover.as_ref(), album).clicked() {
+                        opened = Some(i);
+                    }
                 }
             });
+            ui.add_space(TILE_GAP);
+        }
         opened
     }
 
@@ -341,13 +342,13 @@ impl AlbumsView {
         let mut toggle_album = false;
         let mut toggle_track: Option<(String, bool)> = None;
 
-        // The page sits 36 px from the sidebar and 26 px from the top, as in the design. The whole
-        // page scrolls, the header and the tracks together.
+        // The page sits 32 px from the sidebar and from the top. The whole page scrolls, the header and
+        // the tracks together.
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 egui::Frame::new()
-                    .inner_margin(egui::Margin::symmetric(36, 26))
+                    .inner_margin(egui::Margin::symmetric(32, 32))
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
                             if album_back_button(ui).on_hover_text("All albums").clicked() {
@@ -393,67 +394,100 @@ impl AlbumsView {
                         }
                         let meta = meta.join(" · ");
 
-                        ui.horizontal(|ui| {
-                            cover_image(ui, cover.as_ref(), COVER_DETAIL);
-                            ui.add_space(28.0);
-                            ui.allocate_ui_with_layout(
-                                egui::vec2(ui.available_width(), COVER_DETAIL),
-                                egui::Layout::bottom_up(egui::Align::Min),
-                                |ui| {
-                                    // Bottom-up: the actions come first, so they sit lowest.
-                                    ui.spacing_mut().item_spacing.y = 10.0;
-                                    ui.horizontal(|ui| {
-                                        if pill(ui, &palette, "Play", PillIcon::Play, true)
-                                            .clicked()
-                                        {
-                                            play = Some(PlayRequest {
-                                                tracks: self.tracks.clone(),
-                                                index: 0,
-                                            });
-                                        }
-                                        ui.add_space(10.0);
-                                        if pill(ui, &palette, "Shuffle", PillIcon::Shuffle, false)
-                                            .clicked()
-                                        {
-                                            play = Some(PlayRequest {
-                                                tracks: shuffled(self.tracks.clone()),
-                                                index: 0,
-                                            });
-                                        }
-                                        ui.add_space(10.0);
-                                        let tip = if favorite_album {
-                                            "Remove from favourites"
-                                        } else {
-                                            "Add to favourites"
-                                        };
-                                        if star_circle(ui, &palette, favorite_album)
-                                            .on_hover_text(tip)
-                                            .clicked()
-                                        {
-                                            toggle_album = true;
-                                        }
+                        let narrow = ui.available_width() < NARROW_DETAIL;
+                        // The actions: Play, Shuffle and the favourite star.
+                        let mut actions = |ui: &mut egui::Ui| {
+                            ui.horizontal(|ui| {
+                                if pill(ui, &palette, "Play", PillIcon::Play, true).clicked() {
+                                    play = Some(PlayRequest {
+                                        tracks: self.tracks.clone(),
+                                        index: 0,
                                     });
-                                    ui.label(
-                                        egui::RichText::new(meta).size(13.0).color(palette.weak),
-                                    );
-                                    ui.label(
-                                        egui::RichText::new(artist).size(16.0).color(palette.text),
-                                    );
-                                    ui.label(
-                                        egui::RichText::new(title)
-                                            .size(36.0)
-                                            .family(crate::fonts::bold_family())
-                                            .color(palette.text),
-                                    );
-                                    ui.label(
-                                        egui::RichText::new("ALBUM").size(11.0).color(palette.weak),
-                                    );
-                                },
-                            );
-                        });
+                                }
+                                ui.add_space(10.0);
+                                if pill(ui, &palette, "Shuffle", PillIcon::Shuffle, false).clicked()
+                                {
+                                    play = Some(PlayRequest {
+                                        tracks: shuffled(self.tracks.clone()),
+                                        index: 0,
+                                    });
+                                }
+                                ui.add_space(10.0);
+                                let tip = if favorite_album {
+                                    "Remove from favourites"
+                                } else {
+                                    "Add to favourites"
+                                };
+                                if star_circle(ui, &palette, favorite_album)
+                                    .on_hover_text(tip)
+                                    .clicked()
+                                {
+                                    toggle_album = true;
+                                }
+                            });
+                        };
+                        if narrow {
+                            // A narrow window: one centred column, with the cover, then the title and actions.
+                            ui.vertical_centered(|ui| {
+                                cover_image(ui, cover.as_ref(), COVER_PHONE);
+                                ui.add_space(22.0);
+                                ui.label(
+                                    egui::RichText::new("ALBUM").size(11.0).color(palette.weak),
+                                );
+                                ui.label(
+                                    egui::RichText::new(title)
+                                        .size(24.0)
+                                        .family(crate::fonts::bold_family())
+                                        .color(palette.text),
+                                );
+                                ui.label(
+                                    egui::RichText::new(artist).size(15.0).color(palette.text),
+                                );
+                                ui.label(egui::RichText::new(meta).size(13.0).color(palette.weak));
+                                ui.add_space(16.0);
+                                actions(ui);
+                            });
+                        } else {
+                            ui.horizontal(|ui| {
+                                cover_image(ui, cover.as_ref(), COVER_DETAIL);
+                                ui.add_space(28.0);
+                                ui.allocate_ui_with_layout(
+                                    egui::vec2(ui.available_width(), COVER_DETAIL),
+                                    egui::Layout::bottom_up(egui::Align::Min),
+                                    |ui| {
+                                        // Bottom-up: the actions come first, so they sit lowest.
+                                        ui.spacing_mut().item_spacing.y = 10.0;
+                                        actions(ui);
+                                        ui.label(
+                                            egui::RichText::new(meta)
+                                                .size(13.0)
+                                                .color(palette.weak),
+                                        );
+                                        ui.label(
+                                            egui::RichText::new(artist)
+                                                .size(16.0)
+                                                .color(palette.text),
+                                        );
+                                        ui.label(
+                                            egui::RichText::new(title)
+                                                .size(36.0)
+                                                .family(crate::fonts::bold_family())
+                                                .color(palette.text),
+                                        );
+                                        ui.label(
+                                            egui::RichText::new("ALBUM")
+                                                .size(11.0)
+                                                .color(palette.weak),
+                                        );
+                                    },
+                                );
+                            });
+                        }
 
                         // The tracks, one row each.
                         ui.add_space(26.0);
+                        // The room at the right of a row for the duration and the star. A narrow page needs less.
+                        let track_reserve = if narrow { 110.0 } else { 148.0 };
                         let count = self.tracks.len();
                         for n in 0..count {
                             let track = &self.tracks[n];
@@ -467,7 +501,10 @@ impl AlbumsView {
                             let key = track.path.to_string_lossy().into_owned();
                             let favorite = self.favorite_tracks.contains(&key);
                             let star = egui::Rect::from_center_size(
-                                egui::pos2(row.right() - 28.0, centre_y),
+                                egui::pos2(
+                                    row.right() - if narrow { 22.0 } else { 28.0 },
+                                    centre_y,
+                                ),
                                 egui::vec2(28.0, 28.0),
                             );
                             let star_response = ui.interact(
@@ -481,7 +518,10 @@ impl AlbumsView {
                                 painter.rect_filled(row, 8.0, palette.row);
                                 equaliser(
                                     &painter,
-                                    egui::pos2(row.left() + 22.0, centre_y),
+                                    egui::pos2(
+                                        row.left() + if narrow { 20.0 } else { 22.0 },
+                                        centre_y,
+                                    ),
                                     palette.accent,
                                 );
                             } else {
@@ -490,7 +530,10 @@ impl AlbumsView {
                                     .map(|t| t.to_string())
                                     .unwrap_or_else(|| (n + 1).to_string());
                                 painter.text(
-                                    egui::pos2(row.left() + 14.0, centre_y),
+                                    egui::pos2(
+                                        row.left() + if narrow { 16.0 } else { 14.0 },
+                                        centre_y,
+                                    ),
                                     egui::Align2::LEFT_CENTER,
                                     number,
                                     egui::FontId::proportional(13.0),
@@ -498,10 +541,10 @@ impl AlbumsView {
                                 );
                             }
 
-                            let title_x = row.left() + 62.0;
+                            let title_x = row.left() + if narrow { 44.0 } else { 62.0 };
                             let title_clip = egui::Rect::from_min_max(
                                 egui::pos2(title_x, row.top()),
-                                egui::pos2(row.right() - 148.0 - 8.0, row.bottom()),
+                                egui::pos2(row.right() - track_reserve - 8.0, row.bottom()),
                             );
                             let painter_clip = painter.with_clip_rect(title_clip);
                             let (title_font, title_colour) = if is_current {
@@ -539,7 +582,10 @@ impl AlbumsView {
                             );
 
                             painter.text(
-                                egui::pos2(row.right() - 58.0, centre_y),
+                                egui::pos2(
+                                    row.right() - if narrow { 52.0 } else { 58.0 },
+                                    centre_y,
+                                ),
                                 egui::Align2::RIGHT_CENTER,
                                 format::duration(track.duration_ms),
                                 egui::FontId::proportional(13.0),

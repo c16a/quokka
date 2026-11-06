@@ -1365,7 +1365,7 @@ fn show_compact(
     const GAP: f32 = 8.0;
     let mut command = None;
     egui::Frame::new()
-        .inner_margin(egui::Margin::symmetric(16, 6))
+        .inner_margin(egui::Margin::symmetric(24, 12))
         .show(ui, |ui| {
             // Each item gets its own rectangle, centred on the row's line, so the items share one centre line.
             let (row, _) =
@@ -1426,9 +1426,14 @@ fn show_compact(
                                 )
                                 .truncate(),
                             );
+                            // Artist, then " - " and the album name, as in the wide bar. The line is cut short at the edge.
+                            let line = match item.album.as_deref().filter(|a| !a.is_empty()) {
+                                Some(album) => format!("{artist} - {album}"),
+                                None => artist.to_owned(),
+                            };
                             ui.add(
                                 egui::Label::new(
-                                    egui::RichText::new(artist).size(12.0).color(track_dim),
+                                    egui::RichText::new(line).size(12.0).color(track_dim),
                                 )
                                 .truncate(),
                             );

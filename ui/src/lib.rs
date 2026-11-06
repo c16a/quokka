@@ -115,7 +115,9 @@ pub fn run(paths: Paths) -> Result<(), Box<dyn std::error::Error>> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Player")
-            .with_inner_size([1100.0, 720.0]),
+            .with_inner_size([1100.0, 720.0])
+            // The narrowest the window can be dragged. Narrow layouts still need room for the page padding and the rail.
+            .with_min_inner_size([MIN_WINDOW_WIDTH, 0.0]),
         renderer: eframe::Renderer::Wgpu,
         ..Default::default()
     };
@@ -679,11 +681,13 @@ impl eframe::App for App {
         // The album page scrolls with the window's right edge, so it keeps its own padding.
         let full_width = self.tab == Tab::Radio
             || self.tab == Tab::Settings
+            || (self.tab == Tab::Artists && !self.artists.showing_detail())
+            || (self.tab == Tab::Playlists && !self.playlists.showing_detail())
             || (self.tab == Tab::Albums && self.albums.showing_detail());
         let main_frame = if full_width {
             egui::Frame::central_panel(ui.style()).inner_margin(egui::Margin::same(0))
         } else {
-            egui::Frame::central_panel(ui.style()).inner_margin(egui::Margin::symmetric(24, 20))
+            egui::Frame::central_panel(ui.style()).inner_margin(egui::Margin::symmetric(32, 32))
         };
         egui::CentralPanel::default()
             .frame(main_frame)
@@ -872,6 +876,24 @@ impl eframe::App for App {
     }
 }
 
+/// A page that scrolls as a whole: its title and content sit in one scroll area, padded inside it by `margin`,
+/// so the scroll bar is at the window's right edge.
+pub(crate) fn page<R>(
+    ui: &mut egui::Ui,
+    margin: egui::Margin,
+    add_contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
+    egui::ScrollArea::vertical()
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            egui::Frame::new()
+                .inner_margin(margin)
+                .show(ui, add_contents)
+                .inner
+        })
+        .inner
+}
+
 /// Clip what is drawn in `ui` to above `bottom`, so a panel cannot draw over the playback bar.
 fn clip_above(ui: &mut egui::Ui, bottom: f32) {
     let clip = ui.clip_rect();
@@ -883,6 +905,8 @@ fn clip_above(ui: &mut egui::Ui, bottom: f32) {
 
 /// Window width below which the sidebar starts collapsed.
 const NARROW_WINDOW: f32 = 720.0;
+/// The narrowest width the window can be resized to, in points.
+const MIN_WINDOW_WIDTH: f32 = 400.0;
 /// Width of the sidebar when it is open, and of the rail it collapses to.
 const SIDEBAR_WIDTH: f32 = 200.0;
 const SIDEBAR_RAIL: f32 = 52.0;

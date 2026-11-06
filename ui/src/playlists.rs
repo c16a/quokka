@@ -79,6 +79,11 @@ impl PlaylistsView {
     }
 
     /// Draw the view. Returns a play request when the user asks to play the open playlist.
+    /// Whether one playlist's page is open rather than the list.
+    pub fn showing_detail(&self) -> bool {
+        self.selected.is_some()
+    }
+
     pub fn show(
         &mut self,
         ui: &mut egui::Ui,
@@ -89,7 +94,9 @@ impl PlaylistsView {
     ) -> Option<PlayRequest> {
         match self.selected {
             None => {
-                self.list(ui, library);
+                crate::page(ui, egui::Margin::symmetric(32, 32), |ui| {
+                    self.list(ui, library)
+                });
                 None
             }
             Some(_) => self.detail(ui, library, current, queue, playlists),
@@ -168,42 +175,39 @@ impl PlaylistsView {
         }
         let mut delete = None;
         let mut rename = None;
-        egui::ScrollArea::vertical()
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                // As many fixed-width columns as the window fits.
-                let columns =
-                    (((ui.available_width() + CARD_GAP) / (CARD_WIDTH + CARD_GAP)).floor()
-                        as usize)
-                        .max(1);
-                egui::Grid::new("playlist_grid")
-                    .num_columns(columns)
-                    .spacing([CARD_GAP, CARD_GAP])
-                    .min_col_width(CARD_WIDTH)
-                    .max_col_width(CARD_WIDTH)
-                    .show(ui, |ui| {
-                        for (n, playlist) in self.playlists.iter().enumerate() {
-                            let response = playlist_card(ui, playlist);
-                            if response.clicked() {
-                                self.selected = Some(playlist.id);
-                            }
-                            response.context_menu(|ui| {
-                                if ui.button("Rename").clicked() {
-                                    rename = Some((playlist.id, playlist.name.clone()));
-                                    ui.close();
-                                }
-                                if ui.button("Delete playlist").clicked() {
-                                    delete = Some(playlist.id);
-                                    ui.close();
-                                }
-                            });
-                            if (n + 1) % columns == 0 {
-                                ui.end_row();
-                            }
+        {
+            // As many fixed-width columns as the window fits.
+            let columns = (((ui.available_width() + CARD_GAP) / (CARD_WIDTH + CARD_GAP)).floor()
+                as usize)
+                .max(1);
+            egui::Grid::new("playlist_grid")
+                .num_columns(columns)
+                .spacing([CARD_GAP, CARD_GAP])
+                .min_col_width(CARD_WIDTH)
+                .max_col_width(CARD_WIDTH)
+                .show(ui, |ui| {
+                    for (n, playlist) in self.playlists.iter().enumerate() {
+                        let response = playlist_card(ui, playlist);
+                        if response.clicked() {
+                            self.selected = Some(playlist.id);
                         }
-                        ui.end_row();
-                    });
-            });
+                        response.context_menu(|ui| {
+                            if ui.button("Rename").clicked() {
+                                rename = Some((playlist.id, playlist.name.clone()));
+                                ui.close();
+                            }
+                            if ui.button("Delete playlist").clicked() {
+                                delete = Some(playlist.id);
+                                ui.close();
+                            }
+                        });
+                        if (n + 1) % columns == 0 {
+                            ui.end_row();
+                        }
+                    }
+                    ui.end_row();
+                });
+        }
         if let Some((id, name)) = rename {
             self.selected = Some(id);
             self.renaming = Some(name);

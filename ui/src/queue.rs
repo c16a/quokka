@@ -87,7 +87,7 @@ pub fn show(ui: &mut egui::Ui, view: &mut QueueView, playback: &mut Playback) {
                             ui.add_space(6.0);
                             ui.vertical(|ui| {
                                 // Leave room on the right for the duration and the remove button.
-                                ui.set_max_width(ui.available_width() - 80.0);
+                                ui.set_max_width((ui.available_width() - 80.0).max(0.0));
                                 ui.add(egui::Label::new(format::title(item)).truncate());
                                 if let Some(artist) =
                                     item.artist.as_deref().or(item.album_artist.as_deref())

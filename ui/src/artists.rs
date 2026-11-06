@@ -55,6 +55,11 @@ impl ArtistsView {
     }
 
     /// Draw the view. Returns the album (its position in the album grid) the user opened, if any.
+    /// Whether one artist's page is open rather than the grid.
+    pub fn showing_detail(&self) -> bool {
+        self.selected.is_some()
+    }
+
     pub fn show(
         &mut self,
         ui: &mut egui::Ui,
@@ -67,7 +72,9 @@ impl ArtistsView {
         }
         match self.selected {
             None => {
-                self.grid(ui, albums, library);
+                crate::page(ui, egui::Margin::symmetric(32, 32), |ui| {
+                    self.grid(ui, albums, library)
+                });
                 None
             }
             Some(i) => self.detail(ui, albums, library, i),
@@ -81,33 +88,31 @@ impl ArtistsView {
         let ctx = ui.ctx().clone();
         self.photos.poll(&ctx);
         let mut chosen = None;
-        egui::ScrollArea::vertical()
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    ui.spacing_mut().item_spacing = egui::vec2(TILE_GAP, TILE_GAP);
-                    for (n, (name, album_ids)) in self.artists.iter().enumerate() {
-                        let cover = match self.photos.get(&ctx, name) {
-                            PhotoState::Photo(photo) => Some(photo),
-                            PhotoState::Loading => None,
-                            PhotoState::Missing => albums.cover(&ctx, library, album_ids[0]),
-                        };
-                        if artist_tile(ui, cover.as_ref(), name, album_ids.len()).clicked() {
-                            chosen = Some(n);
-                        }
+        {
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = egui::vec2(TILE_GAP, TILE_GAP);
+                for (n, (name, album_ids)) in self.artists.iter().enumerate() {
+                    let cover = match self.photos.get(&ctx, name) {
+                        PhotoState::Photo(photo) => Some(photo),
+                        PhotoState::Loading => None,
+                        PhotoState::Missing => albums.cover(&ctx, library, album_ids[0]),
+                    };
+                    if artist_tile(ui, cover.as_ref(), name, album_ids.len()).clicked() {
+                        chosen = Some(n);
                     }
-                });
-                let credits: Vec<&str> = self
-                    .artists
-                    .iter()
-                    .filter(|(name, _)| self.photos.shows(name))
-                    .filter_map(|(name, _)| self.photos.credits.get(name).map(String::as_str))
-                    .collect();
-                if !credits.is_empty() {
-                    ui.add_space(16.0);
-                    ui.small(format!("Photos: {}", credits.join("  ·  ")));
                 }
             });
+            let credits: Vec<&str> = self
+                .artists
+                .iter()
+                .filter(|(name, _)| self.photos.shows(name))
+                .filter_map(|(name, _)| self.photos.credits.get(name).map(String::as_str))
+                .collect();
+            if !credits.is_empty() {
+                ui.add_space(16.0);
+                ui.small(format!("Photos: {}", credits.join("  ·  ")));
+            }
+        }
         if chosen.is_some() {
             self.selected = chosen;
         }

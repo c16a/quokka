@@ -95,15 +95,11 @@ impl RadioView {
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 egui::Frame::new()
-                    .inner_margin(egui::Margin::symmetric(24, 20))
+                    .inner_margin(egui::Margin::symmetric(32, 32))
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
                             ui.vertical(|ui| {
-                                ui.label(
-                                    egui::RichText::new("Radio")
-                                        .size(34.0)
-                                        .family(crate::fonts::bold_family()),
-                                );
+                                crate::fonts::page_title(ui, "Radio");
                                 let status = if self.count == 0 {
                                     "No stations yet.".to_owned()
                                 } else {
@@ -365,7 +361,8 @@ fn station_card(ui: &mut egui::Ui, station: &Station, on_air: bool) -> Option<Ra
                 tile(ui, station, 42.0);
                 ui.add_space(4.0);
                 ui.vertical(|ui| {
-                    ui.set_max_width(ui.available_width() - 44.0);
+                    // A card in a narrow window can be narrower than the room the tile and button take.
+                    ui.set_max_width((ui.available_width() - 44.0).max(0.0));
                     ui.add(
                         egui::Label::new(
                             egui::RichText::new(&station.name).family(crate::fonts::bold_family()),

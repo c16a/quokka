@@ -32,6 +32,10 @@ run:
 bundle: build
     APP="$HOME/Applications/Player.app"; rm -rf "$APP"; mkdir -p "$APP/Contents/MacOS"; cp target/debug/player "$APP/Contents/MacOS/player"; cp packaging/Info.plist "$APP/Contents/Info.plist"; codesign --force --sign - "$APP"; echo "Built $APP"
 
+bundle-release: release
+    APP="$HOME/Applications/Player.app"; rm -rf "$APP"; mkdir -p "$APP/Contents/MacOS"; cp target/release/player "$APP/Contents/MacOS/player"; cp packaging/Info.plist "$APP/Contents/Info.plist"; codesign --force --sign - "$APP"; echo "Built $APP"
+
+
 # Scan a directory into a library database: `just scan ./library.db ~/Music`.
 scan db root:
     cargo run -p player-core --example scan -- {{db}} {{root}}

@@ -8,6 +8,7 @@ Cross-platform Rust media library and player (macOS, Linux, Windows). Layout: `c
 ## Commands: use `just`
 - Run builds, tests and other recipes through `just`, not raw `cargo`: `just build`, `just test`, `just fmt`, `just check`, `just scan <db> <root>`.
 - Before you finish a change, `just check` must pass (formatting, clippy with warnings as errors, tests).
+- When you finish a change, also run `just bundle`, so `~/Applications/Player.app` matches the code.
 - Cross-compilation uses `cargo zigbuild` through the recipes: `just cross <target>` or `just cross-all`. Do not invoke plain `cargo build --target` for other platforms. Install a target with `rustup target add <target>` first.
 
 ## Dependencies
