@@ -91,7 +91,18 @@ pub fn bold_family() -> FontFamily {
 
 /// A page title, styled as the Radio page's: bold, 34 pt, in the text colour.
 pub fn page_title(ui: &mut egui::Ui, text: &str) {
-    ui.label(egui::RichText::new(text).size(34.0).family(bold_family()));
+    // Solid black in light mode and solid white in dark mode.
+    let colour = if ui.visuals().dark_mode {
+        egui::Color32::WHITE
+    } else {
+        egui::Color32::BLACK
+    };
+    ui.label(
+        egui::RichText::new(text)
+            .size(34.0)
+            .family(bold_family())
+            .color(colour),
+    );
 }
 
 /// Bold text, for emphasis.
