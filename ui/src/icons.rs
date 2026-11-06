@@ -7,6 +7,13 @@ use eframe::egui::{Align2, Color32, FontId, Painter, Pos2};
 use crate::fonts;
 
 pub const AIRPLAY: &str = "\u{E004}";
+pub const CLOCK_COUNTER_CLOCKWISE: &str = "\u{E1A0}";
+pub const FILM_STRIP: &str = "\u{E792}";
+pub const GEAR: &str = "\u{E270}";
+pub const MICROPHONE_STAGE: &str = "\u{E75C}";
+pub const PLAYLIST: &str = "\u{E6AA}";
+pub const RADIO: &str = "\u{E77E}";
+pub const VINYL_RECORD: &str = "\u{ECAC}";
 pub const CARET_LEFT: &str = "\u{E138}";
 pub const DOTS_SIX_VERTICAL: &str = "\u{EAE2}";
 pub const EQUALIZER: &str = "\u{EBBC}";

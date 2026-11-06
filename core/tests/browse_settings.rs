@@ -1,6 +1,6 @@
 use std::fs;
 
-use player_core::{Library, ReplayGainMode, Settings, Theme};
+use player_core::{Library, LibraryKind, ReplayGainMode, Settings, Theme};
 
 #[test]
 fn albums_group_tracks_and_movies_list_videos() {
@@ -37,6 +37,9 @@ fn settings_round_trip_and_default_when_missing() {
     let settings = Settings {
         library_roots: vec![dir.path().join("music"), dir.path().join("films")],
         legacy_root: None,
+        library_kinds: [("/music".to_owned(), LibraryKind::Music)]
+            .into_iter()
+            .collect(),
         theme: Theme::Dark,
         replay_gain: ReplayGainMode::Album,
         lyrics_online: true,

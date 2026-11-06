@@ -41,7 +41,7 @@ pub use replaygain::{loudness_factor, replay_gain_factor, tag_gain};
 pub use scan::ScanStats;
 pub use search::SongQuery;
 pub use session::{RepeatMode, Session};
-pub use settings::{ReplayGainMode, Settings, Theme};
+pub use settings::{LibraryKind, ReplayGainMode, Settings, Theme};
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -161,6 +161,18 @@ impl Library {
         Ok(self.conn.execute(
             "DELETE FROM media WHERE path >= ?1 AND path < ?2",
             params![prefix, upper_bound],
+        )?)
+    }
+
+    /// Number of indexed files under `root`.
+    pub fn files_under(&self, root: &Path) -> Result<i64> {
+        let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+        let prefix = root.to_string_lossy().into_owned();
+        let upper_bound = format!("{prefix}\u{10FFFF}");
+        Ok(self.conn.query_row(
+            "SELECT COUNT(*) FROM media WHERE path >= ?1 AND path < ?2",
+            params![prefix, upper_bound],
+            |r| r.get(0),
         )?)
     }
 

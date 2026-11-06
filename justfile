@@ -27,6 +27,11 @@ check:
 run:
     cargo run -p player-app
 
+# Package the debug build as ~/Applications/Player.app, so macOS and the computer-use tools can find it
+# by name. The bundle is ad-hoc signed, for this Mac only. The Info.plist is in packaging/.
+bundle: build
+    APP="$HOME/Applications/Player.app"; rm -rf "$APP"; mkdir -p "$APP/Contents/MacOS"; cp target/debug/player "$APP/Contents/MacOS/player"; cp packaging/Info.plist "$APP/Contents/Info.plist"; codesign --force --sign - "$APP"; echo "Built $APP"
+
 # Scan a directory into a library database: `just scan ./library.db ~/Music`.
 scan db root:
     cargo run -p player-core --example scan -- {{db}} {{root}}

@@ -96,6 +96,12 @@ struct App {
     session_saved: Option<Session>,
     last_save: Instant,
     status: String,
+    /// Whether the sidebar is open. It collapses to a narrow rail when the window is narrow.
+    sidebar_open: bool,
+    /// Whether the window was narrow last frame, so the sidebar only changes when the width crosses the line.
+    narrow: bool,
+    /// Indexed files under each library folder, in the order of `settings.library_roots`.
+    folder_files: Vec<i64>,
 }
 
 /// Open the library and settings, then run the window until it is closed.
@@ -214,6 +220,9 @@ impl App {
             session_saved: None,
             last_save: Instant::now(),
             status: String::new(),
+            sidebar_open: true,
+            narrow: false,
+            folder_files: Vec::new(),
         };
         app.playback.set_replay_gain(app.settings.replay_gain);
         app.reload_views();
@@ -337,6 +346,12 @@ impl App {
     }
 
     fn reload_views(&mut self) {
+        self.folder_files = self
+            .settings
+            .library_roots
+            .iter()
+            .map(|root| self.library.files_under(root).unwrap_or(0))
+            .collect();
         self.albums.reload(&self.library);
         self.movies.reload(&self.library);
         self.playlists.reload(&self.library);
@@ -494,6 +509,18 @@ impl eframe::App for App {
         }
 
         let mut next_tab = self.tab;
+        // Open the sidebar when the window is wide and collapse it when it is narrow. Changing the width
+        // across the line resets the sidebar; the toggle can change it by hand after that.
+        let narrow = ui.ctx().content_rect().width() < NARROW_WINDOW;
+        if narrow != self.narrow {
+            self.narrow = narrow;
+            self.sidebar_open = !narrow;
+            // A side panel beside the main view leaves no room in a narrow window, so it closes too.
+            if narrow {
+                self.playback.panel = Panel::Closed;
+            }
+        }
+        let mut toggle_sidebar = false;
         // The sidebar and the playback bar colours for the current theme. The sidebar runs the full
         // window height.
         let dark = ui.visuals().dark_mode;
@@ -509,16 +536,23 @@ impl eframe::App for App {
         };
         // The bar is declared first so it spans the whole window, with the sidebar and the main pane
         // above it. It has no top border.
+        // The top edge of the playback bar, so the panels beside the main view can stop there.
+        let mut bar_top = f32::INFINITY;
         if self.playback.has_bar() {
-            egui::Panel::bottom("now_playing")
+            let bar = egui::Panel::bottom("now_playing")
                 .show_separator_line(false)
                 .frame(egui::Frame::side_top_panel(ui.style()).fill(bar_fill))
                 .show(ui, |ui| {
-                    self.playback.show(ui);
+                    self.playback.show(ui, narrow);
                 });
+            bar_top = bar.response.rect.top();
         }
         egui::Panel::left("sidebar")
-            .default_size(200.0)
+            .exact_size(if self.sidebar_open {
+                SIDEBAR_WIDTH
+            } else {
+                SIDEBAR_RAIL
+            })
             .resizable(false)
             .show_separator_line(false)
             .frame(
@@ -529,37 +563,51 @@ impl eframe::App for App {
             .show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 4.0;
                 ui.spacing_mut().button_padding = egui::vec2(12.0, 8.0);
+                if sidebar_toggle(ui, self.sidebar_open).clicked() {
+                    toggle_sidebar = true;
+                }
                 // Buttons grow when hovered by default, which made the items jump under the pointer.
                 let widgets = &mut ui.style_mut().visuals.widgets;
                 widgets.inactive.expansion = 0.0;
                 widgets.hovered.expansion = 0.0;
                 widgets.active.expansion = 0.0;
-                for (tab, label) in [
-                    (Tab::Search, "Search"),
-                    (Tab::Albums, "Albums"),
-                    (Tab::Recent, "Recent"),
-                    (Tab::Artists, "Artists"),
-                    (Tab::Playlists, "Playlists"),
-                    (Tab::Radio, "Radio"),
-                    (Tab::Movies, "Movies"),
-                    (Tab::Settings, "Settings"),
+                for (tab, icon, label) in [
+                    (Tab::Search, icons::MAGNIFYING_GLASS, "Search"),
+                    (Tab::Albums, icons::VINYL_RECORD, "Albums"),
+                    (Tab::Recent, icons::CLOCK_COUNTER_CLOCKWISE, "Recent"),
+                    (Tab::Artists, icons::MICROPHONE_STAGE, "Artists"),
+                    (Tab::Playlists, icons::PLAYLIST, "Playlists"),
+                    (Tab::Radio, icons::RADIO, "Radio"),
+                    (Tab::Movies, icons::FILM_STRIP, "Movies"),
+                    (Tab::Settings, icons::GEAR, "Settings"),
                 ] {
                     let selected = self.tab == tab;
                     let width = ui.available_width();
-                    if ui
-                        .add_sized([width, 34.0], sidebar_item(selected, label, highlight))
-                        .clicked()
-                    {
+                    let entry = sidebar_entry(
+                        ui,
+                        width,
+                        icon,
+                        label,
+                        selected,
+                        highlight,
+                        self.sidebar_open,
+                    );
+                    if entry.clicked() {
                         next_tab = tab;
                     }
                 }
                 ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
                     if self.scan.is_some() {
-                        ui.weak("Scanning…");
+                        if self.sidebar_open {
+                            ui.weak("Scanning…");
+                        }
                         ui.spinner();
                     }
                 });
             });
+        if toggle_sidebar {
+            self.sidebar_open = !self.sidebar_open;
+        }
         if next_tab == Tab::Search && self.tab != Tab::Search {
             self.search.focus();
         }
@@ -588,23 +636,26 @@ impl eframe::App for App {
                 .resizable(false)
                 .show_separator_line(false)
                 .frame(egui::Frame::new().fill(sidebar_fill))
-                .show(ui, |ui| match panel {
-                    Panel::Queue => queue::show(ui, &mut self.queue_view, &mut self.playback),
-                    Panel::Lyrics => {
-                        lyrics_outcome = self.side.lyrics(
-                            ui,
-                            &self.library,
-                            self.playback.current_item().as_deref(),
-                            self.playback.position().unwrap_or_default(),
-                            self.settings.lyrics_online,
-                        );
+                .show(ui, |ui| {
+                    clip_above(ui, bar_top);
+                    match panel {
+                        Panel::Queue => queue::show(ui, &mut self.queue_view, &mut self.playback),
+                        Panel::Lyrics => {
+                            lyrics_outcome = self.side.lyrics(
+                                ui,
+                                &self.library,
+                                self.playback.current_item().as_deref(),
+                                self.playback.position().unwrap_or_default(),
+                                self.settings.lyrics_online,
+                            );
+                        }
+                        Panel::Info => {
+                            let playing = self.playback.current_item();
+                            let shown = self.info_track.as_ref().or(playing.as_deref());
+                            self.side.info(ui, &self.library, shown)
+                        }
+                        Panel::Closed => {}
                     }
-                    Panel::Info => {
-                        let playing = self.playback.current_item();
-                        let shown = self.info_track.as_ref().or(playing.as_deref());
-                        self.side.info(ui, &self.library, shown)
-                    }
-                    Panel::Closed => {}
                 });
         }
         // Tags written in the info panel change the library, so its views reload.
@@ -626,8 +677,9 @@ impl eframe::App for App {
         let mut play = None;
         // The Radio page pads its own content, so its scrollbar can reach the window edge.
         // The album page scrolls with the window's right edge, so it keeps its own padding.
-        let full_width =
-            self.tab == Tab::Radio || (self.tab == Tab::Albums && self.albums.showing_detail());
+        let full_width = self.tab == Tab::Radio
+            || self.tab == Tab::Settings
+            || (self.tab == Tab::Albums && self.albums.showing_detail());
         let main_frame = if full_width {
             egui::Frame::central_panel(ui.style()).inner_margin(egui::Margin::same(0))
         } else {
@@ -684,8 +736,13 @@ impl eframe::App for App {
                 }
                 Tab::Movies => self.movies.show(ui),
                 Tab::Settings => {
-                    action =
-                        settings_view::show(ui, &self.settings, self.scan.is_some(), &self.status);
+                    action = settings_view::show(
+                        ui,
+                        &self.settings,
+                        self.scan.is_some(),
+                        &self.status,
+                        &self.folder_files,
+                    );
                 }
             });
 
@@ -749,18 +806,28 @@ impl eframe::App for App {
         }
 
         match action {
-            Some(settings_view::Action::AddFolder(folder)) => {
-                if self.settings.library_roots.contains(&folder) {
-                    self.status = format!("{} is already in the library.", folder.display());
+            Some(settings_view::Action::AddFolder { path, kind }) => {
+                if self.settings.library_roots.contains(&path) {
+                    self.status = format!("{} is already in the library.", path.display());
                 } else {
-                    self.settings.library_roots.push(folder.clone());
+                    self.settings.library_roots.push(path.clone());
+                    self.settings.set_library_kind(&path, kind);
                     self.save_and_watch(&ctx);
-                    self.enqueue(&ctx, vec![folder]);
+                    self.enqueue(&ctx, vec![path]);
+                }
+            }
+            Some(settings_view::Action::SetFolderKind { index, kind }) => {
+                if let Some(root) = self.settings.library_roots.get(index).cloned() {
+                    self.settings.set_library_kind(&root, kind);
+                    if let Err(e) = self.settings.save(&self.paths.settings) {
+                        self.status = format!("Could not save settings: {e}");
+                    }
                 }
             }
             Some(settings_view::Action::RemoveFolder(i)) => {
                 if i < self.settings.library_roots.len() && self.scan.is_none() {
                     let root = self.settings.library_roots.remove(i);
+                    self.settings.forget_library_kind(&root);
                     self.queue.retain(|queued| *queued != root);
                     self.status = match self.library.forget_root(&root) {
                         Ok(removed) => format!("Removed {} ({removed} files).", root.display()),
@@ -805,18 +872,77 @@ impl eframe::App for App {
     }
 }
 
-/// A sidebar entry: label on the left, with a background only slightly different from the
-/// sidebar when it is the selected one.
-fn sidebar_item(selected: bool, label: &str, highlight: egui::Color32) -> egui::Button<'static> {
-    let fill = if selected {
-        highlight
+/// Clip what is drawn in `ui` to above `bottom`, so a panel cannot draw over the playback bar.
+fn clip_above(ui: &mut egui::Ui, bottom: f32) {
+    let clip = ui.clip_rect();
+    ui.set_clip_rect(egui::Rect::from_min_max(
+        clip.min,
+        egui::pos2(clip.max.x, clip.max.y.min(bottom)),
+    ));
+}
+
+/// Window width below which the sidebar starts collapsed.
+const NARROW_WINDOW: f32 = 720.0;
+/// Width of the sidebar when it is open, and of the rail it collapses to.
+const SIDEBAR_WIDTH: f32 = 200.0;
+const SIDEBAR_RAIL: f32 = 52.0;
+
+/// The button that opens and closes the sidebar: three lines, drawn so it needs no font glyph.
+fn sidebar_toggle(ui: &mut egui::Ui, open: bool) -> egui::Response {
+    let (rect, response) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), 34.0), egui::Sense::click());
+    let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
+    let response = response.on_hover_text(if open { "Hide sidebar" } else { "Show sidebar" });
+    let painter = ui.painter();
+    if response.hovered() {
+        painter.rect_filled(rect, 6.0, ui.visuals().widgets.hovered.weak_bg_fill);
+    }
+    let centre = rect.center();
+    let colour = ui.visuals().text_color();
+    for dy in [-5.0, 0.0, 5.0] {
+        painter.line_segment(
+            [
+                egui::pos2(centre.x - 8.0, centre.y + dy),
+                egui::pos2(centre.x + 8.0, centre.y + dy),
+            ],
+            egui::Stroke::new(1.6, colour),
+        );
+    }
+    response
+}
+
+/// A sidebar entry: its icon, with its label beside it when the sidebar is open. The selected entry has
+/// a background slightly different from the sidebar.
+fn sidebar_entry(
+    ui: &mut egui::Ui,
+    width: f32,
+    icon: &str,
+    label: &str,
+    selected: bool,
+    highlight: egui::Color32,
+    open: bool,
+) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 34.0), egui::Sense::click());
+    let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
+    let colour = ui.visuals().text_color();
+    let painter = ui.painter();
+    if selected {
+        painter.rect_filled(rect, 6.0, highlight);
+    }
+    if open {
+        let centre = egui::pos2(rect.left() + 18.0, rect.center().y);
+        icons::paint(painter, centre, icon, 18.0, colour);
+        painter.text(
+            egui::pos2(rect.left() + 38.0, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            label,
+            egui::FontId::proportional(14.0),
+            colour,
+        );
     } else {
-        egui::Color32::TRANSPARENT
-    };
-    egui::Button::new((label.to_owned(), egui::Atom::grow()))
-        .fill(fill)
-        .stroke(egui::Stroke::NONE)
-        .corner_radius(6.0)
+        icons::paint(painter, rect.center(), icon, 20.0, colour);
+    }
+    response
 }
 
 /// Whether the station index is missing, or more than a day old.

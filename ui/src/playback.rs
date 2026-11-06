@@ -901,7 +901,9 @@ impl Playback {
     /// The playback bar, in this order: shuffle, previous, play or pause, next, repeat, the
     /// track's cover and name, then (after a space) information, lyrics, queue and sound. A seek
     /// slider runs along the top edge, with the elapsed and total time at its ends.
-    pub fn show(&mut self, ui: &mut egui::Ui) {
+    /// Draw the bar. In `compact` mode, which is for narrow windows, it shows only the track, play or
+    /// pause, and next.
+    pub fn show(&mut self, ui: &mut egui::Ui, compact: bool) {
         if self.radio.is_some() {
             self.show_radio(ui);
             return;
@@ -916,6 +918,11 @@ impl Playback {
         }
         let current = self.current().cloned();
         let (track_text, track_dim) = track_text_colours(ui.visuals().dark_mode);
+        if compact {
+            let command = show_compact(ui, state, current.as_deref(), track_text, track_dim);
+            self.run(command);
+            return;
+        }
 
         let mut command = None;
         let mut choice: Option<Option<String>> = None;
@@ -1245,6 +1252,10 @@ impl Playback {
         if let Some(device) = choice {
             self.set_output(device);
         }
+        self.run(command);
+    }
+
+    fn run(&mut self, command: Option<Command>) {
         match command {
             Some(Command::Toggle) => self.toggle(),
             Some(Command::Next) => self.next(),
@@ -1341,18 +1352,134 @@ enum Icon {
     Next,
 }
 
+/// The bar in a narrow window: the track, then play or pause and next, in one row. Returns the command
+/// the user chose, if any.
+fn show_compact(
+    ui: &mut egui::Ui,
+    state: PlayerState,
+    current: Option<&MediaItem>,
+    track_text: egui::Color32,
+    track_dim: egui::Color32,
+) -> Option<Command> {
+    const ROW: f32 = 36.0;
+    const GAP: f32 = 8.0;
+    let mut command = None;
+    egui::Frame::new()
+        .inner_margin(egui::Margin::symmetric(16, 6))
+        .show(ui, |ui| {
+            // Each item gets its own rectangle, centred on the row's line, so the items share one centre line.
+            let (row, _) =
+                ui.allocate_exact_size(egui::vec2(ui.available_width(), ROW), egui::Sense::hover());
+            let centre_y = row.center().y;
+            let next = egui::Rect::from_min_size(
+                egui::pos2(row.right() - 32.0, centre_y - 16.0),
+                egui::vec2(32.0, 32.0),
+            );
+            let play = egui::Rect::from_min_size(
+                egui::pos2(next.left() - GAP - 36.0, centre_y - 18.0),
+                egui::vec2(36.0, 36.0),
+            );
+            let title_h = ui.fonts_mut(|f| f.row_height(&egui::FontId::proportional(14.0)));
+            let artist_h = ui.fonts_mut(|f| f.row_height(&egui::FontId::proportional(12.0)));
+            let block = title_h + artist_h + 2.0;
+            let text = egui::Rect::from_min_size(
+                egui::pos2(row.left(), centre_y - block / 2.0),
+                egui::vec2((play.left() - GAP - row.left()).max(0.0), block),
+            );
+
+            if ui
+                .put(next, |ui: &mut egui::Ui| {
+                    transport_button(ui, Icon::Next, 32.0).on_hover_text("Next track")
+                })
+                .clicked()
+            {
+                command = Some(Command::Next);
+            }
+            let (icon, tip) = if state == PlayerState::Playing {
+                (Icon::Pause, "Pause")
+            } else {
+                (Icon::Play, "Play")
+            };
+            if ui
+                .put(play, |ui: &mut egui::Ui| {
+                    transport_button(ui, icon, 36.0).on_hover_text(tip)
+                })
+                .clicked()
+            {
+                command = Some(Command::Toggle);
+            }
+            ui.put(text, |ui: &mut egui::Ui| {
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = 2.0;
+                    match current {
+                        Some(item) => {
+                            let artist = item
+                                .artist
+                                .as_deref()
+                                .or(item.album_artist.as_deref())
+                                .unwrap_or_default();
+                            ui.add(
+                                egui::Label::new(
+                                    crate::fonts::bold(format::title(item))
+                                        .size(14.0)
+                                        .color(track_text),
+                                )
+                                .truncate(),
+                            );
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(artist).size(12.0).color(track_dim),
+                                )
+                                .truncate(),
+                            );
+                        }
+                        None => {
+                            ui.weak("Nothing playing");
+                        }
+                    }
+                })
+                .response
+            });
+        });
+    command
+}
+
+/// A faint background that eases in over 200 ms while the pointer is over a button, and eases out again
+/// when it leaves.
+fn hover_fill(ui: &egui::Ui, rect: egui::Rect, radius: f32, response: &egui::Response) {
+    let amount = ui.ctx().animate_bool_with_time_and_easing(
+        response.id.with("hover_fill"),
+        response.hovered(),
+        0.2,
+        egui::emath::easing::quadratic_in,
+    );
+    if amount > 0.0 {
+        let colour = ui
+            .visuals()
+            .widgets
+            .hovered
+            .weak_bg_fill
+            .linear_multiply(amount);
+        ui.painter().rect_filled(rect, radius, colour);
+    }
+}
+
 /// Round or rounded button with a transport icon drawn by the painter, so no font glyphs are needed.
 fn transport_button(ui: &mut egui::Ui, icon: Icon, size: f32) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::click());
     let visuals = ui.style().interact(&response);
-    let radius = match icon {
-        Icon::Play | Icon::Pause => size / 2.0,
-        Icon::Previous | Icon::Next => 6.0,
-    };
-    let fill = visuals.weak_bg_fill;
+    hover_fill(
+        ui,
+        rect,
+        if matches!(icon, Icon::Play | Icon::Pause) {
+            size / 2.0
+        } else {
+            6.0
+        },
+        &response,
+    );
     let color = visuals.fg_stroke.color;
     let painter = ui.painter();
-    painter.rect_filled(rect, radius, fill);
 
     let glyph = match icon {
         Icon::Previous => icons::SKIP_BACK,
@@ -1375,14 +1502,13 @@ enum ModeIcon {
 fn mode_button(ui: &mut egui::Ui, icon: ModeIcon, active: bool) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(28.0, 28.0), egui::Sense::click());
     let visuals = ui.style().interact(&response);
-    let fill = visuals.weak_bg_fill;
+    hover_fill(ui, rect, 14.0, &response);
     let color = if active {
         ui.visuals().hyperlink_color
     } else {
         visuals.fg_stroke.color
     };
     let painter = ui.painter();
-    painter.rect_filled(rect, 14.0, fill);
     let glyph = match icon {
         ModeIcon::Shuffle => icons::SHUFFLE,
         ModeIcon::Repeat(Repeat::Track) => icons::REPEAT_ONCE,
@@ -1450,9 +1576,9 @@ fn speed_text(speed: f32) -> String {
 fn speed_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(40.0, 28.0), egui::Sense::click());
     let visuals = ui.style().interact(&response);
-    let (fill, colour) = (visuals.weak_bg_fill, visuals.fg_stroke.color);
+    hover_fill(ui, rect, 14.0, &response);
+    let colour = visuals.fg_stroke.color;
     let painter = ui.painter();
-    painter.rect_filled(rect, 14.0, fill);
     painter.text(
         rect.center(),
         egui::Align2::CENTER_CENTER,
@@ -1467,13 +1593,13 @@ fn speed_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
 fn panel_button(ui: &mut egui::Ui, panel: Panel, active: bool) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(28.0, 28.0), egui::Sense::click());
     let visuals = ui.style().interact(&response);
+    hover_fill(ui, rect, 14.0, &response);
     let color = if active {
         ui.visuals().hyperlink_color
     } else {
         visuals.fg_stroke.color
     };
     let painter = ui.painter();
-    painter.rect_filled(rect, 14.0, visuals.weak_bg_fill);
     let glyph = match panel {
         Panel::Queue => icons::QUEUE,
         Panel::Lyrics => icons::QUOTES,
@@ -1489,13 +1615,13 @@ fn panel_button(ui: &mut egui::Ui, panel: Panel, active: bool) -> egui::Response
 fn output_button(ui: &mut egui::Ui, active: bool) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(28.0, 28.0), egui::Sense::click());
     let visuals = ui.style().interact(&response);
+    hover_fill(ui, rect, 14.0, &response);
     let colour = if active {
         ui.visuals().hyperlink_color
     } else {
         visuals.fg_stroke.color
     };
     let painter = ui.painter();
-    painter.rect_filled(rect, 14.0, visuals.weak_bg_fill);
     icons::paint(painter, rect.center(), icons::AIRPLAY, 16.0, colour);
     response
 }
@@ -1504,6 +1630,7 @@ fn output_button(ui: &mut egui::Ui, active: bool) -> egui::Response {
 fn speaker_button(ui: &mut egui::Ui, muted: bool) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(22.0, 22.0), egui::Sense::click());
     let visuals = ui.style().interact(&response);
+    hover_fill(ui, rect, 11.0, &response);
     let color = visuals.fg_stroke.color;
     let painter = ui.painter();
     let glyph = if muted {

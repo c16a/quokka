@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -27,6 +28,14 @@ pub enum ReplayGainMode {
     Album,
 }
 
+/// The kind of media a library folder holds. Each kind has its own scan rules and tables.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LibraryKind {
+    Music,
+    Movies,
+}
+
 /// User settings, stored as JSON.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Settings {
@@ -37,6 +46,10 @@ pub struct Settings {
     /// `library_roots` on load, and never written back.
     #[serde(default, rename = "library_root", skip_serializing)]
     pub legacy_root: Option<PathBuf>,
+    /// The kind of each folder in `library_roots`, keyed by the folder's path. A folder with no entry
+    /// has not been given a kind yet.
+    #[serde(default)]
+    pub library_kinds: BTreeMap<String, LibraryKind>,
     #[serde(default)]
     pub theme: Theme,
     #[serde(default)]
@@ -61,6 +74,7 @@ impl Default for Settings {
         Self {
             library_roots: Vec::new(),
             legacy_root: None,
+            library_kinds: BTreeMap::new(),
             theme: Theme::default(),
             replay_gain: ReplayGainMode::default(),
             lyrics_online: false,
@@ -71,6 +85,21 @@ impl Default for Settings {
 }
 
 impl Settings {
+    /// The kind of the library folder at `root`, or `None` when it has not been set yet.
+    pub fn library_kind(&self, root: &Path) -> Option<LibraryKind> {
+        self.library_kinds.get(&kind_key(root)).copied()
+    }
+
+    /// Give the library folder at `root` a kind, replacing any earlier one.
+    pub fn set_library_kind(&mut self, root: &Path, kind: LibraryKind) {
+        self.library_kinds.insert(kind_key(root), kind);
+    }
+
+    /// Forget the kind of the library folder at `root`, once it has been removed from the library.
+    pub fn forget_library_kind(&mut self, root: &Path) {
+        self.library_kinds.remove(&kind_key(root));
+    }
+
     /// Load settings from `path`. A missing file yields the defaults.
     pub fn load(path: &Path) -> Result<Self> {
         let mut settings: Self = match fs::read_to_string(path) {
@@ -95,5 +124,39 @@ impl Settings {
         fs::write(&tmp, serde_json::to_string_pretty(self)?)?;
         fs::rename(&tmp, path)?;
         Ok(())
+    }
+}
+
+/// The key a folder's kind is stored under.
+fn kind_key(root: &Path) -> String {
+    root.to_string_lossy().into_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_file_without_kinds_loads_with_none_set() {
+        let text = r#"{ "library_roots": ["/music", "/films"] }"#;
+        let settings: Settings = serde_json::from_str(text).unwrap();
+        assert_eq!(settings.library_roots.len(), 2);
+        assert_eq!(settings.library_kind(Path::new("/music")), None);
+    }
+
+    #[test]
+    fn kinds_survive_a_save_and_load() {
+        let dir = std::env::temp_dir().join(format!("player-kinds-{}", std::process::id()));
+        let path = dir.join("settings.json");
+        let mut settings = Settings::default();
+        settings.library_roots.push(PathBuf::from("/films"));
+        settings.set_library_kind(Path::new("/films"), LibraryKind::Movies);
+        settings.save(&path).unwrap();
+        let loaded = Settings::load(&path).unwrap();
+        assert_eq!(
+            loaded.library_kind(Path::new("/films")),
+            Some(LibraryKind::Movies)
+        );
+        fs::remove_dir_all(&dir).ok();
     }
 }
