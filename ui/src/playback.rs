@@ -15,6 +15,7 @@ use std::thread;
 
 use crate::format;
 use crate::icons;
+use crate::slider;
 
 /// A track to add to the queue from elsewhere in the app.
 pub enum MenuRequest {
@@ -57,8 +58,12 @@ pub struct Playback {
     /// Playback speed and crossfade length, as last applied from the settings.
     speed: f32,
     crossfade: f32,
+    /// The width the buttons on the right of the bar took, measured when they were drawn.
+    right_width: f32,
     /// A speed chosen in the bar, for the app to save to the settings.
     speed_change: Option<f32>,
+    /// The album whose name was clicked in the bar, for the app to open.
+    album_request: Option<String>,
     /// The library database, where measured loudness is kept.
     library: Option<PathBuf>,
     /// Files asked to be measured, so each is asked once.
@@ -91,8 +96,6 @@ pub struct Playback {
     radio_paused: bool,
     /// Reconnects since the user last started the station.
     radio_reconnects: u32,
-    /// The cover thumbnail of the track in the bar, by track id.
-    thumb: Option<(i64, Option<egui::TextureHandle>)>,
     /// Whether the output list above the bar is open.
     output_menu: bool,
 }
@@ -128,6 +131,8 @@ impl Playback {
             speed: 1.0,
             crossfade: 0.0,
             speed_change: None,
+            album_request: None,
+            right_width: 300.0,
             library: None,
             measuring: HashSet::new(),
             measure_tx: None,
@@ -146,7 +151,6 @@ impl Playback {
             radio_loading: None,
             radio_paused: false,
             radio_reconnects: 0,
-            thumb: None,
             output_menu: false,
         }
     }
@@ -830,6 +834,11 @@ impl Playback {
         self.speed_change.take()
     }
 
+    /// The album whose name the user clicked in the bar, if any.
+    pub fn take_album_request(&mut self) -> Option<String> {
+        self.album_request.take()
+    }
+
     /// Apply the output level: zero when muted, otherwise the chosen volume.
     fn apply_volume(&mut self) {
         let level = if self.muted {
@@ -906,13 +915,7 @@ impl Playback {
             self.seek_secs = position.as_secs_f64().min(total);
         }
         let current = self.current().cloned();
-        let thumb = match &current {
-            Some(item) => {
-                let item = item.clone();
-                self.thumbnail(ui.ctx(), &item)
-            }
-            None => None,
-        };
+        let (track_text, track_dim) = track_text_colours(ui.visuals().dark_mode);
 
         let mut command = None;
         let mut choice: Option<Option<String>> = None;
@@ -920,238 +923,318 @@ impl Playback {
         egui::Frame::new()
             .inner_margin(egui::Margin::symmetric(24, 6))
             .show(ui, |ui| {
-                // Seek slider along the top edge.
-                let mut secs = self.seek_secs;
-                let mut dragging = self.dragging;
-                let mut seek_to = None;
-                ui.horizontal(|ui| {
-                    ui.add_sized(
-                        [48.0, 16.0],
-                        egui::Label::new(egui::RichText::new(format::clock(secs)).small().weak()),
-                    );
-                    ui.spacing_mut().slider_width = ui.available_width() - 56.0;
-                    let response = ui.add(
-                        egui::Slider::new(&mut secs, 0.0..=total)
-                            .show_value(false)
-                            .trailing_fill(true)
-                            .handle_shape(egui::style::HandleShape::Circle),
-                    );
-                    ui.add_sized(
-                        [48.0, 16.0],
-                        egui::Label::new(egui::RichText::new(format::clock(total)).small().weak()),
-                    );
-                    dragging = response.dragged();
-                    if response.drag_stopped() || (response.changed() && !response.dragged()) {
-                        seek_to = Some(secs);
-                    }
-                });
-                self.seek_secs = secs;
-                self.dragging = dragging;
-                if let Some(target) = seek_to {
-                    command = Some(Command::Seek(target));
-                }
-
-                ui.add_space(4.0);
-                ui.horizontal_centered(|ui| {
+                ui.horizontal_top(|ui| {
                     ui.spacing_mut().item_spacing.x = 8.0;
-                    // Left: the transport and the track.
-                    if mode_button(ui, ModeIcon::Shuffle, self.shuffle)
-                        .on_hover_text("Shuffle")
-                        .clicked()
-                    {
-                        command = Some(Command::ToggleShuffle);
-                    }
-                    if transport_button(ui, Icon::Previous, 32.0)
-                        .on_hover_text("Previous track")
-                        .clicked()
-                    {
-                        command = Some(Command::Previous);
-                    }
-                    let (icon, tip) = if state == PlayerState::Playing {
-                        (Icon::Pause, "Pause")
-                    } else {
-                        (Icon::Play, "Play")
-                    };
-                    if transport_button(ui, icon, 36.0)
-                        .on_hover_text(tip)
-                        .clicked()
-                    {
-                        command = Some(Command::Toggle);
-                    }
-                    if transport_button(ui, Icon::Next, 32.0)
-                        .on_hover_text("Next track")
-                        .clicked()
-                    {
-                        command = Some(Command::Next);
-                    }
-                    if mode_button(
-                        ui,
-                        ModeIcon::Repeat(self.repeat),
-                        self.repeat != Repeat::Off,
-                    )
-                    .on_hover_text("Repeat")
-                    .clicked()
-                    {
-                        command = Some(Command::CycleRepeat);
-                    }
-                    ui.add_space(12.0);
-                    let (rect, _) =
-                        ui.allocate_exact_size(egui::vec2(48.0, 48.0), egui::Sense::hover());
-                    match &thumb {
-                        Some(texture) => {
-                            ui.painter().image(
-                                texture.id(),
-                                rect,
-                                egui::Rect::from_min_max(
-                                    egui::pos2(0.0, 0.0),
-                                    egui::pos2(1.0, 1.0),
-                                ),
-                                egui::Color32::WHITE,
-                            );
-                        }
-                        None => {
-                            ui.painter()
-                                .rect_filled(rect, 6.0, ui.visuals().faint_bg_color);
-                        }
-                    }
-                    ui.add_space(4.0);
-                    // Title and artist, centred vertically on the thumbnail's 48px height.
-                    let title_h = ui.fonts_mut(|f| f.row_height(&egui::FontId::proportional(14.0)));
-                    let artist_h =
-                        ui.fonts_mut(|f| f.row_height(&egui::FontId::proportional(12.0)));
-                    let block = title_h + artist_h + ui.spacing().item_spacing.y;
-                    let top = ((48.0 - block) / 2.0).max(0.0);
+                    // The transport: shuffle, previous, play or pause, next, repeat. It is centred on
+                    // the cover's height, so it lines up with the cover.
                     ui.allocate_ui_with_layout(
-                        egui::vec2(260.0, 48.0),
-                        egui::Layout::top_down(egui::Align::Min),
+                        egui::vec2(TRANSPORT_WIDTH, COVER_HEIGHT),
+                        egui::Layout::left_to_right(egui::Align::Center),
                         |ui| {
-                            ui.add_space(top);
-                            ui.vertical(|ui| match &current {
-                                Some(item) => {
-                                    ui.add(
-                                        egui::Label::new(
-                                            egui::RichText::new(format::title(item))
-                                                .size(14.0)
-                                                .strong(),
-                                        )
-                                        .truncate(),
-                                    );
-                                    let artist = item
-                                        .artist
-                                        .as_deref()
-                                        .or(item.album_artist.as_deref())
-                                        .unwrap_or_default();
-                                    ui.add(
-                                        egui::Label::new(
-                                            egui::RichText::new(artist).size(12.0).weak(),
-                                        )
-                                        .truncate(),
-                                    );
-                                }
-                                None => {
-                                    ui.weak("Nothing playing");
-                                }
-                            });
+                            ui.spacing_mut().item_spacing.x = 8.0;
+                            if mode_button(ui, ModeIcon::Shuffle, self.shuffle)
+                                .on_hover_text("Shuffle")
+                                .clicked()
+                            {
+                                command = Some(Command::ToggleShuffle);
+                            }
+                            if transport_button(ui, Icon::Previous, 32.0)
+                                .on_hover_text("Previous track")
+                                .clicked()
+                            {
+                                command = Some(Command::Previous);
+                            }
+                            let (icon, tip) = if state == PlayerState::Playing {
+                                (Icon::Pause, "Pause")
+                            } else {
+                                (Icon::Play, "Play")
+                            };
+                            if transport_button(ui, icon, 36.0)
+                                .on_hover_text(tip)
+                                .clicked()
+                            {
+                                command = Some(Command::Toggle);
+                            }
+                            if transport_button(ui, Icon::Next, 32.0)
+                                .on_hover_text("Next track")
+                                .clicked()
+                            {
+                                command = Some(Command::Next);
+                            }
+                            if mode_button(
+                                ui,
+                                ModeIcon::Repeat(self.repeat),
+                                self.repeat != Repeat::Off,
+                            )
+                            .on_hover_text("Repeat")
+                            .clicked()
+                            {
+                                command = Some(Command::CycleRepeat);
+                            }
                         },
                     );
+                    ui.add_space(12.0);
 
-                    // Right: information, lyrics, queue, then sound. Added right to left.
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.spacing_mut().slider_width = 80.0;
-                        let volume = ui.add(
-                            egui::Slider::new(&mut self.volume, 0.0..=1.0)
-                                .show_value(false)
-                                .handle_shape(egui::style::HandleShape::Circle),
-                        );
-                        if volume.changed() {
-                            command = Some(Command::SetVolume(self.volume));
-                        }
-                        if speaker_button(ui, self.muted)
-                            .on_hover_text(if self.muted { "Unmute" } else { "Mute" })
-                            .clicked()
-                        {
-                            command = Some(Command::ToggleMute);
-                        }
-                        // Output: a button that opens a list of audio outputs.
-                        let output = output_button(ui, self.output_menu).on_hover_text("Output");
-                        if output.clicked() {
-                            self.output_menu = !self.output_menu;
-                            // Refresh the device list whenever the list opens.
-                            refresh |= self.output_menu;
-                        }
-                        if self.output_menu {
-                            let height = 44.0 + 28.0 * self.outputs.len() as f32;
-                            let pos = egui::pos2(
-                                output.rect.right() - 240.0,
-                                output.rect.top() - height - 8.0,
-                            );
-                            let area = egui::Area::new(ui.scope_id().with("output_menu"))
-                                .order(egui::Order::Foreground)
-                                .fixed_pos(pos)
-                                .show(ui.ctx(), |ui| {
-                                    egui::Frame::popup(ui.style()).show(ui, |ui| {
-                                        ui.set_width(240.0);
-                                        ui.weak("Output");
-                                        if ui
-                                            .selectable_label(
-                                                self.output.is_none(),
-                                                "System default",
-                                            )
-                                            .clicked()
-                                        {
-                                            choice = Some(None);
+                    // The cover, the title, and the seek bar beneath them. They fill the space up to
+                    // the buttons on the right.
+                    let column = (ui.available_width() - self.right_width - 8.0).max(120.0);
+                    ui.vertical(|ui| {
+                        ui.set_width(column);
+                            // Title and artist, centred vertically on the 48px row height. They fill the column.
+                            let title_h =
+                                ui.fonts_mut(|f| f.row_height(&egui::FontId::proportional(14.0)));
+                            let artist_h =
+                                ui.fonts_mut(|f| f.row_height(&egui::FontId::proportional(12.0)));
+                            let block = title_h + artist_h + ui.spacing().item_spacing.y;
+                            let top = ((48.0 - block) / 2.0).max(0.0);
+                            ui.allocate_ui_with_layout(
+                                egui::vec2(column, 48.0),
+                                egui::Layout::top_down(egui::Align::Min),
+                                |ui| {
+                                    ui.add_space(top);
+                                    ui.vertical(|ui| match &current {
+                                        Some(item) => {
+                                            ui.add(
+                                                egui::Label::new(
+                                                    crate::fonts::bold(format::title(item))
+                                                        .size(14.0)
+                                                        .color(track_text),
+                                                )
+                                                .truncate(),
+                                            );
+                                            let artist = item
+                                                .artist
+                                                .as_deref()
+                                                .or(item.album_artist.as_deref())
+                                                .unwrap_or_default();
+                                            // Artist, then " - " and the album name. The artist is plain text. The
+                                            // album is a link to its album page, fully black while hovered.
+                                            let album = item.album.as_deref().filter(|a| !a.is_empty());
+                                            let font = egui::FontId::proportional(12.0);
+                                            let album_width = album.map_or(0.0, |album| {
+                                                ui.painter()
+                                                    .layout_no_wrap(
+                                                        format!(" - {album}"),
+                                                        font.clone(),
+                                                        track_dim,
+                                                    )
+                                                    .size()
+                                                    .x
+                                            });
+                                            let artist_width =
+                                                (ui.available_width() - album_width).max(0.0);
+                                            ui.horizontal(|ui| {
+                                                ui.spacing_mut().item_spacing.x = 0.0;
+                                                ui.scope(|ui| {
+                                                    ui.set_max_width(artist_width);
+                                                    ui.add(
+                                                        egui::Label::new(
+                                                            egui::RichText::new(artist)
+                                                                .size(12.0)
+                                                                .color(track_dim),
+                                                        )
+                                                        .truncate(),
+                                                    );
+                                                });
+                                                if let Some(album) = album {
+                                                    ui.label(
+                                                        egui::RichText::new(" - ")
+                                                            .size(12.0)
+                                                            .color(track_dim),
+                                                    );
+                                                    // The album name is cut short at the row's edge, then painted
+                                                    // in its hover colour once the pointer's position is known.
+                                                    let mut job = egui::text::LayoutJob::simple_singleline(
+                                                        album.to_owned(),
+                                                        font,
+                                                        track_dim,
+                                                    );
+                                                    job.wrap.max_width = ui.available_width().max(0.0);
+                                                    job.wrap.max_rows = 1;
+                                                    job.wrap.break_anywhere = true;
+                                                    job.wrap.overflow_character = Some('\u{2026}');
+                                                    let galley = ui.painter().layout_job(job);
+                                                    let (rect, link) = ui.allocate_exact_size(
+                                                        galley.size(),
+                                                        egui::Sense::click(),
+                                                    );
+                                                    let link = link.on_hover_cursor(
+                                                        egui::CursorIcon::PointingHand,
+                                                    );
+                                                    let colour = if link.hovered() {
+                                                        track_text
+                                                    } else {
+                                                        track_dim
+                                                    };
+                                                    ui.painter().galley_with_override_text_color(
+                                                        rect.min, galley, colour,
+                                                    );
+                                                    if link.clicked() {
+                                                        self.album_request = Some(album.to_owned());
+                                                    }
+                                                }
+                                            });
                                         }
-                                        for name in &self.outputs {
+                                        None => {
+                                            ui.weak("Nothing playing");
+                                        }
+                                    });
+                                },
+                            );
+
+                        ui.add_space(2.0);
+                        // The seek bar spans the column: from the cover's left edge to the title's right
+                        // edge. The two times sit above it, at its ends.
+                        let mut secs = self.seek_secs;
+                        let mut seek_to = None;
+                        // One row: the elapsed time at the cover's left edge, the rail between, and the total
+                        // time at the title's right edge. The slider fills the space between the two labels,
+                        // and each label's line of text is centred on the rail.
+                        let font = egui::TextStyle::Small.resolve(ui.style());
+                        let weak = ui.visuals().weak_text_color();
+                        let start = ui
+                            .painter()
+                            .layout_no_wrap(format::clock(secs), font.clone(), weak);
+                        let end = ui
+                            .painter()
+                            .layout_no_wrap(format::clock(total), font, weak);
+                        let gap = 8.0;
+                        let (row, _) =
+                            ui.allocate_exact_size(egui::vec2(column, 16.0), egui::Sense::hover());
+                        let slider_left = row.left() + start.size().x + gap;
+                        let slider_right = row.right() - end.size().x - gap;
+                        // The seek bar takes the row's width between the two labels.
+                        let slider = egui::Rect::from_min_max(
+                            egui::pos2(slider_left, row.top()),
+                            egui::pos2(slider_right, row.bottom()),
+                        );
+                        let response =
+                            slider::show_in(ui, slider, "seek", &mut secs, 0.0..=total, 0.0);
+                        let centre_y = slider.center().y;
+                        // The labels sit on the same centre line as the rail and the knob.
+                        ui.painter().galley(
+                            egui::pos2(row.left(), centre_y - start.size().y / 2.0),
+                            start,
+                            weak,
+                        );
+                        ui.painter().galley(
+                            egui::pos2(row.right() - end.size().x, centre_y - end.size().y / 2.0),
+                            end,
+                            weak,
+                        );
+                        self.dragging = response.dragged();
+                        if response.drag_stopped() || response.clicked() {
+                            seek_to = Some(secs);
+                        }
+                        self.seek_secs = secs;
+                        if let Some(target) = seek_to {
+                            command = Some(Command::Seek(target));
+                        }
+                    });
+
+                    // Right: information, lyrics, queue, then sound, centred on the cover's height.
+                    let mut right_used = 0.0;
+                    let mut left_edge = 0.0;
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(ui.available_width(), COVER_HEIGHT),
+                        egui::Layout::right_to_left(egui::Align::Center),
+                        |ui| {
+                            let mut level = f64::from(self.volume);
+                            let volume = slider::show(ui, &mut level, 0.0..=1.0, 0.0, 80.0);
+                            self.volume = level as f32;
+                            if volume.changed() {
+                                command = Some(Command::SetVolume(self.volume));
+                            }
+                            if speaker_button(ui, self.muted)
+                                .on_hover_text(if self.muted { "Unmute" } else { "Mute" })
+                                .clicked()
+                            {
+                                command = Some(Command::ToggleMute);
+                            }
+                            // Output: a button that opens a list of audio outputs.
+                            let output = output_button(ui, self.output_menu).on_hover_text("Output");
+                            if output.clicked() {
+                                self.output_menu = !self.output_menu;
+                                // Refresh the device list whenever the list opens.
+                                refresh |= self.output_menu;
+                            }
+                            if self.output_menu {
+                                let height = 44.0 + 28.0 * self.outputs.len() as f32;
+                                let pos = egui::pos2(
+                                    output.rect.right() - 240.0,
+                                    output.rect.top() - height - 8.0,
+                                );
+                                let area = egui::Area::new(ui.scope_id().with("output_menu"))
+                                    .order(egui::Order::Foreground)
+                                    .fixed_pos(pos)
+                                    .show(ui.ctx(), |ui| {
+                                        egui::Frame::popup(ui.style()).show(ui, |ui| {
+                                            ui.set_width(240.0);
+                                            ui.weak("Output");
                                             if ui
                                                 .selectable_label(
-                                                    self.output.as_deref() == Some(name),
-                                                    name,
+                                                    self.output.is_none(),
+                                                    "System default",
                                                 )
                                                 .clicked()
                                             {
-                                                choice = Some(Some(name.clone()));
+                                                choice = Some(None);
                                             }
-                                        }
+                                            for name in &self.outputs {
+                                                if ui
+                                                    .selectable_label(
+                                                        self.output.as_deref() == Some(name),
+                                                        name,
+                                                    )
+                                                    .clicked()
+                                                {
+                                                    choice = Some(Some(name.clone()));
+                                                }
+                                            }
+                                        });
                                     });
-                                });
-                            if choice.is_some() {
-                                self.output_menu = false;
+                                if choice.is_some() {
+                                    self.output_menu = false;
+                                }
+                                // A click anywhere else closes the list.
+                                let pressed = ui.input(|i| i.pointer.any_pressed());
+                                if pressed && !area.response.contains_pointer() && !output.hovered() {
+                                    self.output_menu = false;
+                                }
                             }
-                            // A click anywhere else closes the list.
-                            let pressed = ui.input(|i| i.pointer.any_pressed());
-                            if pressed && !area.response.contains_pointer() && !output.hovered() {
-                                self.output_menu = false;
+                            if panel_button(ui, Panel::Queue, self.panel == Panel::Queue)
+                                .on_hover_text("Up next")
+                                .clicked()
+                            {
+                                command = Some(Command::TogglePanel(Panel::Queue));
                             }
-                        }
-                        if panel_button(ui, Panel::Queue, self.panel == Panel::Queue)
-                            .on_hover_text("Up next")
-                            .clicked()
-                        {
-                            command = Some(Command::TogglePanel(Panel::Queue));
-                        }
-                        if panel_button(ui, Panel::Lyrics, self.panel == Panel::Lyrics)
-                            .on_hover_text("Lyrics")
-                            .clicked()
-                        {
-                            command = Some(Command::TogglePanel(Panel::Lyrics));
-                        }
-                        // Playback speed: each click steps to the next preset.
-                        let speed_label = speed_text(self.speed);
-                        if speed_button(ui, &speed_label)
-                            .on_hover_text("Playback speed. Click to change. Speeds other than 1× also change the pitch.")
-                            .clicked()
-                        {
-                            self.speed_change = Some(next_speed(self.speed));
-                        }
-                        if panel_button(ui, Panel::Info, self.panel == Panel::Info)
-                            .on_hover_text("Track info")
-                            .clicked()
-                        {
-                            command = Some(Command::TogglePanel(Panel::Info));
-                        }
-                    });
+                            if panel_button(ui, Panel::Lyrics, self.panel == Panel::Lyrics)
+                                .on_hover_text("Lyrics")
+                                .clicked()
+                            {
+                                command = Some(Command::TogglePanel(Panel::Lyrics));
+                            }
+                            // Playback speed: each click steps to the next preset.
+                            let speed_label = speed_text(self.speed);
+                            if speed_button(ui, &speed_label)
+                                .on_hover_text("Playback speed. Click to change. Speeds other than 1× also change the pitch.")
+                                .clicked()
+                            {
+                                self.speed_change = Some(next_speed(self.speed));
+                            }
+                            let info = panel_button(ui, Panel::Info, self.panel == Panel::Info)
+                                .on_hover_text("Track info");
+                            left_edge = info.rect.left();
+                            if info.clicked() {
+                                command = Some(Command::TogglePanel(Panel::Info));
+                            }
+                        right_used = ui.max_rect().right() - left_edge;
+                        },
+                );
+                self.right_width = right_used;
                 });
                 if let Some(error) = self.error.as_deref() {
+                    ui.add_space(6.0);
                     ui.colored_label(ui.visuals().error_fg_color, error);
                 }
             });
@@ -1180,26 +1263,6 @@ impl Playback {
             }
             None => {}
         }
-    }
-
-    /// The cover of the track, as a small texture. It is decoded once per track.
-    fn thumbnail(&mut self, ctx: &egui::Context, item: &MediaItem) -> Option<egui::TextureHandle> {
-        if self.thumb.as_ref().is_none_or(|(id, _)| *id != item.id) {
-            let texture = player_core::read_cover(&item.path)
-                .and_then(|bytes| image::load_from_memory(&bytes).ok())
-                .map(|image| {
-                    let rgba = image.thumbnail(96, 96).to_rgba8();
-                    let size = [rgba.width() as usize, rgba.height() as usize];
-                    let colour = egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw());
-                    ctx.load_texture(
-                        format!("bar-cover-{}", item.id),
-                        colour,
-                        egui::TextureOptions::LINEAR,
-                    )
-                });
-            self.thumb = Some((item.id, texture));
-        }
-        self.thumb.as_ref().and_then(|(_, texture)| texture.clone())
     }
 }
 
@@ -1350,6 +1413,21 @@ fn spawn_measurer(db: PathBuf) -> (Sender<PathBuf>, Receiver<PathBuf>) {
     (requests, done)
 }
 
+/// The cover's size, which the bar's controls centre on.
+/// The track info text colours for a theme: the full colour for the title and a hovered album, and the
+/// same colour at 64% opacity for the artist, the album and the separator between them.
+fn track_text_colours(dark: bool) -> (egui::Color32, egui::Color32) {
+    if dark {
+        (egui::Color32::WHITE, egui::Color32::from_white_alpha(163))
+    } else {
+        (egui::Color32::BLACK, egui::Color32::from_black_alpha(163))
+    }
+}
+
+const COVER_HEIGHT: f32 = 48.0;
+/// Width of the transport: five buttons and the gaps between them.
+const TRANSPORT_WIDTH: f32 = 188.0;
+
 /// The playback speeds the bar's speed button steps through.
 const SPEEDS: [f32; 5] = [0.75, 1.0, 1.25, 1.5, 2.0];
 
@@ -1485,6 +1563,8 @@ mod tests {
             speed: 1.0,
             crossfade: 0.0,
             speed_change: None,
+            album_request: None,
+            right_width: 300.0,
             library: None,
             measuring: HashSet::new(),
             measure_tx: None,
@@ -1503,7 +1583,6 @@ mod tests {
             radio_loading: None,
             radio_paused: false,
             radio_reconnects: 0,
-            thumb: None,
             output_menu: false,
         };
         p.play_queue((1..=n).map(item).collect(), 0);

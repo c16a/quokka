@@ -132,6 +132,32 @@ impl AlbumsView {
         self.selected.is_some()
     }
 
+    /// Open the album called `name`. If the grid's filters hide it, they are cleared first.
+    /// Returns false when no album has that name.
+    pub fn open_by_name(&mut self, library: &Library, name: &str) -> bool {
+        let find = |albums: &[AlbumSummary]| {
+            albums
+                .iter()
+                .position(|album| album.album.as_deref() == Some(name))
+        };
+        let index = match find(&self.albums) {
+            Some(index) => Some(index),
+            None if self.filter != AlbumFilter::default() => {
+                self.filter = AlbumFilter::default();
+                self.reload(library);
+                find(&self.albums)
+            }
+            None => None,
+        };
+        match index {
+            Some(index) => {
+                self.open(library, index);
+                true
+            }
+            None => false,
+        }
+    }
+
     pub fn open(&mut self, library: &Library, index: usize) {
         if index < self.albums.len() {
             self.selected = Some(index);

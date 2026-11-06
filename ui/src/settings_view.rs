@@ -3,6 +3,8 @@ use std::path::PathBuf;
 use eframe::egui;
 use player_core::{ReplayGainMode, Settings, Theme};
 
+use crate::slider;
+
 /// Something the user asked for on the Settings screen.
 pub enum Action {
     AddFolder(PathBuf),
@@ -108,16 +110,16 @@ pub fn show(ui: &mut egui::Ui, settings: &Settings, busy: bool, status: &str) ->
         "Crossfade: each track fades into the next over this many seconds. Zero turns it off.",
     );
     ui.add_space(4.0);
-    let mut secs = settings.crossfade_secs;
-    if ui
-        .add(
-            egui::Slider::new(&mut secs, 0.0..=12.0)
-                .step_by(0.5)
-                .suffix(" s"),
-        )
-        .changed()
-    {
-        action = Some(Action::SetCrossfade(secs));
+    let mut secs = f64::from(settings.crossfade_secs);
+    let changed = ui
+        .horizontal(|ui| {
+            let changed = slider::show(ui, &mut secs, 0.0..=12.0, 0.5, 240.0).changed();
+            ui.label(format!("{secs:.1} s"));
+            changed
+        })
+        .inner;
+    if changed {
+        action = Some(Action::SetCrossfade(secs as f32));
     }
 
     ui.add_space(24.0);

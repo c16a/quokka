@@ -16,6 +16,7 @@ mod recent;
 mod search;
 mod settings_view;
 mod side;
+mod slider;
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
@@ -123,6 +124,14 @@ pub fn run(paths: Paths) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// The window's surfaces in each theme: the main pane, the sidebar and the playback bar.
+const LIGHT_MAIN: egui::Color32 = egui::Color32::from_rgb(0xEE, 0xEE, 0xEE);
+const LIGHT_SIDEBAR: egui::Color32 = egui::Color32::from_rgb(0xDD, 0xDD, 0xDD);
+const LIGHT_BAR: egui::Color32 = egui::Color32::WHITE;
+const DARK_MAIN: egui::Color32 = egui::Color32::from_rgb(0x11, 0x11, 0x11);
+const DARK_SIDEBAR: egui::Color32 = egui::Color32::from_rgb(0x22, 0x22, 0x22);
+const DARK_BAR: egui::Color32 = egui::Color32::BLACK;
+
 /// Map the saved theme onto egui's preference.
 fn preference(theme: Theme) -> egui::ThemePreference {
     match theme {
@@ -159,6 +168,13 @@ impl App {
                 state.fg_stroke.width = fg;
                 state.bg_stroke.width = bg;
             }
+        });
+        // The main pane's colour in each theme. The sidebar and the bar are set where they are drawn.
+        ctx.style_mut_of(egui::Theme::Light, |style| {
+            style.visuals.panel_fill = LIGHT_MAIN
+        });
+        ctx.style_mut_of(egui::Theme::Dark, |style| {
+            style.visuals.panel_fill = DARK_MAIN
         });
         ctx.set_theme(preference(settings.theme));
         let tab = if !settings.library_roots.is_empty() {
@@ -477,18 +493,29 @@ impl eframe::App for App {
         }
 
         let mut next_tab = self.tab;
-        // The sidebar fill is a shade apart from the main pane, and runs the full window height.
-        let panel = ui.visuals().panel_fill;
-        let sidebar_fill = if ui.visuals().dark_mode {
-            panel.gamma_multiply(1.25)
+        // The sidebar and the playback bar colours for the current theme. The sidebar runs the full
+        // window height.
+        let dark = ui.visuals().dark_mode;
+        let (sidebar_fill, bar_fill) = if dark {
+            (DARK_SIDEBAR, DARK_BAR)
         } else {
-            panel.lerp_to_gamma(egui::Color32::WHITE, 0.6)
+            (LIGHT_SIDEBAR, LIGHT_BAR)
         };
-        let highlight = if ui.visuals().dark_mode {
+        let highlight = if dark {
             sidebar_fill.gamma_multiply(1.5)
         } else {
             sidebar_fill.lerp_to_gamma(egui::Color32::BLACK, 0.06)
         };
+        // The bar is declared first so it spans the whole window, with the sidebar and the main pane
+        // above it. It has no top border.
+        if self.playback.has_bar() {
+            egui::Panel::bottom("now_playing")
+                .show_separator_line(false)
+                .frame(egui::Frame::side_top_panel(ui.style()).fill(bar_fill))
+                .show(ui, |ui| {
+                    self.playback.show(ui);
+                });
+        }
         egui::Panel::left("sidebar")
             .default_size(200.0)
             .resizable(false)
@@ -537,16 +564,19 @@ impl eframe::App for App {
         }
         self.tab = next_tab;
 
-        if self.playback.has_bar() {
-            egui::Panel::bottom("now_playing").show(ui, |ui| {
-                self.playback.show(ui);
-            });
-        }
         // A speed chosen in the bar is kept in the settings, like the others.
         if let Some(speed) = self.playback.take_speed_change() {
             self.settings.playback_speed = speed;
             if let Err(e) = self.settings.save(&self.paths.settings) {
                 self.status = format!("Could not save settings: {e}");
+            }
+        }
+        // An album clicked in the bar opens on the album page.
+        if let Some(name) = self.playback.take_album_request() {
+            if self.albums.open_by_name(&self.library, &name) {
+                self.tab = Tab::Albums;
+            } else {
+                self.status = format!("Could not find the album {name}");
             }
         }
         let panel = self.playback.panel;
