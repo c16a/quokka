@@ -110,6 +110,7 @@ pub fn run(paths: Paths) -> Result<(), Box<dyn std::error::Error>> {
         viewport: egui::ViewportBuilder::default()
             .with_title("Player")
             .with_inner_size([1100.0, 720.0]),
+        renderer: eframe::Renderer::Wgpu,
         ..Default::default()
     };
     eframe::run_native(
