@@ -162,7 +162,7 @@ pub(crate) fn scan(conn: &mut Connection, root: &Path) -> Result<ScanStats> {
                bitrate_kbps = excluded.bitrate_kbps, video_codec = excluded.video_codec, \
                width = excluded.width, height = excluded.height, \
                video_bit_depth = NULL, video_chroma = NULL, video_fps = NULL, \
-               video_fps_variable = 0, video_aspect = NULL, processed = 0",
+               video_fps_variable = 0, video_aspect = NULL, processed = 0, lookup_pending = 1",
         )?;
         for (p, info) in &read {
             upsert.execute(params![

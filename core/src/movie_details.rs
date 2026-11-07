@@ -14,6 +14,10 @@ use crate::{Error, Library, Result};
 /// How many candidates a choice list offers.
 pub const CHOICE_LIMIT: usize = 5;
 
+/// Pause after each automatic lookup. TMDb allows about 40 requests every 10 seconds, and a lookup
+/// makes at most two, so this keeps a long scan well under that.
+const LOOKUP_PAUSE: std::time::Duration = std::time::Duration::from_millis(300);
+
 /// What a lookup found.
 #[derive(Debug, Clone, PartialEq)]
 pub enum MatchOutcome {
@@ -104,6 +108,74 @@ impl Library {
             .map(|id| tmdb.movie(id))
             .collect::<Result<Vec<_>>>()?;
         Ok(MatchOutcome::Choices(infos))
+    }
+
+    /// Look up the movie `media_id` at `path` on TMDb, and save its details only when there is one
+    /// confident match with a year. Returns whether it was saved. Anything less certain is left for
+    /// the user, who picks from the choices on the movie's page.
+    pub fn match_confident(&self, media_id: i64, path: &Path, tmdb: &Tmdb) -> Result<bool> {
+        let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+            return Ok(false);
+        };
+        let parsed = matching::parse_file_name(stem);
+        if parsed.year.is_none() {
+            return Ok(false);
+        }
+        let mut hits = tmdb.search(&parsed.title, parsed.year)?;
+        if hits.is_empty() {
+            hits = tmdb.search(&parsed.title, None)?;
+        }
+        let candidates = tmdb::candidates(&hits);
+        let ranked = matching::best_matches(&parsed, &candidates, candidates.len());
+        let Some(best) = ranked.first() else {
+            return Ok(false);
+        };
+        if best.score < MATCH_THRESHOLD {
+            return Ok(false);
+        }
+        let info = tmdb.movie(parse_id(&best.candidate.id)?)?;
+        self.save_movie_details(media_id, &info)?;
+        Ok(true)
+    }
+
+    /// Run `lookup` on every video whose TMDb lookup is pending, and mark each one done once it has
+    /// been tried. `lookup` returns whether it saved details. A failed lookup stops the pass and
+    /// stays pending, so the next scan tries it again. Returns how many were saved.
+    pub fn match_pending<F>(&self, mut lookup: F) -> Result<usize>
+    where
+        F: FnMut(i64, &Path) -> Result<bool>,
+    {
+        let pending: Vec<(i64, String)> = {
+            let mut stmt = self.conn.prepare(
+                "SELECT id, path FROM media WHERE kind = 'video' AND lookup_pending = 1 ORDER BY id",
+            )?;
+            let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            rows.collect::<rusqlite::Result<_>>()?
+        };
+        let mut saved = 0;
+        for (media_id, path) in pending {
+            if lookup(media_id, Path::new(&path))? {
+                saved += 1;
+            }
+            self.conn.execute(
+                "UPDATE media SET lookup_pending = 0 WHERE id = ?1",
+                [media_id],
+            )?;
+        }
+        Ok(saved)
+    }
+
+    /// Look up every pending video on TMDb and save the confident matches. A video that already has
+    /// details is marked done without a request. Returns how many were saved.
+    pub fn match_pending_movies(&self, tmdb: &Tmdb) -> Result<usize> {
+        self.match_pending(|media_id, path| {
+            if self.movie_details(media_id)?.is_some() {
+                return Ok(false);
+            }
+            let saved = self.match_confident(media_id, path, tmdb)?;
+            std::thread::sleep(LOOKUP_PAUSE);
+            Ok(saved)
+        })
     }
 
     /// Save the details of movie `media_id`, replacing any saved before.

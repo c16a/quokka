@@ -34,6 +34,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use eframe::egui;
 use notify::{RecursiveMode, Watcher};
+use quokka_core::tmdb::Tmdb;
 use quokka_core::{Library, MediaItem, ScanStats, Session, Settings, Theme};
 
 use playback::{MenuRequest, Panel, Playback};
@@ -58,8 +59,17 @@ enum Tab {
     Settings,
 }
 
+/// What scanning one folder found, and what the TMDb lookups after it did.
+struct Scanned {
+    stats: ScanStats,
+    /// Movies matched on TMDb by the scan.
+    matched: usize,
+    /// Why the TMDb lookups stopped early, if they did. They are tried again on the next scan.
+    lookup_error: Option<String>,
+}
+
 /// The outcome of scanning one folder.
-type ScanResult = Result<ScanStats, String>;
+type ScanResult = Result<Scanned, String>;
 
 /// How long the library must stay quiet after a file change before rescanning.
 const RESCAN_DELAY: Duration = Duration::from_secs(2);
@@ -459,6 +469,7 @@ impl App {
         let ctx = ctx.clone();
         let job = root.clone();
         let processing = Arc::clone(&self.processing);
+        let tmdb_key = self.settings.tmdb_api_key.clone();
         thread::spawn(move || {
             let result = Library::open(&db)
                 .and_then(|mut lib| {
@@ -468,7 +479,21 @@ impl App {
                     ctx.request_repaint();
                     let done = lib.process_pending();
                     processing.store(false, Ordering::Relaxed);
-                    done.map(|()| stats)
+                    done?;
+                    // With a TMDb key, movies that are new or changed are matched now. A failed
+                    // lookup doesn't fail the scan: it is reported, and tried again next time.
+                    let (matched, lookup_error) = match tmdb_key {
+                        Some(key) => match lib.match_pending_movies(&Tmdb::new(key)) {
+                            Ok(saved) => (saved, None),
+                            Err(e) => (0, Some(e.to_string())),
+                        },
+                        None => (0, None),
+                    };
+                    Ok(Scanned {
+                        stats,
+                        matched,
+                        lookup_error,
+                    })
                 })
                 .map_err(|e| e.to_string());
             let _ = tx.send(result);
@@ -546,10 +571,22 @@ impl App {
         let name = root.display().to_string();
         self.scan = None;
         let line = match result {
-            Ok(stats) => format!(
-                "{name}: {} added or changed, {} unchanged, {} removed.",
-                stats.indexed, stats.unchanged, stats.removed
-            ),
+            Ok(scanned) => {
+                let stats = scanned.stats;
+                let mut line = format!(
+                    "{name}: {} added or changed, {} unchanged, {} removed.",
+                    stats.indexed, stats.unchanged, stats.removed
+                );
+                if scanned.matched > 0 {
+                    line.push_str(&format!(" {} matched on TMDb.", scanned.matched));
+                }
+                if let Some(e) = scanned.lookup_error {
+                    line.push_str(&format!(
+                        " TMDb lookup stopped ({e}); it will be tried again on the next scan."
+                    ));
+                }
+                line
+            }
             // One unreadable folder (for example an unplugged drive) doesn't stop the others.
             Err(e) => format!("{name}: could not be scanned ({e})."),
         };

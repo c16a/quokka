@@ -3,7 +3,7 @@ use rusqlite::Connection;
 use crate::Result;
 
 /// Bump when the schema changes and add a matching migration step below.
-const SCHEMA_VERSION: i64 = 18;
+const SCHEMA_VERSION: i64 = 19;
 
 /// Per-connection settings and schema migration.
 pub(crate) fn configure(conn: &Connection) -> Result<()> {
@@ -69,6 +69,9 @@ pub(crate) fn configure(conn: &Connection) -> Result<()> {
     }
     if version < 18 {
         conn.execute_batch(SCHEMA_V18)?;
+    }
+    if version < 19 {
+        conn.execute_batch(SCHEMA_V19)?;
     }
     if version != SCHEMA_VERSION {
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
@@ -306,6 +309,12 @@ CREATE TABLE progress (
     duration_secs REAL,
     updated       INTEGER NOT NULL
 );
+";
+
+/// Whether a video still needs a TMDb lookup. A file that is new or changed needs one, and every
+/// existing video gets one once, on the first scan after this step, when a TMDb key is set.
+const SCHEMA_V19: &str = "
+ALTER TABLE media ADD COLUMN lookup_pending INTEGER NOT NULL DEFAULT 1;
 ";
 
 /// The tags each file had before the first edit made here, as JSON, until they are reverted.
