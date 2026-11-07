@@ -106,6 +106,11 @@ impl MovieAudio {
         self.ended.load(Ordering::Relaxed)
     }
 
+    /// Set the output level, from 0 (silent) to 1 (full).
+    pub fn set_volume(&self, volume: f32) {
+        self.player.set_volume(volume);
+    }
+
     pub fn play(&self) {
         self.player.play();
     }

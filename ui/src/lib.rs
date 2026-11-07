@@ -505,6 +505,10 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.poll_scan(ui.ctx());
         self.poll_station_sync();
+        if self.playback.video_active() {
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(16));
+        }
         self.handle_changes(ui.ctx());
         self.playback.advance_if_finished();
         self.playback
@@ -708,6 +712,10 @@ impl eframe::App for App {
         egui::CentralPanel::default()
             .frame(main_frame)
             .show(ui, |ui| match self.tab {
+                // A video plays in the movie pane, in place of the movie list or page.
+                _ if self.tab == Tab::Movies && self.playback.video_showing() => {
+                    self.playback.show_video(ui);
+                }
                 Tab::Albums => {
                     play = self.albums.show(
                         ui,

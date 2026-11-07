@@ -4,7 +4,7 @@ default: check
 # Fail early, with the install command, when libmpv is missing. The player links against it.
 # Install it with `brew install mpv`. The linker search path for Homebrew is in .cargo/config.toml.
 libmpv-check:
-    @pkg-config --exists mpv || { echo "libmpv not found. Install it with: brew install mpv"; exit 1; }
+    @if [ "$(uname)" = "Darwin" ]; then exit 0; fi; pkg-config --exists mpv || { echo "libmpv not found. Install it with: brew install mpv"; exit 1; }
 
 # Build the whole workspace.
 build: libmpv-check

@@ -50,6 +50,8 @@ pub struct FramePlayer {
     messages: Receiver<Message>,
     /// Frames in the file's video track, when the container states them.
     pub frame_count: usize,
+    /// The length of the video, from its last frame and the gap before it.
+    duration: Option<std::time::Duration>,
     finished: bool,
 }
 
@@ -71,6 +73,24 @@ impl FramePlayer {
             chroma: format.chroma.unwrap_or(Chroma::Yuv420),
         };
         let frame_count = track.samples.len();
+        let duration = track.samples.last().and_then(|last| {
+            let times: Vec<i64> = track
+                .samples
+                .iter()
+                .rev()
+                .take(2)
+                .map(|s| s.presentation_time)
+                .collect();
+            let step = if times.len() == 2 {
+                times[0] - times[1]
+            } else {
+                0
+            };
+            let end = last.presentation_time + step.max(0);
+            u64::try_from(end).ok().map(|ticks| {
+                std::time::Duration::from_secs_f64(ticks as f64 / track.timescale as f64)
+            })
+        });
         let (sender, messages) = mpsc::sync_channel(QUEUE_DEPTH);
         let path = path.to_path_buf();
         thread::spawn(move || run(&path, track, stream, sender));
@@ -79,6 +99,7 @@ impl FramePlayer {
             Ok(Message::Ready) => Ok(FramePlayer {
                 messages,
                 frame_count,
+                duration,
                 finished: false,
             }),
             Ok(Message::Failed(reason)) => Err(FrameError::NoDecoder(reason)),
@@ -112,6 +133,11 @@ impl FramePlayer {
     /// Whether every frame has been taken.
     pub fn finished(&self) -> bool {
         self.finished
+    }
+
+    /// The length of the video, when the file states its frames.
+    pub fn duration(&self) -> Option<std::time::Duration> {
+        self.duration
     }
 }
 

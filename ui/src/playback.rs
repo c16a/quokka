@@ -44,11 +44,28 @@ pub enum Panel {
 /// The queue the user is listening through, and the player that plays it.
 const RADIO_RECONNECTS: u32 = 5;
 
+/// A video player for this platform: the decoders on macOS, libmpv elsewhere.
+#[cfg(target_os = "macos")]
+fn new_video() -> Result<VideoPlayer, String> {
+    Ok(VideoPlayer::new())
+}
+
+/// A video player for this platform: the decoders on macOS, libmpv elsewhere.
+#[cfg(not(target_os = "macos"))]
+fn new_video() -> Result<VideoPlayer, String> {
+    VideoPlayer::new().map_err(|e| format!("Video needs libmpv: {e}"))
+}
+
 pub struct Playback {
     /// `None` when no audio output device could be opened.
     player: Option<RodioPlayer>,
-    /// The libmpv output for video. Created the first time a video plays.
+    /// The video player: the decoders on macOS, libmpv elsewhere. Created the first time a video plays.
     video: Option<VideoPlayer>,
+    /// The frame the video texture shows, and how many frames had been shown when it was last set.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    video_texture: Option<egui::TextureHandle>,
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    video_texture_shown: u64,
     /// Whether the loaded track plays through `video` instead of `player`.
     video_loaded: bool,
     queue: Vec<Arc<MediaItem>>,
@@ -127,6 +144,8 @@ impl Playback {
         Self {
             player,
             video: None,
+            video_texture: None,
+            video_texture_shown: 0,
             video_loaded: false,
             queue: Vec::new(),
             original: Vec::new(),
@@ -565,6 +584,12 @@ impl Playback {
 
     /// Move on when a track has finished, and say why if it stopped early.
     pub fn advance_if_finished(&mut self) {
+        #[cfg(target_os = "macos")]
+        if self.video_loaded
+            && let Some(video) = self.video.as_mut()
+        {
+            video.poll();
+        }
         self.sync_gapless();
         self.poll_radio();
         if self.radio.is_some() {
@@ -868,7 +893,7 @@ impl Playback {
         self.seek_secs = secs;
     }
 
-    /// The output that plays the loaded track: libmpv for video, rodio for audio.
+    /// The output that plays the loaded track: the video player for video, rodio for audio.
     fn active(&self) -> Option<&dyn Player> {
         if self.video_loaded {
             self.video.as_ref().map(|p| p as &dyn Player)
@@ -895,7 +920,7 @@ impl Playback {
         }
     }
 
-    /// Stop libmpv if a video was playing, so the audio output can take over.
+    /// Stop the video if one was playing, so the audio output can take over.
     fn leave_video(&mut self) {
         if !self.video_loaded {
             return;
@@ -906,7 +931,7 @@ impl Playback {
         }
     }
 
-    /// Play a video through libmpv, in its own window. The audio output is released meanwhile.
+    /// Play a video from the decoders, shown in the main pane. The audio output is released meanwhile.
     fn start_video(&mut self, item: &MediaItem, autoplay: bool) {
         if let Some(player) = self.player.as_mut() {
             let _ = player.stop();
@@ -923,10 +948,10 @@ impl Playback {
             return;
         }
         if self.video.is_none() {
-            match VideoPlayer::new() {
+            match new_video() {
                 Ok(video) => self.video = Some(video),
                 Err(e) => {
-                    self.error = Some(format!("Video needs libmpv: {e}"));
+                    self.error = Some(e);
                     return;
                 }
             }
@@ -992,6 +1017,64 @@ impl Playback {
     /// slider runs along the top edge, with the elapsed and total time at its ends.
     /// Draw the bar. In `compact` mode, which is for narrow windows, it shows only the track, play or
     /// pause, and next.
+    /// Whether a video is loaded, so the main pane should show its picture. Only the decoders draw
+    /// into the pane; libmpv plays in its own window.
+    pub fn video_showing(&self) -> bool {
+        cfg!(target_os = "macos") && self.video_loaded && self.video.is_some()
+    }
+
+    /// Whether the video is playing, so the window should keep redrawing.
+    pub fn video_active(&self) -> bool {
+        #[cfg(target_os = "macos")]
+        {
+            self.video_loaded && self.video.as_ref().is_some_and(VideoPlayer::active)
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            false
+        }
+    }
+
+    /// Draw the video's picture, fitted to the pane. The texture is only rebuilt when the picture
+    /// has changed.
+    #[cfg(target_os = "macos")]
+    pub fn show_video(&mut self, ui: &mut egui::Ui) {
+        let shown = self.video.as_ref().map_or(0, VideoPlayer::shown);
+        if shown != self.video_texture_shown {
+            if let Some(image) = self.video.as_ref().and_then(VideoPlayer::image) {
+                let color = egui::ColorImage::from_rgba_unmultiplied(
+                    [image.width as usize, image.height as usize],
+                    &image.pixels,
+                );
+                match &mut self.video_texture {
+                    Some(texture) => texture.set(color, egui::TextureOptions::LINEAR),
+                    None => {
+                        self.video_texture = Some(ui.ctx().load_texture(
+                            "video",
+                            color,
+                            egui::TextureOptions::LINEAR,
+                        ));
+                    }
+                }
+            }
+            self.video_texture_shown = shown;
+        }
+        match &self.video_texture {
+            Some(texture) => {
+                ui.centered_and_justified(|ui| {
+                    ui.add(egui::Image::new(texture).shrink_to_fit());
+                });
+            }
+            None => {
+                ui.label("Loading video…");
+            }
+        }
+    }
+
+    /// Without the decoders there is no picture in the pane.
+    #[cfg(not(target_os = "macos"))]
+    pub fn show_video(&mut self, _ui: &mut egui::Ui) {}
+
     pub fn show(&mut self, ui: &mut egui::Ui, compact: bool) {
         if self.radio.is_some() {
             self.show_radio(ui);
@@ -1783,6 +1866,8 @@ mod tests {
         let mut p = Playback {
             player: None,
             video: None,
+            video_texture: None,
+            video_texture_shown: 0,
             video_loaded: false,
             queue: Vec::new(),
             original: Vec::new(),

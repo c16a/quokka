@@ -7,7 +7,6 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
-libmpv2.workspace = true
 player-core.workspace = true
 rusty_vp9.workspace = true
 rav1d.workspace = true
@@ -27,3 +26,7 @@ harness = false
 objc2.workspace = true
 objc2-foundation.workspace = true
 objc2-app-kit.workspace = true
+
+# libmpv plays video on platforms the decoders do not cover yet. macOS plays from the decoders.
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+libmpv2.workspace = true
