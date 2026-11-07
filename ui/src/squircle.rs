@@ -189,7 +189,6 @@ impl<W: egui::Widget> SquircleButton<W> {
             used.max + egui::vec2(padding.right, padding.bottom),
         );
         let response = ui.allocate_rect(outer, egui::Sense::click());
-
         let hover = ui.ctx().animate_bool_with_time(
             response.id.with("squircle_hover"),
             response.hovered(),
@@ -205,15 +204,31 @@ impl<W: egui::Widget> SquircleButton<W> {
             let centre = outer.center();
             // Without a radius, the corners are as round as the box allows.
             let radius = self.radius.unwrap_or(f32::MAX);
-            let points = outline(outer.width() / 2.0, outer.height() / 2.0, radius)
-                .into_iter()
-                .map(|offset| centre + offset)
-                .collect();
-            let stroke = self.stroke.unwrap_or(egui::Stroke::NONE);
-            ui.painter().set(
-                background,
-                egui::Shape::convex_polygon(points, fill, stroke),
-            );
+            let points: Vec<egui::Pos2> =
+                outline(outer.width() / 2.0, outer.height() / 2.0, radius)
+                    .into_iter()
+                    .map(|offset| centre + offset)
+                    .collect();
+            // The fill is a fan of triangles from the centre. egui's own convex-polygon fill draws a
+            // wedge across the button for these outlines, so the triangles are built here instead.
+            let mut mesh = egui::Mesh::default();
+            let centre_index = mesh.vertices.len() as u32;
+            mesh.colored_vertex(centre, fill);
+            for point in &points {
+                mesh.colored_vertex(*point, fill);
+            }
+            let count = points.len() as u32;
+            for i in 0..count {
+                mesh.add_triangle(
+                    centre_index,
+                    centre_index + 1 + i,
+                    centre_index + 1 + (i + 1) % count,
+                );
+            }
+            ui.painter().set(background, egui::Shape::mesh(mesh));
+            if let Some(stroke) = self.stroke {
+                ui.painter().add(egui::Shape::closed_line(points, stroke));
+            }
         }
         response
     }
