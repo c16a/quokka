@@ -10,6 +10,7 @@ use crate::format;
 use crate::icons;
 use crate::playback::MenuRequest;
 use crate::queue;
+use crate::squircle::{Padding, SquircleButton};
 
 /// Height of a track row's content. Vertical padding comes from the row's frame.
 const TRACK_ROW_HEIGHT: f32 = 52.0;
@@ -1112,9 +1113,9 @@ fn pill(
     icon: PillIcon,
     filled: bool,
 ) -> egui::Response {
-    let (pad, icon_w, gap) = match icon {
-        PillIcon::Play => (22.0, 14.0, 8.0),
-        PillIcon::Shuffle => (18.0, 16.0, 8.0),
+    let padding = match icon {
+        PillIcon::Play => Padding::symmetric(22.0, 10.0),
+        PillIcon::Shuffle => Padding::symmetric(18.0, 10.0),
     };
     let font = if filled {
         egui::FontId::new(14.0, crate::fonts::bold_family())
@@ -1126,39 +1127,29 @@ fn pill(
     } else {
         palette.text
     };
-    let galley = ui.painter().layout_no_wrap(label.to_owned(), font, colour);
-    let width = pad + icon_w + gap + galley.size().x + pad;
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 40.0), egui::Sense::click());
-    let painter = ui.painter();
-    if filled {
-        painter.rect_filled(rect, 20.0, palette.fill);
-    } else {
-        painter.rect_stroke(
-            rect,
-            20.0,
-            egui::Stroke::new(1.0, palette.outline),
-            egui::StrokeKind::Inside,
-        );
-    }
-    let c = rect.center();
-    let x = rect.left() + pad;
     let glyph = match icon {
         PillIcon::Play => icons::PLAY,
         PillIcon::Shuffle => icons::SHUFFLE,
     };
-    icons::paint(
-        painter,
-        egui::pos2(x + icon_w / 2.0, c.y),
-        glyph,
-        16.0,
-        colour,
-    );
-    painter.galley(
-        egui::pos2(x + icon_w + gap, c.y - galley.size().y / 2.0),
-        galley,
-        colour,
-    );
-    response
+    let text = label.to_owned();
+    let content = move |ui: &mut egui::Ui| {
+        ui.horizontal(|ui| {
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
+            icons::paint(ui.painter(), rect.center(), glyph, 16.0, colour);
+            ui.add_space(8.0);
+            ui.add(egui::Label::new(egui::RichText::new(text).font(font).color(colour)).extend())
+        })
+        .inner
+    };
+    let button = SquircleButton::new(content).padding(padding);
+    if filled {
+        button.fill(palette.fill).show(ui)
+    } else {
+        button
+            .fill(egui::Color32::TRANSPARENT)
+            .stroke(egui::Stroke::new(1.0, palette.outline))
+            .show(ui)
+    }
 }
 
 /// A 40 px round button with a star: filled gold when the album is a favourite.

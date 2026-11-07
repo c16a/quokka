@@ -15,6 +15,7 @@ use crate::icons;
 use crate::playback::MenuRequest;
 use crate::queue;
 use crate::search::search_fill;
+use crate::squircle::{self, Padding, SquircleButton};
 
 /// The playlist list, or the tracks of one playlist when one is open.
 #[derive(Default)]
@@ -140,19 +141,13 @@ impl PlaylistsView {
             // The button is as tall as the field, with the same corners as the Sync now button.
             let height = framed.response.rect.height();
             let create = ui
-                .scope(|ui| {
-                    // Wider than the default button padding, so the label has room either side.
-                    ui.spacing_mut().button_padding = egui::vec2(18.0, 6.0);
-                    ui.add_enabled(
-                        !self.new_name.trim().is_empty(),
-                        egui::Button::new(
-                            egui::RichText::new("Create").color(egui::Color32::WHITE),
-                        )
+                .add_enabled_ui(!self.new_name.trim().is_empty(), |ui| {
+                    let label = egui::RichText::new("Create").color(egui::Color32::WHITE);
+                    let vertical = ((height - 18.0) / 2.0).max(0.0);
+                    SquircleButton::new(egui::Label::new(label).extend())
+                        .padding(Padding::symmetric(18.0, vertical))
                         .fill(ui.visuals().selection.bg_fill)
-                        .stroke(egui::Stroke::NONE)
-                        .corner_radius(6.0)
-                        .min_size(egui::vec2(0.0, height)),
-                    )
+                        .show(ui)
                 })
                 .inner;
             let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
@@ -192,11 +187,11 @@ impl PlaylistsView {
                             self.selected = Some(playlist.id);
                         }
                         response.context_menu(|ui| {
-                            if ui.button("Rename").clicked() {
+                            if squircle::text_button(ui, "Rename").clicked() {
                                 rename = Some((playlist.id, playlist.name.clone()));
                                 ui.close();
                             }
-                            if ui.button("Delete playlist").clicked() {
+                            if squircle::text_button(ui, "Delete playlist").clicked() {
                                 delete = Some(playlist.id);
                                 ui.close();
                             }
@@ -267,9 +262,9 @@ impl PlaylistsView {
                 }
                 let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                 let escape = ui.input(|i| i.key_pressed(egui::Key::Escape));
-                if ui.button("Save").clicked() || enter {
+                if squircle::text_button(ui, "Save").clicked() || enter {
                     finish_rename = Some(true);
-                } else if ui.button("Cancel").clicked() || escape {
+                } else if squircle::text_button(ui, "Cancel").clicked() || escape {
                     finish_rename = Some(false);
                 }
             }),

@@ -4,6 +4,7 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::icons;
+use crate::squircle::{self, SquircleButton};
 use eframe::egui::{self, Sense};
 use quokka_core::{Library, Station};
 
@@ -386,7 +387,7 @@ fn station_card(ui: &mut egui::Ui, station: &Station, on_air: bool) -> Option<Ra
         })
         .response;
     response.context_menu(|ui| {
-        if ui.button("Tune out").clicked() {
+        if squircle::text_button(ui, "Tune out").clicked() {
             action = Some(RadioAction::TuneOut(station.uuid.clone()));
             ui.close();
         }
@@ -565,13 +566,11 @@ fn age(last: Option<i64>) -> String {
 
 /// A filled accent button, as used for actions such as Sync now.
 fn pill(ui: &mut egui::Ui, text: &str) -> egui::Response {
-    ui.add(
-        egui::Button::new(egui::RichText::new(text).color(egui::Color32::WHITE))
-            .fill(ui.visuals().selection.bg_fill)
-            .stroke(egui::Stroke::NONE)
-            .corner_radius(6.0)
-            .min_size(egui::vec2(0.0, 30.0)),
-    )
+    let label = egui::RichText::new(text).color(egui::Color32::WHITE);
+    SquircleButton::new(egui::Label::new(label).extend())
+        .padding(squircle::TEXT_PADDING)
+        .fill(ui.visuals().selection.bg_fill)
+        .show(ui)
 }
 
 /// A search result: the station's tile, name and details. Hovering turns the tile into a play

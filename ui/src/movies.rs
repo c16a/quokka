@@ -16,6 +16,7 @@ use quokka_core::{Library, MatchOutcome, MediaItem, Progress, finished};
 use crate::albums::{PlayRequest, TILE_COVER, TILE_GAP, TILE_TEXT, hover_scroll, tile_line};
 use crate::format;
 use crate::icons;
+use crate::squircle::{self, Padding, SquircleButton};
 
 /// Height of a poster in the grid. Its width is two thirds of that: posters are portrait.
 const TILE_POSTER_HEIGHT: f32 = 225.0;
@@ -393,19 +394,12 @@ impl MoviesView {
         ui.horizontal(|ui| {
             if info.is_some() {
                 if let Some(key) = tmdb_key
-                    && ui
-                        .scope(|ui| {
-                            // Wider than the default, to match the pill buttons' side padding.
-                            ui.spacing_mut().button_padding.x = 22.0;
-                            ui.add(outline_button("Wrong movie? Choose another", &p))
-                        })
-                        .inner
-                        .clicked()
+                    && outline_button(ui, "Wrong movie? Choose another", &p).clicked()
                 {
                     let job = find_job(movie.id, movie.path.clone(), key.to_owned(), true);
                     self.start(ui.ctx(), movie.id, job);
                 }
-                if ui.add(ghost_button("Remove details", &p)).clicked() {
+                if ghost_button(ui, "Remove details", &p).clicked() {
                     self.details.remove(&movie.id);
                     let media_id = movie.id;
                     let job: Job = Box::new(move |library| {
@@ -509,7 +503,7 @@ impl MoviesView {
                     .color(p.weak),
             );
         } else if let Some(key) = tmdb_key {
-            if ui.add(outline_button("Find details on TMDb", p)).clicked() {
+            if outline_button(ui, "Find details on TMDb", p).clicked() {
                 let job = find_job(movie.id, movie.path.clone(), key.to_owned(), false);
                 self.start(ui.ctx(), movie.id, job);
             }
@@ -658,7 +652,7 @@ impl MoviesView {
             self.start(ui.ctx(), media_id, job);
         }
         ui.add_space(6.0);
-        if ui.button("None of these").clicked() {
+        if squircle::text_button(ui, "None of these").clicked() {
             self.choices = None;
             self.notice = Some("Left unmatched.".to_owned());
         }
@@ -686,7 +680,7 @@ impl MoviesView {
                     ui.add(egui::Label::new(shorten(overview, SYNOPSIS_CHARS)).wrap());
                 }
                 ui.add_space(4.0);
-                if ui.button("This one").clicked() {
+                if squircle::text_button(ui, "This one").clicked() {
                     picked = true;
                 }
             });
@@ -990,7 +984,7 @@ fn back_button(ui: &mut egui::Ui, p: &MoviePalette) -> egui::Response {
 }
 
 /// A rounded button for the page's actions. A filled one is the primary action, and an outlined one
-/// is secondary. Its background fades to the hover colour over 200 ms on an ease-in curve.
+/// is secondary. The icon, when there is one, sits before the label.
 fn pill_button(
     ui: &mut egui::Ui,
     text: &str,
@@ -998,64 +992,32 @@ fn pill_button(
     icon: Option<&str>,
     p: &MoviePalette,
 ) -> egui::Response {
-    const SIDE_PADDING: f32 = 22.0;
-    let (font_size, min_height): (f32, f32) = if filled { (14.0, 40.0) } else { (13.0, 36.0) };
+    let (font_size, icon_size) = if filled { (14.0, 18.0) } else { (13.0, 17.0) };
     let text_color = if filled { p.on_fill } else { p.body };
-    let galley = ui.painter().layout_no_wrap(
-        text.to_owned(),
-        egui::FontId::proportional(font_size),
-        text_color,
-    );
-    // Play keeps the width it had before it became a pill.
-    let min_width = if filled { 96.0 } else { 0.0 };
-    // The icon, when there is one, sits before the label with a gap between them.
-    let icon_size = if filled { 18.0 } else { 17.0 };
-    let icon_width = if icon.is_some() { icon_size + 8.0 } else { 0.0 };
-    let content_width = icon_width + galley.size().x;
-    let size = egui::vec2(
-        (content_width + 2.0 * SIDE_PADDING).max(min_width),
-        min_height.max(galley.size().y),
-    );
-    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
-    let progress =
-        ui.ctx()
-            .animate_bool_with_time(response.id.with("hover"), response.hovered(), 0.2);
-    let eased = progress * progress;
-    let fill = if filled {
-        mix(p.fill, mix(p.fill, p.on_fill, 0.15), eased)
-    } else {
-        // The outline's tint keeps its colour and only fades in its alpha. Mixing from transparent
-        // would pass through black, because egui stores transparent colours premultiplied.
-        let tint = mix(p.panel, p.text, 0.08);
-        let alpha = (eased * 255.0).round() as u8;
-        egui::Color32::from_rgba_unmultiplied(tint.r(), tint.g(), tint.b(), alpha)
+    let label = egui::RichText::new(text.to_owned())
+        .size(font_size)
+        .color(text_color);
+    let content = move |ui: &mut egui::Ui| {
+        ui.horizontal(|ui| {
+            if let Some(glyph) = icon {
+                let (rect, _) =
+                    ui.allocate_exact_size(egui::vec2(icon_size, icon_size), egui::Sense::hover());
+                icons::paint_filled(ui.painter(), rect.center(), glyph, icon_size, text_color);
+                ui.add_space(8.0);
+            }
+            ui.add(egui::Label::new(label).extend())
+        })
+        .inner
     };
-    let painter = ui.painter();
-    painter.rect_filled(rect, 999.0, fill);
-    if !filled {
-        painter.rect_stroke(
-            rect,
-            999.0,
-            egui::Stroke::new(1.0, p.outline),
-            egui::StrokeKind::Inside,
-        );
+    let button = SquircleButton::new(content).padding(Padding::symmetric(22.0, 10.0));
+    if filled {
+        button.fill(p.fill).show(ui)
+    } else {
+        button
+            .fill(egui::Color32::TRANSPARENT)
+            .stroke(egui::Stroke::new(1.0, p.outline))
+            .show(ui)
     }
-    let left = rect.center().x - content_width / 2.0;
-    if let Some(glyph) = icon {
-        icons::paint_filled(
-            painter,
-            egui::pos2(left + icon_size / 2.0, rect.center().y),
-            glyph,
-            icon_size,
-            text_color,
-        );
-    }
-    painter.galley(
-        egui::pos2(left + icon_width, rect.center().y - galley.size().y / 2.0),
-        galley,
-        text_color,
-    );
-    response
 }
 
 /// The colour that covers most of a poster, found in OKLab. Near-black, near-white and grey pixels
@@ -1112,27 +1074,27 @@ fn mix(a: egui::Color32, b: egui::Color32, t: f32) -> egui::Color32 {
     )
 }
 
-fn outline_button(text: &str, p: &MoviePalette) -> egui::Button<'static> {
-    egui::Button::new(
-        egui::RichText::new(text.to_owned())
-            .size(13.0)
-            .color(p.body),
-    )
-    .fill(egui::Color32::TRANSPARENT)
-    .stroke(egui::Stroke::new(1.0, p.outline))
-    .corner_radius(999.0)
-    .min_size(egui::vec2(0.0, 36.0))
+/// A secondary button: text in the body colour, with an outline and no fill.
+fn outline_button(ui: &mut egui::Ui, text: &str, p: &MoviePalette) -> egui::Response {
+    let label = egui::RichText::new(text.to_owned())
+        .size(13.0)
+        .color(p.body);
+    SquircleButton::new(egui::Label::new(label).extend())
+        .padding(Padding::symmetric(22.0, 10.0))
+        .fill(egui::Color32::TRANSPARENT)
+        .stroke(egui::Stroke::new(1.0, p.outline))
+        .show(ui)
 }
 
-fn ghost_button(text: &str, p: &MoviePalette) -> egui::Button<'static> {
-    egui::Button::new(
-        egui::RichText::new(text.to_owned())
-            .size(13.0)
-            .color(p.weak),
-    )
-    .fill(egui::Color32::TRANSPARENT)
-    .stroke(egui::Stroke::NONE)
-    .corner_radius(999.0)
+/// A quiet button: text in the weak colour, with neither outline nor fill.
+fn ghost_button(ui: &mut egui::Ui, text: &str, p: &MoviePalette) -> egui::Response {
+    let label = egui::RichText::new(text.to_owned())
+        .size(13.0)
+        .color(p.weak);
+    SquircleButton::new(egui::Label::new(label).extend())
+        .padding(Padding::symmetric(22.0, 10.0))
+        .fill(egui::Color32::TRANSPARENT)
+        .show(ui)
 }
 
 fn section_title(ui: &mut egui::Ui, text: &str, p: &MoviePalette) {

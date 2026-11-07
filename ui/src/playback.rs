@@ -17,6 +17,7 @@ use std::thread;
 use crate::format;
 use crate::icons;
 use crate::slider;
+use crate::squircle::{Padding, SquircleButton};
 
 /// A track to add to the queue from elsewhere in the app.
 pub enum MenuRequest {
@@ -1967,19 +1968,10 @@ fn speed_text(speed: f32) -> String {
 
 /// A small pill button showing the playback speed.
 fn speed_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(40.0, 28.0), egui::Sense::click());
-    let visuals = ui.style().interact(&response);
-    hover_fill(ui, rect, 14.0, &response);
-    let colour = visuals.fg_stroke.color;
-    let painter = ui.painter();
-    painter.text(
-        rect.center(),
-        egui::Align2::CENTER_CENTER,
-        label,
-        egui::FontId::proportional(12.0),
-        colour,
-    );
-    response
+    let text = egui::RichText::new(label).size(12.0);
+    SquircleButton::new(egui::Label::new(text).extend())
+        .padding(Padding::symmetric(10.0, 6.0))
+        .show(ui)
 }
 
 /// Round button with an icon for a side panel. It is tinted when that panel is open.

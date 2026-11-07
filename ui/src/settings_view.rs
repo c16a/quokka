@@ -4,6 +4,7 @@ use eframe::egui;
 use quokka_core::{LibraryKind, ReplayGainMode, Settings, Theme};
 
 use crate::slider;
+use crate::squircle::{self, Padding, SquircleButton};
 
 /// Something the user asked for on the Settings screen.
 pub enum Action {
@@ -187,17 +188,10 @@ fn chip(ui: &mut egui::Ui, label: &str, text: egui::Color32, stroke: egui::Color
 
 /// A folder row's button: 32 px tall with slightly rounded corners. Returns true when it is clicked.
 fn row_button(ui: &mut egui::Ui, label: &str, fill: egui::Color32, text: egui::Color32) -> bool {
-    ui.add(
-        egui::Button::new(egui::RichText::new(label).size(14.0).color(text))
-            .fill(fill)
-            .stroke(egui::Stroke::NONE)
-            .corner_radius(8.0)
-            .min_size(egui::vec2(0.0, 32.0)),
-    )
-    .clicked()
+    squircle_label(ui, label, fill, text, Padding::symmetric(14.0, 6.0)).clicked()
 }
 
-/// A rounded button with a label. Returns true when it is clicked.
+/// A rounded button with a label, at least `height` points tall. Returns true when it is clicked.
 fn pill(
     ui: &mut egui::Ui,
     label: &str,
@@ -205,14 +199,26 @@ fn pill(
     text: egui::Color32,
     height: f32,
 ) -> bool {
-    ui.add(
-        egui::Button::new(egui::RichText::new(label).size(14.0).color(text))
-            .fill(fill)
-            .stroke(egui::Stroke::NONE)
-            .corner_radius(height / 2.0)
-            .min_size(egui::vec2(0.0, height)),
-    )
-    .clicked()
+    let vertical = ((height - LABEL_LINE) / 2.0).max(0.0);
+    squircle_label(ui, label, fill, text, Padding::symmetric(18.0, vertical)).clicked()
+}
+
+/// The height of one line of 14-point text, which the padding is measured from.
+const LABEL_LINE: f32 = 18.0;
+
+/// A squircle button with one line of 14-point text.
+fn squircle_label(
+    ui: &mut egui::Ui,
+    label: &str,
+    fill: egui::Color32,
+    text: egui::Color32,
+    padding: Padding,
+) -> egui::Response {
+    let text = egui::RichText::new(label).size(14.0).color(text);
+    SquircleButton::new(egui::Label::new(text).extend())
+        .padding(padding)
+        .fill(fill)
+        .show(ui)
 }
 
 /// The chip for a kind and the number of folders and files under it.
@@ -507,18 +513,15 @@ pub fn show(
                                     kind = k;
                                 }
                             }
-                            ui.add_enabled(
-                                false,
-                                egui::Button::new(
-                                    egui::RichText::new("TV Shows · Soon")
-                                        .size(14.0)
-                                        .color(colours.weak),
+                            ui.add_enabled_ui(false, |ui| {
+                                squircle_label(
+                                    ui,
+                                    "TV Shows · Soon",
+                                    egui::Color32::TRANSPARENT,
+                                    colours.weak,
+                                    Padding::symmetric(14.0, 6.0),
                                 )
-                                .fill(egui::Color32::TRANSPARENT)
-                                .stroke(egui::Stroke::NONE)
-                                .corner_radius(999.0)
-                                .min_size(egui::vec2(0.0, 32.0)),
-                            );
+                            });
                         });
                     });
                 ui.add_space(8.0);
@@ -636,10 +639,10 @@ pub fn show(
                     .hint_text("TMDb API key")
                     .desired_width(280.0),
             );
-            if ui.button("Save key").clicked() {
+            if squircle::text_button(ui, "Save key").clicked() {
                 action = Some(Action::SetTmdbKey(draft.trim().to_owned()));
             }
-            if settings.tmdb_api_key.is_some() && ui.button("Remove key").clicked() {
+            if settings.tmdb_api_key.is_some() && squircle::text_button(ui, "Remove key").clicked() {
                 action = Some(Action::SetTmdbKey(String::new()));
             }
         });

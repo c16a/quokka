@@ -7,6 +7,7 @@ use quokka_core::{MediaItem, PlaylistSummary};
 use crate::format;
 use crate::icons;
 use crate::playback::{MenuRequest, Playback};
+use crate::squircle::{self, Padding, SquircleButton};
 
 /// Height of a queue row's content.
 const ROW_HEIGHT: f32 = 52.0;
@@ -49,8 +50,16 @@ pub fn show(ui: &mut egui::Ui, view: &mut QueueView, playback: &mut Playback) {
         });
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
             ui.add_space(14.0);
-            let clear = egui::Button::new(egui::RichText::new("Clear").color(danger)).frame(false);
-            if ui.add_enabled(first < end, clear).clicked() {
+            let clear = ui
+                .add_enabled_ui(first < end, |ui| {
+                    let label = egui::RichText::new("Clear").color(danger);
+                    SquircleButton::new(egui::Label::new(label).extend())
+                        .padding(squircle::TEXT_PADDING)
+                        .fill(egui::Color32::TRANSPARENT)
+                        .show(ui)
+                })
+                .inner;
+            if clear.clicked() {
                 edits.clear = true;
             }
         });
@@ -253,7 +262,7 @@ pub fn track_menu(
             ui.weak("No playlists yet");
         }
         for playlist in playlists {
-            if ui.button(&playlist.name).clicked() {
+            if squircle::text_button(ui, playlist.name.as_str()).clicked() {
                 queue.push(MenuRequest::AddToPlaylist {
                     playlist: playlist.id,
                     media_id: track.id,
@@ -272,10 +281,12 @@ pub fn track_menu(
 /// it was clicked.
 fn menu_row(ui: &mut egui::Ui, label: &str) -> bool {
     let width = ui.available_width();
-    ui.spacing_mut().button_padding = egui::vec2(14.0, 6.0);
-    ui.add_sized(
-        [width, 32.0],
-        egui::Button::new((label.to_owned(), egui::Atom::grow())).corner_radius(6.0),
-    )
-    .clicked()
+    let text = label.to_owned();
+    // The label fills the row, less the padding either side, so the squircle spans the full width.
+    let content =
+        move |ui: &mut egui::Ui| ui.add_sized([width - 2.0 * 14.0, 18.0], egui::Label::new(text));
+    SquircleButton::new(content)
+        .padding(Padding::symmetric(14.0, 6.0))
+        .show(ui)
+        .clicked()
 }

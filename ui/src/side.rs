@@ -13,6 +13,7 @@ use quokka_core::{
 };
 
 use crate::format;
+use crate::squircle;
 
 /// What the lyrics panel asked for this frame.
 #[derive(Default)]
@@ -241,7 +242,7 @@ impl SidePanels {
                                     ui.visuals().error_fg_color,
                                     format!("Couldn't reach lrclib.net: {e}"),
                                 );
-                                if ui.button("Try again").clicked() {
+                                if squircle::text_button(ui, "Try again").clicked() {
                                     self.lookup = Lookup::Idle;
                                 }
                             }
@@ -365,7 +366,7 @@ impl SidePanels {
                             row(ui, "File", &item.path.display().to_string());
                         });
                     ui.add_space(10.0);
-                    if ui.button("Reveal in Finder").clicked() {
+                    if squircle::text_button(ui, "Reveal in Finder").clicked() {
                         reveal(&item.path);
                     }
                 });
@@ -398,11 +399,18 @@ impl SidePanels {
                             .zip(drafts.iter())
                             .any(|(line, draft)| line.editable && &line.value != draft);
                         ui.horizontal(|ui| {
-                            if ui.add_enabled(dirty, egui::Button::new("Save")).clicked() {
+                            if ui
+                                .add_enabled_ui(dirty, |ui| squircle::text_button(ui, "Save"))
+                                .inner
+                                .clicked()
+                            {
                                 action = Some(TagAction::Save(drafts.clone()));
                             }
                             if ui
-                                .add_enabled(can_revert, egui::Button::new("Revert"))
+                                .add_enabled_ui(can_revert, |ui| {
+                                    squircle::text_button(ui, "Revert")
+                                })
+                                .inner
                                 .on_hover_text(
                                     "Put back the tags the file had before it was first edited",
                                 )
@@ -497,7 +505,7 @@ fn store(library: &Library, id: i64, text: Option<&str>) {
 /// The prompt that asks for permission before lyrics are looked up online.
 fn offer(ui: &mut egui::Ui, outcome: &mut LyricsOutcome) {
     ui.label("Look up synced lyrics on lrclib.net? The title, artist, album and length of each track you open are sent there.");
-    if ui.button("Turn on lyrics lookup").clicked() {
+    if squircle::text_button(ui, "Turn on lyrics lookup").clicked() {
         outcome.enable = true;
     }
 }

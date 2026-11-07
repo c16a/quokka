@@ -83,16 +83,25 @@ pub struct SquircleButton<W> {
     child: W,
     padding: Padding,
     fill: Option<egui::Color32>,
+    stroke: Option<egui::Stroke>,
 }
 
 impl<W: egui::Widget> SquircleButton<W> {
-    /// A button around `child`, with no padding and the theme's fill.
+    /// A button around `child`, with no padding, the theme's fill and no outline.
     pub fn new(child: W) -> Self {
         Self {
             child,
             padding: Padding::default(),
             fill: None,
+            stroke: None,
         }
+    }
+
+    /// An outline drawn round the squircle. Without one, there is none.
+    #[must_use]
+    pub fn stroke(mut self, stroke: egui::Stroke) -> Self {
+        self.stroke = Some(stroke);
+        self
     }
 
     /// The space between the child and the outline.
@@ -152,9 +161,10 @@ impl<W: egui::Widget> SquircleButton<W> {
                 .into_iter()
                 .map(|offset| centre + offset)
                 .collect();
+            let stroke = self.stroke.unwrap_or(egui::Stroke::NONE);
             ui.painter().set(
                 background,
-                egui::Shape::convex_polygon(points, fill, egui::Stroke::NONE),
+                egui::Shape::convex_polygon(points, fill, stroke),
             );
         }
         response
@@ -165,6 +175,22 @@ impl<W: egui::Widget> egui::Widget for SquircleButton<W> {
     fn ui(self, ui: &mut egui::Ui) -> egui::Response {
         self.show(ui)
     }
+}
+
+/// The padding round a button's text.
+pub const TEXT_PADDING: Padding = Padding {
+    left: 16.0,
+    top: 8.0,
+    right: 16.0,
+    bottom: 8.0,
+};
+
+/// A squircle button with one line of text, in the theme's text colour and fill. The text is never
+/// wrapped, so the button grows with it.
+pub fn text_button(ui: &mut egui::Ui, text: impl Into<egui::WidgetText>) -> egui::Response {
+    SquircleButton::new(egui::Label::new(text).extend())
+        .padding(TEXT_PADDING)
+        .show(ui)
 }
 
 #[cfg(test)]
