@@ -4,7 +4,7 @@
 
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender};
 use std::thread;
 use std::time::Duration;
@@ -36,6 +36,8 @@ pub struct MovieAudio {
     player: Player,
     /// Samples the device has pulled, across all channels.
     pulled: Arc<AtomicU64>,
+    /// Set once the device has pulled the last of the soundtrack.
+    ended: Arc<AtomicBool>,
     channels: u32,
     sample_rate: u32,
 }
@@ -69,6 +71,7 @@ impl MovieAudio {
         let sink = open_output(Some(sample_rate))
             .map_err(|error| PlaybackError::Backend(error.to_string()))?;
         let pulled = Arc::new(AtomicU64::new(0));
+        let ended = Arc::new(AtomicBool::new(false));
         let source = ChunkSource {
             messages,
             current: Vec::new(),
@@ -76,6 +79,7 @@ impl MovieAudio {
             channels: nonzero_channels(channels)?,
             sample_rate: nonzero_rate(sample_rate)?,
             pulled: Arc::clone(&pulled),
+            ended_flag: Arc::clone(&ended),
             ended: false,
         };
         let player = Player::connect_new(sink.mixer());
@@ -85,6 +89,7 @@ impl MovieAudio {
             _sink: sink,
             player,
             pulled,
+            ended,
             channels,
             sample_rate,
         }))
@@ -94,6 +99,11 @@ impl MovieAudio {
     pub fn clock(&self) -> f64 {
         let samples = self.pulled.load(Ordering::Relaxed);
         samples as f64 / f64::from(self.channels * self.sample_rate)
+    }
+
+    /// Whether the soundtrack has played to its end.
+    pub fn finished(&self) -> bool {
+        self.ended.load(Ordering::Relaxed)
     }
 
     pub fn play(&self) {
@@ -177,6 +187,8 @@ struct ChunkSource {
     channels: ChannelCount,
     sample_rate: SampleRate,
     pulled: Arc<AtomicU64>,
+    /// Shared with `MovieAudio`, so the window can see the end.
+    ended_flag: Arc<AtomicBool>,
     ended: bool,
 }
 
@@ -206,6 +218,7 @@ impl Iterator for ChunkSource {
 
     fn next(&mut self) -> Option<f32> {
         if !self.refill() {
+            self.ended_flag.store(true, Ordering::Relaxed);
             return None;
         }
         if self.position < self.current.len() {

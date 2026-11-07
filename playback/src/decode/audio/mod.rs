@@ -30,6 +30,9 @@ pub trait AudioDecoder {
 
     /// The samples the decoder still holds once the last frame has gone in.
     fn finish(&mut self) -> Result<Vec<f32>, DecodeError>;
+
+    /// Forget the frames held so far, as after a seek. The next frame starts a new run.
+    fn reset(&mut self);
 }
 
 /// Open the first backend that accepts the stream. The operating system's decoder goes first.

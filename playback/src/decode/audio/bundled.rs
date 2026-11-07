@@ -2,7 +2,9 @@
 //! for, and it is the fallback where the operating system does not decode a codec.
 
 use player_core::video::AudioCodec;
-use symphonia::core::codecs::audio::well_known::CODEC_ID_AAC;
+use symphonia::core::codecs::audio::well_known::{
+    CODEC_ID_AAC, CODEC_ID_ALAC, CODEC_ID_FLAC, CODEC_ID_MP3,
+};
 use symphonia::core::codecs::audio::{AudioCodecParameters, AudioDecoderOptions};
 use symphonia::core::packet::Packet;
 use symphonia::core::units::{Duration, Timestamp};
@@ -24,6 +26,9 @@ impl Bundled {
     pub fn open(stream: &AudioStream) -> Result<Self, DecodeError> {
         let codec = match stream.codec {
             AudioCodec::Aac => CODEC_ID_AAC,
+            AudioCodec::Mp3 => CODEC_ID_MP3,
+            AudioCodec::Flac => CODEC_ID_FLAC,
+            AudioCodec::Alac => CODEC_ID_ALAC,
             other => {
                 return Err(DecodeError::Unsupported {
                     backend: BACKEND,
@@ -75,5 +80,9 @@ impl AudioDecoder for Bundled {
 
     fn finish(&mut self) -> Result<Vec<f32>, DecodeError> {
         Ok(Vec::new())
+    }
+
+    fn reset(&mut self) {
+        self.decoder.reset();
     }
 }

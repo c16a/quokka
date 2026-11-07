@@ -18,6 +18,9 @@ const FORMAT_LINEAR_PCM: u32 = u32::from_be_bytes(*b"lpcm");
 const FORMAT_AAC: u32 = u32::from_be_bytes(*b"aac ");
 const FORMAT_AC3: u32 = u32::from_be_bytes(*b"ac-3");
 const FORMAT_EAC3: u32 = u32::from_be_bytes(*b"ec-3");
+const FORMAT_MP3: u32 = u32::from_be_bytes(*b"mp3 ");
+const FORMAT_FLAC: u32 = u32::from_be_bytes(*b"flac");
+const FORMAT_ALAC: u32 = u32::from_be_bytes(*b"alac");
 /// Float samples, packed, as the stream's own sample rate.
 const FLAG_FLOAT_PACKED: u32 = 1 | 8;
 /// The property that gives the converter the codec's configuration.
@@ -86,6 +89,7 @@ unsafe extern "C" {
         size: u32,
         data: *const c_void,
     ) -> OSStatus;
+    fn AudioConverterReset(converter: Converter) -> OSStatus;
     fn AudioConverterFillComplexBuffer(
         converter: Converter,
         input: InputProc,
@@ -108,6 +112,14 @@ struct Input {
 /// are written: L, C, R, Ls, Rs, LFE. Each output channel is taken from one of these positions, so
 /// the result is in WAVE order, L, R, C, LFE, Ls, Rs, as the rest of the player expects.
 const AC3_51_TO_WAVE: [usize; 6] = [0, 2, 1, 5, 3, 4];
+
+/// The channel order AAC gives for 5.1, which is MPEG's: C, L, R, Ls, Rs, LFE. Taken the same way
+/// as the AC-3 order above.
+const AAC_51_TO_WAVE: [usize; 6] = [1, 2, 0, 5, 3, 4];
+
+// SAFETY: a converter is used by one thread at a time, and the decoder is moved to the thread that
+// owns its stream once, when the stream is opened. Nothing in it is shared.
+unsafe impl Send for AudioToolbox {}
 
 /// An AudioToolbox converter for one stream.
 pub struct AudioToolbox {
@@ -159,6 +171,9 @@ impl AudioToolbox {
             AudioCodec::Aac => (FORMAT_AAC, 1024),
             AudioCodec::Ac3 => (FORMAT_AC3, 1536),
             AudioCodec::Eac3 => (FORMAT_EAC3, 1536),
+            AudioCodec::Mp3 => (FORMAT_MP3, 1152),
+            AudioCodec::Flac => (FORMAT_FLAC, 0),
+            AudioCodec::Alac => (FORMAT_ALAC, 4096),
         };
         let channels = stream.channels;
         let source = Format {
@@ -185,7 +200,12 @@ impl AudioToolbox {
         if status != 0 || converter.is_null() {
             return Err(refused(format!("AudioConverterNew returned {status}")));
         }
-        let reorder = (channels == 6 && stream.codec != AudioCodec::Aac).then_some(AC3_51_TO_WAVE);
+        // Only the MPEG-family orders are known; other 5.1 streams are left as the decoder gives them.
+        let reorder = match (channels, stream.codec) {
+            (6, AudioCodec::Aac) => Some(AAC_51_TO_WAVE),
+            (6, AudioCodec::Ac3 | AudioCodec::Eac3) => Some(AC3_51_TO_WAVE),
+            _ => None,
+        };
         let decoder = AudioToolbox {
             converter,
             input: Box::new(Input {
@@ -197,9 +217,14 @@ impl AudioToolbox {
             channels,
             reorder,
         };
-        // AAC takes its MPEG-4 `esds` descriptors as the magic cookie. AC-3 and E-AC-3 need none.
-        if stream.codec == AudioCodec::Aac && !stream.config.is_empty() {
-            let cookie = esds(&stream.config);
+        // AAC takes its MPEG-4 `esds` descriptors as the magic cookie, ALAC and FLAC their own
+        // records. MP3, AC-3 and E-AC-3 need none.
+        let cookie = match stream.codec {
+            AudioCodec::Aac => Some(esds(&stream.config)),
+            AudioCodec::Alac | AudioCodec::Flac => Some(stream.config.clone()),
+            AudioCodec::Ac3 | AudioCodec::Eac3 | AudioCodec::Mp3 => None,
+        };
+        if let Some(cookie) = cookie.filter(|cookie| !cookie.is_empty()) {
             // SAFETY: the converter is valid, and the cookie is valid for the call.
             let status = unsafe {
                 AudioConverterSetProperty(
@@ -291,6 +316,13 @@ impl AudioDecoder for AudioToolbox {
     fn finish(&mut self) -> Result<Vec<f32>, DecodeError> {
         self.input.pending = false;
         self.fill()
+    }
+
+    fn reset(&mut self) {
+        self.input.pending = false;
+        self.input.packet.clear();
+        // SAFETY: the converter is valid until `Drop`.
+        unsafe { AudioConverterReset(self.converter) };
     }
 }
 

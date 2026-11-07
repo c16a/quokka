@@ -13,6 +13,12 @@ pub enum AudioCodec {
     Ac3,
     /// Dolby Digital Plus (E-AC-3).
     Eac3,
+    /// MPEG-1 Layer 3 (MP3), as music uses it.
+    Mp3,
+    /// Free Lossless Audio Codec (FLAC).
+    Flac,
+    /// Apple Lossless Audio Codec (ALAC).
+    Alac,
 }
 
 impl AudioCodec {
@@ -22,6 +28,9 @@ impl AudioCodec {
             AudioCodec::Aac => "AAC",
             AudioCodec::Ac3 => "AC-3",
             AudioCodec::Eac3 => "E-AC-3",
+            AudioCodec::Mp3 => "MP3",
+            AudioCodec::Flac => "FLAC",
+            AudioCodec::Alac => "ALAC",
         }
     }
 }

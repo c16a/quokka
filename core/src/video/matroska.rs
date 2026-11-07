@@ -427,6 +427,8 @@ pub(crate) fn read_audio<R: Read + Seek>(file: &mut R) -> io::Result<Option<Audi
             .or_else(|| Some((track.sampling_frequency? as u32, track.channels? as u32))),
         AudioCodec::Ac3 => ac3_from_frame(&head),
         AudioCodec::Eac3 => eac3_from_frame(&head),
+        // The Matroska reader only names the codecs above.
+        AudioCodec::Mp3 | AudioCodec::Flac | AudioCodec::Alac => None,
     };
     let Some((sample_rate, channels)) = format else {
         return Ok(None);

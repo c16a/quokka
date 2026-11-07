@@ -9,10 +9,18 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::Duration;
 
+use player_core::video::AudioCodec;
 use rodio::source::SeekError;
 use rodio::{ChannelCount, SampleRate, Source};
 use symphonia::core::codecs::CodecParameters;
-use symphonia::core::codecs::audio::{AudioDecoder, AudioDecoderOptions};
+use symphonia::core::codecs::audio::well_known::{
+    CODEC_ID_AAC, CODEC_ID_ALAC, CODEC_ID_FLAC, CODEC_ID_MP3,
+};
+use symphonia::core::codecs::audio::{AudioCodecParameters, AudioDecoder, AudioDecoderOptions};
+
+#[cfg(target_os = "macos")]
+use crate::decode::audio::audiotoolbox::AudioToolbox;
+use crate::decode::audio::{AudioDecoder as SystemDecoder, AudioStream};
 use symphonia::core::codecs::registry::CodecRegistry;
 use symphonia::core::errors::Error as DecodeError;
 use symphonia::core::formats::probe::Hint;
@@ -67,12 +75,16 @@ pub struct SymphoniaSource {
     samples: Vec<f32>,
     cursor: usize,
     finished: bool,
+    /// The decoder that makes the samples: the operating system's, or symphonia's.
+    decoder_name: &'static str,
 }
 
 /// Everything the decoder thread needs. It is moved into the thread when the source opens.
 struct Worker {
     format: Box<dyn FormatReader>,
     decoder: Box<dyn AudioDecoder>,
+    /// The operating system's decoder, when it takes the codec. Symphonia then decodes nothing.
+    system: Option<Box<dyn SystemDecoder + Send>>,
     track_id: u32,
     channels: usize,
     /// Samples to drop after a seek, so playback starts exactly at the target.
@@ -138,6 +150,10 @@ impl SymphoniaSource {
         let duration = num_frames
             .map(|frames| Duration::from_secs_f64(frames as f64 / f64::from(sample_rate.get())));
 
+        let system = system_decoder(&params, sample_rate.get(), u32::from(channels.get()));
+        let decoder_name = system
+            .as_ref()
+            .map_or("symphonia", |decoder| decoder.name());
         let decoder = codecs()
             .make_audio_decoder(&params, &AudioDecoderOptions::default())
             .map_err(|e| e.to_string())?;
@@ -147,6 +163,7 @@ impl SymphoniaSource {
         let worker = Worker {
             format,
             decoder,
+            system,
             track_id,
             channels: channels.get() as usize,
             skip_samples: 0,
@@ -168,6 +185,7 @@ impl SymphoniaSource {
             samples: Vec::new(),
             cursor: 0,
             finished: false,
+            decoder_name,
         })
     }
 }
@@ -235,6 +253,15 @@ impl Worker {
     }
 
     /// Decode packets until one yields samples, or the stream ends.
+    /// Drop the samples before a seek's target, and return the rest if there are any.
+    fn after_seek(&mut self, mut samples: Vec<f32>) -> Option<Chunk> {
+        // After an accurate seek the packet starts before the target.
+        let drop = self.skip_samples.min(samples.len());
+        samples.drain(..drop);
+        self.skip_samples -= drop;
+        (!samples.is_empty()).then_some(Chunk::Samples(samples))
+    }
+
     fn next_chunk(&mut self) -> Chunk {
         loop {
             let packet = match self.format.next_packet() {
@@ -249,16 +276,21 @@ impl Worker {
             if packet.track_id != self.track_id {
                 continue;
             }
+            if let Some(system) = self.system.as_mut() {
+                // A frame the system decoder rejects is skipped; the rest of the file still plays.
+                if let Ok(samples) = system.decode(&packet.data)
+                    && let Some(chunk) = self.after_seek(samples)
+                {
+                    return chunk;
+                }
+                continue;
+            }
             match self.decoder.decode(&packet) {
                 Ok(decoded) => {
                     let mut samples = Vec::new();
                     decoded.copy_to_vec_interleaved(&mut samples);
-                    // After an accurate seek the packet starts before the target.
-                    let drop = self.skip_samples.min(samples.len());
-                    samples.drain(..drop);
-                    self.skip_samples -= drop;
-                    if !samples.is_empty() {
-                        return Chunk::Samples(samples);
+                    if let Some(chunk) = self.after_seek(samples) {
+                        return chunk;
                     }
                 }
                 // A damaged packet is skipped; the rest of the file still plays.
@@ -293,6 +325,9 @@ impl Worker {
         let frames = (seeked.required_ts.get() - seeked.actual_ts.get()).max(0) as usize;
         self.skip_samples = frames * self.channels;
         self.decoder.reset();
+        if let Some(system) = self.system.as_mut() {
+            system.reset();
+        }
         Ok(())
     }
 
@@ -333,6 +368,50 @@ impl Iterator for SymphoniaSource {
                 Err(_) => self.finished = true,
             }
         }
+    }
+}
+
+impl SymphoniaSource {
+    /// The decoder that makes this source's samples: `"AudioToolbox"`, or `"symphonia"`.
+    pub fn decoder_name(&self) -> &'static str {
+        self.decoder_name
+    }
+}
+
+/// The operating system's decoder for a music track, when it takes the codec. Symphonia decodes
+/// everything else.
+fn system_decoder(
+    params: &AudioCodecParameters,
+    sample_rate: u32,
+    channels: u32,
+) -> Option<Box<dyn SystemDecoder + Send>> {
+    #[cfg(target_os = "macos")]
+    {
+        let codec = match params.codec {
+            CODEC_ID_AAC => AudioCodec::Aac,
+            CODEC_ID_MP3 => AudioCodec::Mp3,
+            CODEC_ID_FLAC => AudioCodec::Flac,
+            CODEC_ID_ALAC => AudioCodec::Alac,
+            _ => return None,
+        };
+        let stream = AudioStream {
+            codec,
+            sample_rate,
+            channels,
+            config: params
+                .extra_data
+                .as_deref()
+                .map(<[u8]>::to_vec)
+                .unwrap_or_default(),
+        };
+        AudioToolbox::open(&stream)
+            .ok()
+            .map(|decoder| Box::new(decoder) as Box<dyn SystemDecoder + Send>)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (params, sample_rate, channels);
+        None
     }
 }
 

@@ -1,6 +1,7 @@
 //! A window that plays one video file, with its soundtrack, from the decoders, to check the playback
 //! path in a real window. Run it with `cargo run -p player-ui --example frame_view -- <file>`. Space
-//! pauses. The sound sets the clock; a file without sound runs on the wall clock.
+//! pauses. The sound sets the clock. When the sound ends, the video carries on from the same point on
+//! the wall clock. A file without sound runs on the wall clock throughout.
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -13,11 +14,13 @@ use player_playback::movie_audio::MovieAudio;
 struct FrameView {
     player: Option<FramePlayer>,
     audio: Option<MovieAudio>,
+    /// Whether the sound has ended, and the wall clock has taken over.
+    audio_done: bool,
     error: Option<String>,
     /// The frame whose time has not come up yet.
     next: Option<VideoFrame>,
     texture: Option<egui::TextureHandle>,
-    /// Playback position in seconds, for a file without sound.
+    /// Playback position in seconds, when the wall clock is in charge.
     wall_clock: f64,
     last_tick: Instant,
     paused: bool,
@@ -57,6 +60,7 @@ impl FrameView {
         FrameView {
             player,
             audio,
+            audio_done: false,
             error,
             next: None,
             texture: None,
@@ -68,11 +72,11 @@ impl FrameView {
         }
     }
 
-    /// Where playback is: the sound's clock when there is sound, else the wall clock.
+    /// Where playback is: the sound's clock while the sound plays, else the wall clock.
     fn clock(&self) -> f64 {
         match &self.audio {
-            Some(audio) => audio.clock(),
-            None => self.wall_clock,
+            Some(audio) if !self.audio_done => audio.clock(),
+            _ => self.wall_clock,
         }
     }
 
@@ -137,8 +141,16 @@ impl eframe::App for FrameView {
         if ctx.input(|input| input.key_pressed(egui::Key::Space)) {
             self.toggle_pause();
         }
+        // When the sound runs out, the wall clock picks up from where the sound stopped.
+        if let Some(audio) = &self.audio
+            && !self.audio_done
+            && audio.finished()
+        {
+            self.audio_done = true;
+            self.wall_clock = audio.clock();
+        }
         let now = Instant::now();
-        if !self.paused && self.audio.is_none() {
+        if !self.paused && (self.audio.is_none() || self.audio_done) {
             self.wall_clock += now.duration_since(self.last_tick).as_secs_f64();
         }
         self.last_tick = now;
@@ -155,7 +167,7 @@ impl eframe::App for FrameView {
             } else {
                 "playing"
             };
-            let source = if self.audio.is_some() {
+            let source = if self.audio.is_some() && !self.audio_done {
                 "sound clock"
             } else {
                 "wall clock"
@@ -180,7 +192,9 @@ impl eframe::App for FrameView {
             }
         });
 
-        if !finished {
+        // The clock only moves on a repaint, so keep repainting until the sound has ended too.
+        let sound_playing = self.audio.is_some() && !self.audio_done;
+        if !finished || sound_playing {
             ctx.request_repaint_after(Duration::from_millis(16));
         }
     }
