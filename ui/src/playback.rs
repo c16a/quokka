@@ -918,14 +918,18 @@ impl Playback {
         if self.radio.is_some() {
             return;
         }
-        let target = Duration::from_secs_f64(secs.max(0.0));
-        // A movie that is not loaded starts from here when it is played.
+        // A movie that is not loaded starts from here when it is played. Nothing is loaded to seek
+        // in the meantime, and the audio output would report that as "no media loaded", so the
+        // position is only kept.
         if !self.video_loaded
             && let Some(item) = self.current()
             && item.kind == MediaKind::Video
         {
             self.video_resume = Some((item.path.clone(), secs.max(0.0)));
+            self.seek_secs = secs;
+            return;
         }
+        let target = Duration::from_secs_f64(secs.max(0.0));
         self.with_player(|p| p.seek(target));
         self.seek_secs = secs;
     }
