@@ -1007,7 +1007,7 @@ fn pill_button(
             }
             ui.add(egui::Label::new(label).extend())
         })
-        .inner
+        .response
     };
     let button = SquircleButton::new(content).padding(Padding::symmetric(22.0, 10.0));
     if filled {

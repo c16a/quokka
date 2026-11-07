@@ -161,17 +161,28 @@ impl<W: egui::Widget> SquircleButton<W> {
         // child's shapes. egui's Frame works the same way.
         let background = ui.painter().add(egui::Shape::Noop);
 
+        // The child is laid out in the row's own direction, so it lands where the row would put it.
+        // In a right-to-left row the available rectangle starts at the top of the whole region, so
+        // the row's cursor gives the edges instead: the child then sits against the cursor, between
+        // the row's top and bottom.
+        let cursor = ui.cursor();
         let available = ui.available_rect_before_wrap();
+        let (left, right) = if ui.layout().main_dir() == egui::Direction::RightToLeft {
+            (available.min.x, cursor.max.x)
+        } else {
+            (cursor.min.x, available.max.x)
+        };
         let mut bounds = egui::Rect::from_min_max(
-            available.min + egui::vec2(padding.left, padding.top),
-            available.max - egui::vec2(padding.right, padding.bottom),
+            egui::pos2(left + padding.left, cursor.min.y + padding.top),
+            egui::pos2(right - padding.right, cursor.max.y - padding.bottom),
         );
         bounds.max.x = bounds.max.x.max(bounds.min.x);
         bounds.max.y = bounds.max.y.max(bounds.min.y);
 
+        // The child's own response gives its size. The region's minimum rectangle does not, because
+        // a right-to-left region can report the whole height it was given.
         let mut content = ui.new_child(egui::UiBuilder::new().max_rect(bounds));
-        self.child.ui(&mut content);
-        let used = content.min_rect();
+        let used = self.child.ui(&mut content).rect;
 
         let outer = egui::Rect::from_min_max(
             used.min - egui::vec2(padding.left, padding.top),
@@ -363,6 +374,38 @@ mod tests {
         assert!(
             button_rect.height() < 60.0,
             "button rect {button_rect:?} is too tall"
+        );
+    }
+
+    #[test]
+    fn a_button_in_a_right_to_left_row_sits_in_the_row() {
+        let ctx = egui::Context::default();
+        let padding = Padding::new(6.0, 4.0, 10.0, 8.0);
+        let mut button_rect = egui::Rect::NOTHING;
+        let mut label_rect = egui::Rect::NOTHING;
+        let mut row_right = 0.0;
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            ui.add_space(200.0);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.add_space(10.0);
+                row_right = ui.cursor().max.x;
+                button_rect = ui
+                    .add(SquircleButton::new(egui::Label::new("Rescan").extend()).padding(padding))
+                    .rect;
+                label_rect = ui.add(egui::Label::new("Remove").extend()).rect;
+            });
+        });
+        assert!(
+            button_rect.height() < 60.0,
+            "button rect {button_rect:?} is too tall"
+        );
+        assert!(
+            (button_rect.right() - row_right).abs() < 1.0,
+            "button {button_rect:?} does not end at the row's edge {row_right}"
+        );
+        assert!(
+            label_rect.right() <= button_rect.left() + 1.0,
+            "label {label_rect:?} is not to the left of the button {button_rect:?}"
         );
     }
 

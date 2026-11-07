@@ -1139,7 +1139,7 @@ fn pill(
             ui.add_space(8.0);
             ui.add(egui::Label::new(egui::RichText::new(text).font(font).color(colour)).extend())
         })
-        .inner
+        .response
     };
     let button = SquircleButton::new(content).padding(padding);
     if filled {
