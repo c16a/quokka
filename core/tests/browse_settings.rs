@@ -45,6 +45,7 @@ fn settings_round_trip_and_default_when_missing() {
         lyrics_online: true,
         crossfade_secs: 4.0,
         playback_speed: 1.25,
+        tmdb_api_key: None,
     };
     settings.save(&path).unwrap();
     assert_eq!(Settings::load(&path).unwrap(), settings);

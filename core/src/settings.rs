@@ -63,6 +63,10 @@ pub struct Settings {
     /// Playback speed, where 1.0 is normal. Speeds other than 1.0 also change the pitch.
     #[serde(default = "default_speed")]
     pub playback_speed: f32,
+    /// The user's own TMDb API key, for movie descriptions and cast. Not shipped with the app.
+    /// Left out of the file when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tmdb_api_key: Option<String>,
 }
 
 fn default_speed() -> f32 {
@@ -80,6 +84,7 @@ impl Default for Settings {
             lyrics_online: false,
             crossfade_secs: 0.0,
             playback_speed: 1.0,
+            tmdb_api_key: None,
         }
     }
 }
@@ -115,13 +120,19 @@ impl Settings {
         Ok(settings)
     }
 
-    /// Save settings to `path`, creating parent folders. Writes via a temp file and rename.
+    /// Save settings to `path`, creating parent folders. Writes via a temp file and rename. The
+    /// file is readable only by its owner, since it may hold an API key.
     pub fn save(&self, path: &Path) -> Result<()> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
         let tmp = path.with_extension("json.tmp");
         fs::write(&tmp, serde_json::to_string_pretty(self)?)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600))?;
+        }
         fs::rename(&tmp, path)?;
         Ok(())
     }

@@ -1,0 +1,33 @@
+{
+  "page": 1,
+  "total_results": 2,
+  "total_pages": 1,
+  "results": [
+    {
+      "adult": false,
+      "id": 603,
+      "original_language": "en",
+      "original_title": "The Matrix",
+      "overview": "Sample overview text for the search result.",
+      "poster_path": "/sample-poster.jpg",
+      "release_date": "1999-03-30",
+      "title": "The Matrix",
+      "video": false,
+      "vote_average": 8.2,
+      "vote_count": 25000
+    },
+    {
+      "adult": false,
+      "id": 604,
+      "original_language": "en",
+      "original_title": "The Matrix Reloaded",
+      "overview": "Sample overview text for a different movie.",
+      "poster_path": null,
+      "release_date": "2003-05-15",
+      "title": "The Matrix Reloaded",
+      "video": false,
+      "vote_average": 6.7,
+      "vote_count": 12000
+    }
+  ]
+}

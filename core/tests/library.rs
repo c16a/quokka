@@ -37,6 +37,46 @@ fn rescan_skips_unchanged_and_removes_deleted() {
 }
 
 #[test]
+fn a_movie_dropped_into_a_subfolder_after_the_first_scan_is_indexed() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::create_dir(dir.path().join("Films")).unwrap();
+    fs::write(dir.path().join("Films/first.mkv"), b"first").unwrap();
+
+    let mut lib = Library::open_in_memory().unwrap();
+    lib.scan(dir.path()).unwrap();
+    assert_eq!(lib.movies().unwrap().len(), 1);
+
+    fs::create_dir(dir.path().join("Films/2024")).unwrap();
+    fs::write(dir.path().join("Films/2024/Dropped.MKV"), b"dropped").unwrap();
+    let stats = lib.scan(dir.path()).unwrap();
+
+    assert_eq!(stats.indexed, 1);
+    assert_eq!(stats.unchanged, 1);
+    let movies = lib.movies().unwrap();
+    assert_eq!(movies.len(), 2);
+    assert!(movies.iter().all(|m| m.kind == MediaKind::Video));
+}
+
+#[test]
+fn disc_and_raw_video_extensions_are_indexed_as_video() {
+    let dir = tempfile::tempdir().unwrap();
+    let names = [
+        "a.m2ts", "b.MTS", "c.vob", "d.m2v", "e.3gp", "f.ogv", "g.rmvb", "h.obu",
+    ];
+    for name in names {
+        fs::write(dir.path().join(name), b"x").unwrap();
+    }
+
+    let mut lib = Library::open_in_memory().unwrap();
+    let stats = lib.scan(dir.path()).unwrap();
+
+    assert_eq!(stats.indexed, names.len());
+    let movies = lib.movies().unwrap();
+    assert_eq!(movies.len(), names.len());
+    assert!(movies.iter().all(|m| m.kind == MediaKind::Video));
+}
+
+#[test]
 fn search_matches_prefix_and_ignores_empty_query() {
     let dir = tempfile::tempdir().unwrap();
     fs::write(dir.path().join("moonlight.mp3"), b"x").unwrap();

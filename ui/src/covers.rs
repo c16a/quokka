@@ -37,10 +37,15 @@ pub(crate) fn decode(bytes: &[u8], max_side: u32) -> Option<Decoded> {
         .crop_imm(x, y, side, side)
         .thumbnail(max_side, max_side)
         .to_rgba8();
+    Some(decoded_from(image))
+}
+
+/// The colour and grey versions of a decoded picture, ready to upload.
+fn decoded_from(image: image::RgbaImage) -> Decoded {
     let size = [image.width() as usize, image.height() as usize];
     let colour = egui::ColorImage::from_rgba_unmultiplied(size, image.as_raw());
     let grayscaled = egui::ColorImage::from_rgba_unmultiplied(size, &grayscale(&image, COVER_GREY));
-    Some(Decoded { colour, grayscaled })
+    Decoded { colour, grayscaled }
 }
 
 /// Upload decoded pixels as a cover. `key` names the textures.

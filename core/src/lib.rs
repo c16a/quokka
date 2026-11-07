@@ -12,7 +12,11 @@ mod details;
 mod favorites;
 mod history;
 mod lyrics;
+pub mod matching;
 mod metadata;
+mod movie_details;
+mod processing;
+pub use movie_details::{CHOICE_LIMIT, MatchOutcome};
 mod playlist;
 mod radio;
 mod replaygain;
@@ -21,6 +25,8 @@ mod search;
 mod session;
 mod settings;
 mod tag_write;
+pub mod tmdb;
+pub mod video;
 
 use std::path::{Path, PathBuf};
 
@@ -51,6 +57,8 @@ pub enum Error {
     Io(#[from] std::io::Error),
     #[error("settings file is not valid: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("TMDb: {0}")]
+    Tmdb(String),
     #[error("not a directory: {0}")]
     NotADirectory(PathBuf),
     #[error("invalid tag name")]
@@ -79,7 +87,9 @@ impl MediaKind {
             "mp3" | "flac" | "m4a" | "aac" | "ogg" | "oga" | "opus" | "wav" | "aif" | "aiff"
             | "mka" => Some(Self::Audio),
             "mp4" | "m4v" | "mkv" | "webm" | "mov" | "avi" | "wmv" | "flv" | "ts" | "mpg"
-            | "mpeg" => Some(Self::Video),
+            | "mpeg" | "m2ts" | "mts" | "vob" | "m2v" | "3gp" | "ogv" | "rmvb" | "obu" => {
+                Some(Self::Video)
+            }
             _ => None,
         }
     }
@@ -120,6 +130,21 @@ pub struct MediaItem {
     pub codec: Option<String>,
     pub bit_depth: Option<i64>,
     pub sample_rate: Option<i64>,
+    /// Video codec label, such as "AV1" (movies only).
+    pub video_codec: Option<String>,
+    /// Frame size in pixels (movies only).
+    pub width: Option<i64>,
+    pub height: Option<i64>,
+    /// Bit depth of the picture, such as 8 or 10 (movies only).
+    pub video_bit_depth: Option<i64>,
+    /// Chroma subsampling of the picture, such as `4:2:0` (movies only).
+    pub video_chroma: Option<String>,
+    /// Frames per second (movies only). For a variable frame rate, the average.
+    pub video_fps: Option<f64>,
+    /// Whether the frame duration varies through the file (movies only).
+    pub video_fps_variable: bool,
+    /// Display aspect ratio, width over height (movies only).
+    pub video_aspect: Option<f64>,
     pub channels: Option<i64>,
     pub bitrate_kbps: Option<i64>,
     pub track: Option<i64>,
@@ -150,7 +175,19 @@ impl Library {
     /// Files whose size and mtime are unchanged are skipped; rows for files
     /// that no longer exist under `root` are removed.
     pub fn scan(&mut self, root: &Path) -> Result<ScanStats> {
+        let stats = self.scan_files(root)?;
+        self.process_pending()?;
+        Ok(stats)
+    }
+
+    /// The scan alone, without the processing steps. Run `process_pending` afterwards.
+    pub fn scan_files(&mut self, root: &Path) -> Result<ScanStats> {
         scan::scan(&mut self.conn, root)
+    }
+
+    /// Run the processing step of every video that has changed since it was last processed.
+    pub fn process_pending(&self) -> Result<()> {
+        processing::process_pending(&self.conn)
     }
 
     /// Remove every file under `root` from the library. Nothing on disk is touched.
@@ -385,8 +422,8 @@ impl Library {
     }
 }
 
-const COLUMNS: &str = "id, path, kind, size, duration_ms, title, artist, album, genre, track, year, album_artist, composer, codec, bit_depth, sample_rate, channels, bitrate_kbps";
-const M_COLUMNS: &str = "m.id, m.path, m.kind, m.size, m.duration_ms, m.title, m.artist, m.album, m.genre, m.track, m.year, m.album_artist, m.composer, m.codec, m.bit_depth, m.sample_rate, m.channels, m.bitrate_kbps";
+const COLUMNS: &str = "id, path, kind, size, duration_ms, title, artist, album, genre, track, year, album_artist, composer, codec, bit_depth, sample_rate, channels, bitrate_kbps, video_codec, width, height, video_bit_depth, video_chroma, video_fps, video_fps_variable, video_aspect";
+const M_COLUMNS: &str = "m.id, m.path, m.kind, m.size, m.duration_ms, m.title, m.artist, m.album, m.genre, m.track, m.year, m.album_artist, m.composer, m.codec, m.bit_depth, m.sample_rate, m.channels, m.bitrate_kbps, m.video_codec, m.width, m.height, m.video_bit_depth, m.video_chroma, m.video_fps, m.video_fps_variable, m.video_aspect";
 
 pub(crate) fn row_to_item(r: &rusqlite::Row<'_>) -> rusqlite::Result<MediaItem> {
     let kind: String = r.get(2)?;
@@ -409,6 +446,14 @@ pub(crate) fn row_to_item(r: &rusqlite::Row<'_>) -> rusqlite::Result<MediaItem> 
         sample_rate: r.get(15)?,
         channels: r.get(16)?,
         bitrate_kbps: r.get(17)?,
+        video_codec: r.get(18)?,
+        width: r.get(19)?,
+        height: r.get(20)?,
+        video_bit_depth: r.get(21)?,
+        video_chroma: r.get(22)?,
+        video_fps: r.get(23)?,
+        video_fps_variable: r.get::<_, i64>(24)? != 0,
+        video_aspect: r.get(25)?,
     })
 }
 

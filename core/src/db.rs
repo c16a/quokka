@@ -3,7 +3,7 @@ use rusqlite::Connection;
 use crate::Result;
 
 /// Bump when the schema changes and add a matching migration step below.
-const SCHEMA_VERSION: i64 = 11;
+const SCHEMA_VERSION: i64 = 17;
 
 /// Per-connection settings and schema migration.
 pub(crate) fn configure(conn: &Connection) -> Result<()> {
@@ -48,6 +48,24 @@ pub(crate) fn configure(conn: &Connection) -> Result<()> {
     }
     if version < 11 {
         conn.execute_batch(SCHEMA_V11)?;
+    }
+    if version < 12 {
+        conn.execute_batch(SCHEMA_V12)?;
+    }
+    if version < 13 {
+        conn.execute_batch(SCHEMA_V13)?;
+    }
+    if version < 14 {
+        conn.execute_batch(SCHEMA_V14)?;
+    }
+    if version < 15 {
+        conn.execute_batch(SCHEMA_V15)?;
+    }
+    if version < 16 {
+        conn.execute_batch(SCHEMA_V16)?;
+    }
+    if version < 17 {
+        conn.execute_batch(SCHEMA_V17)?;
     }
     if version != SCHEMA_VERSION {
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
@@ -227,6 +245,54 @@ CREATE TABLE loudness (
     peak  REAL NOT NULL,
     mtime INTEGER NOT NULL
 );
+";
+
+/// Video stream columns for movies. Existing movie rows get a stale mtime so the next scan
+/// re-reads them and fills the new columns.
+const SCHEMA_V12: &str = "
+ALTER TABLE media ADD COLUMN video_codec TEXT;
+ALTER TABLE media ADD COLUMN width INTEGER;
+ALTER TABLE media ADD COLUMN height INTEGER;
+ALTER TABLE media ADD COLUMN video_bit_depth INTEGER;
+UPDATE media SET mtime = -1 WHERE kind = 'video';
+";
+
+/// Movie details fetched from TMDb, as JSON, one row per movie. A movie's row goes with the
+/// movie.
+const SCHEMA_V13: &str = "
+CREATE TABLE movie_details (
+    media_id INTEGER PRIMARY KEY REFERENCES media(id) ON DELETE CASCADE,
+    tmdb_id  INTEGER NOT NULL,
+    details  TEXT NOT NULL
+);
+";
+
+/// Chroma subsampling of video files. Existing movie rows get a stale mtime so the next scan
+/// re-reads them and fills it in.
+const SCHEMA_V14: &str = "
+ALTER TABLE media ADD COLUMN video_chroma TEXT;
+UPDATE media SET mtime = -1 WHERE kind = 'video';
+";
+
+/// The codec of MP4 files that symphonia does not name, such as H.264. Existing movie rows get a
+/// stale mtime so the next scan reads their codec.
+const SCHEMA_V15: &str = "
+UPDATE media SET mtime = -1 WHERE kind = 'video';
+";
+
+/// Whether each file has been through its codec's processing step. A file that changes is
+/// processed again.
+const SCHEMA_V16: &str = "
+ALTER TABLE media ADD COLUMN processed INTEGER NOT NULL DEFAULT 0;
+";
+
+/// Frame rate, whether it varies, and display aspect ratio of video files, from the video module.
+/// Existing videos are processed again to fill them in.
+const SCHEMA_V17: &str = "
+ALTER TABLE media ADD COLUMN video_fps REAL;
+ALTER TABLE media ADD COLUMN video_fps_variable INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE media ADD COLUMN video_aspect REAL;
+UPDATE media SET processed = 0 WHERE kind = 'video';
 ";
 
 /// The tags each file had before the first edit made here, as JSON, until they are reverted.

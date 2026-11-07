@@ -5,9 +5,10 @@ use std::time::Duration;
 use eframe::egui;
 use player_core::RepeatMode as Repeat;
 use player_core::Station;
-use player_core::{MediaItem, ReplayGainMode, Session};
+use player_core::{MediaItem, MediaKind, ReplayGainMode, Session};
 use player_playback::{
-    Player, PlayerState, RodioPlayer, SymphoniaSource, open_stream, output_device_names,
+    Player, PlayerState, RodioPlayer, SymphoniaSource, VideoPlayer, open_stream,
+    output_device_names,
 };
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
@@ -46,6 +47,10 @@ const RADIO_RECONNECTS: u32 = 5;
 pub struct Playback {
     /// `None` when no audio output device could be opened.
     player: Option<RodioPlayer>,
+    /// The libmpv output for video. Created the first time a video plays.
+    video: Option<VideoPlayer>,
+    /// Whether the loaded track plays through `video` instead of `player`.
+    video_loaded: bool,
     queue: Vec<Arc<MediaItem>>,
     /// The queue in its natural order. Shuffle-off puts the upcoming tracks back in it.
     original: Vec<Arc<MediaItem>>,
@@ -121,6 +126,8 @@ impl Playback {
         };
         Self {
             player,
+            video: None,
+            video_loaded: false,
             queue: Vec::new(),
             original: Vec::new(),
             index: 0,
@@ -170,18 +177,16 @@ impl Playback {
     }
 
     pub fn state(&self) -> PlayerState {
-        self.player
-            .as_ref()
-            .map_or(PlayerState::Idle, |p| p.state())
+        self.active().map_or(PlayerState::Idle, |p| p.state())
     }
 
     pub fn position(&self) -> Option<Duration> {
-        self.player.as_ref().and_then(|p| p.position())
+        self.active().and_then(|p| p.position())
     }
 
     /// Total length: from the decoder if known, otherwise from the library.
     pub fn duration(&self) -> Option<Duration> {
-        self.player.as_ref().and_then(|p| p.duration()).or_else(|| {
+        self.active().and_then(|p| p.duration()).or_else(|| {
             self.current()
                 .and_then(|t| t.duration_ms)
                 .map(|ms| Duration::from_millis(ms.max(0) as u64))
@@ -198,6 +203,7 @@ impl Playback {
 
     /// Tune in to a station: connect to its stream and play it. Replaces what was playing.
     pub fn tune(&mut self, station: Station) {
+        self.leave_video();
         self.with_player(|p| p.stop());
         self.radio = Some(station);
         self.radio_paused = false;
@@ -262,6 +268,7 @@ impl Playback {
         };
         match rx.try_recv() {
             Ok(Ok(source)) => {
+                self.leave_video();
                 if self.player.is_none() {
                     self.player = RodioPlayer::new().ok();
                     self.apply_volume();
@@ -567,7 +574,7 @@ impl Playback {
         if self.state() != PlayerState::Ended {
             return;
         }
-        let stopped_early = self.player.as_ref().and_then(|p| p.last_error());
+        let stopped_early = self.active().and_then(|p| p.last_error());
         match self.repeat {
             // A track that stopped early isn't replayed, or a damaged file would loop.
             Repeat::Track if stopped_early.is_none() => self.start_current(),
@@ -675,7 +682,7 @@ impl Playback {
     /// frame. When the output has moved on to the armed track, the queue position follows it.
     fn sync_gapless(&mut self) {
         self.poll_measured();
-        if self.radio.is_some() {
+        if self.radio.is_some() || self.video_loaded {
             return;
         }
         let started = match self.player.as_mut() {
@@ -698,8 +705,11 @@ impl Playback {
         if want == self.armed {
             return;
         }
+        // Only audio is armed for gapless playback. A video needs its own output, so it is
+        // opened when it is reached.
         let path = want
             .and_then(|i| self.queue.get(i))
+            .filter(|item| item.kind == MediaKind::Audio)
             .map(|item| item.path.clone());
         if let Some(player) = self.player.as_mut() {
             match path {
@@ -858,12 +868,86 @@ impl Playback {
         self.seek_secs = secs;
     }
 
-    fn with_player(&mut self, f: impl FnOnce(&mut RodioPlayer) -> player_playback::Result<()>) {
-        if let Some(player) = self.player.as_mut()
-            && let Err(e) = f(player)
-        {
+    /// The output that plays the loaded track: libmpv for video, rodio for audio.
+    fn active(&self) -> Option<&dyn Player> {
+        if self.video_loaded {
+            self.video.as_ref().map(|p| p as &dyn Player)
+        } else {
+            self.player.as_ref().map(|p| p as &dyn Player)
+        }
+    }
+
+    fn active_mut(&mut self) -> Option<&mut dyn Player> {
+        if self.video_loaded {
+            self.video.as_mut().map(|p| p as &mut dyn Player)
+        } else {
+            self.player.as_mut().map(|p| p as &mut dyn Player)
+        }
+    }
+
+    fn with_player(&mut self, f: impl FnOnce(&mut dyn Player) -> player_playback::Result<()>) {
+        let result = match self.active_mut() {
+            Some(player) => f(player),
+            None => return,
+        };
+        if let Err(e) = result {
             self.error = Some(e.to_string());
         }
+    }
+
+    /// Stop libmpv if a video was playing, so the audio output can take over.
+    fn leave_video(&mut self) {
+        if !self.video_loaded {
+            return;
+        }
+        self.video_loaded = false;
+        if let Some(video) = self.video.as_mut() {
+            let _ = video.stop();
+        }
+    }
+
+    /// Play a video through libmpv, in its own window. The audio output is released meanwhile.
+    fn start_video(&mut self, item: &MediaItem, autoplay: bool) {
+        if let Some(player) = self.player.as_mut() {
+            let _ = player.stop();
+        }
+        // Loading a video opens its window. A video that is only queued, such as one restored from
+        // the last session, waits until play is pressed, so the app doesn't open a window at launch.
+        if !autoplay {
+            self.leave_video();
+            self.error = None;
+            self.gain = self.track_gain(&item.path);
+            self.apply_volume();
+            self.dragging = false;
+            self.seek_secs = 0.0;
+            return;
+        }
+        if self.video.is_none() {
+            match VideoPlayer::new() {
+                Ok(video) => self.video = Some(video),
+                Err(e) => {
+                    self.error = Some(format!("Video needs libmpv: {e}"));
+                    return;
+                }
+            }
+        }
+        self.video_loaded = true;
+        let Some(video) = self.video.as_mut() else {
+            return;
+        };
+        let loaded = video
+            .load(&item.path)
+            .and_then(|_| video.set_speed(self.speed))
+            .and_then(|_| if autoplay { video.play() } else { Ok(()) });
+        self.error = match loaded {
+            Ok(()) => None,
+            Err(e) => Some(format!("Could not play {}: {e}", format::title(item))),
+        };
+        let path = item.path.clone();
+        self.gain = self.track_gain(&path);
+        self.apply_volume();
+        self.dragging = false;
+        self.seek_secs = 0.0;
     }
 
     /// Load and play the current queue item.
@@ -877,6 +961,11 @@ impl Playback {
             return;
         };
         self.armed = None;
+        if item.kind == MediaKind::Video {
+            self.start_video(&item, autoplay);
+            return;
+        }
+        self.leave_video();
         // The output may not have been available at launch (e.g. headphones connected later).
         if self.player.is_none() {
             self.player = RodioPlayer::new().ok();
@@ -1670,6 +1759,14 @@ mod tests {
             bit_depth: None,
             sample_rate: None,
             channels: None,
+            video_codec: None,
+            width: None,
+            height: None,
+            video_bit_depth: None,
+            video_chroma: None,
+            video_fps: None,
+            video_fps_variable: false,
+            video_aspect: None,
             bitrate_kbps: None,
             track: None,
             year: None,
@@ -1685,6 +1782,8 @@ mod tests {
     fn queue_of(n: i64) -> Playback {
         let mut p = Playback {
             player: None,
+            video: None,
+            video_loaded: false,
             queue: Vec::new(),
             original: Vec::new(),
             index: 0,

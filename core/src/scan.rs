@@ -130,7 +130,13 @@ pub(crate) fn scan(conn: &mut Connection, root: &Path) -> Result<ScanStats> {
     let read: Vec<(Pending, metadata::Metadata)> = pending
         .into_par_iter()
         .map(|p| {
-            let info = metadata::read(&p.path, p.size);
+            let mut info = metadata::read(&p.path, p.size);
+            if p.kind == MediaKind::Video {
+                info.video = metadata::probe_video(&p.path);
+                if info.duration_ms.is_none() {
+                    info.duration_ms = info.video.duration_ms;
+                }
+            }
             (p, info)
         })
         .collect();
@@ -138,11 +144,13 @@ pub(crate) fn scan(conn: &mut Connection, root: &Path) -> Result<ScanStats> {
     // Pass 3 (sequential): write the results in one transaction, reusing statements.
     {
         let mut upsert = tx.prepare_cached(
+            // Colour depth and chroma come from the processing step, so a changed file clears them
+            // and is marked unprocessed.
             "INSERT INTO media \
                (path, kind, size, mtime, duration_ms, title, artist, album, album_artist, \
                 genre, composer, track, year, codec, bit_depth, sample_rate, channels, \
-                bitrate_kbps, added) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, strftime('%s', 'now')) \
+                bitrate_kbps, video_codec, width, height, added) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, strftime('%s', 'now')) \
              ON CONFLICT(path) DO UPDATE SET \
                kind = excluded.kind, size = excluded.size, mtime = excluded.mtime, \
                duration_ms = excluded.duration_ms, title = excluded.title, \
@@ -151,7 +159,10 @@ pub(crate) fn scan(conn: &mut Connection, root: &Path) -> Result<ScanStats> {
                composer = excluded.composer, track = excluded.track, year = excluded.year, \
                codec = excluded.codec, bit_depth = excluded.bit_depth, \
                sample_rate = excluded.sample_rate, channels = excluded.channels, \
-               bitrate_kbps = excluded.bitrate_kbps",
+               bitrate_kbps = excluded.bitrate_kbps, video_codec = excluded.video_codec, \
+               width = excluded.width, height = excluded.height, \
+               video_bit_depth = NULL, video_chroma = NULL, video_fps = NULL, \
+               video_fps_variable = 0, video_aspect = NULL, processed = 0",
         )?;
         for (p, info) in &read {
             upsert.execute(params![
@@ -173,6 +184,9 @@ pub(crate) fn scan(conn: &mut Connection, root: &Path) -> Result<ScanStats> {
                 info.sample_rate,
                 info.channels,
                 info.bitrate_kbps,
+                info.video.codec,
+                info.video.width,
+                info.video.height,
             ])?;
             stats.indexed += 1;
         }

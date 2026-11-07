@@ -1,0 +1,9 @@
+tconst	titleType	primaryTitle	originalTitle	isAdult	startYear	endYear	runtimeMinutes	genres
+tt0133093	movie	The Matrix	The Matrix	0	1999	\N	136	Action,Sci-Fi
+tt0145487	movie	Spider-Man	Spider-Man	0	2002	\N	121	Action
+tt2250912	movie	Spider-Man: Homecoming	Spider-Man: Homecoming	0	2017	\N	133	Action
+tt1375666	movie	Inception	Inception	0	2010	\N	148	Action
+tt0062622	movie	2001: A Space Odyssey	2001: A Space Odyssey	0	1968	\N	149	Sci-Fi
+tt0108052	movie	Schindler's List	Schindler's List	0	1993	\N	195	Biography
+tt0000001	short	Carmencita	Carmencita	0	1894	\N	1	Documentary
+tt0000009	movie	Adult Film	Adult Film	1	2000	\N	90	Adult

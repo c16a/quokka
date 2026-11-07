@@ -20,6 +20,8 @@ mod slider;
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -86,6 +88,8 @@ struct App {
     queue: VecDeque<PathBuf>,
     /// One line per folder scanned in the current run.
     report: Vec<String>,
+    /// Set while the scan worker runs the processing steps, after the files are read.
+    processing: Arc<AtomicBool>,
     /// Watches the library folder. Dropping it stops the watch.
     watcher: Option<notify::RecommendedWatcher>,
     change_tx: Sender<()>,
@@ -154,6 +158,7 @@ impl App {
     fn new(ctx: egui::Context, paths: Paths, settings: Settings, library: Library) -> Self {
         let mut playback = Playback::new();
         playback.set_library(paths.db.clone());
+        let movies = movies::MoviesView::new(paths.db.clone());
         // Artist photos are cached beside the library database.
         let photo_dir = paths
             .db
@@ -200,7 +205,7 @@ impl App {
             tab,
             albums: Default::default(),
             search: Default::default(),
-            movies: Default::default(),
+            movies,
             playback,
             queue_view: Default::default(),
             artists: artists::ArtistsView::new(photo_dir),
@@ -215,6 +220,7 @@ impl App {
             scan: None,
             queue: VecDeque::new(),
             report: Vec::new(),
+            processing: Arc::new(AtomicBool::new(false)),
             watcher: None,
             change_tx,
             changes,
@@ -391,9 +397,18 @@ impl App {
         let db = self.paths.db.clone();
         let ctx = ctx.clone();
         let job = root.clone();
+        let processing = Arc::clone(&self.processing);
         thread::spawn(move || {
             let result = Library::open(&db)
-                .and_then(|mut lib| lib.scan(&job))
+                .and_then(|mut lib| {
+                    let stats = lib.scan_files(&job)?;
+                    // The flag shows while the processing steps run, after the files are read.
+                    processing.store(true, Ordering::Relaxed);
+                    ctx.request_repaint();
+                    let done = lib.process_pending();
+                    processing.store(false, Ordering::Relaxed);
+                    done.map(|()| stats)
+                })
                 .map_err(|e| e.to_string());
             let _ = tx.send(result);
             ctx.request_repaint();
@@ -683,7 +698,8 @@ impl eframe::App for App {
             || self.tab == Tab::Settings
             || (self.tab == Tab::Artists && !self.artists.showing_detail())
             || (self.tab == Tab::Playlists && !self.playlists.showing_detail())
-            || (self.tab == Tab::Albums && self.albums.showing_detail());
+            || (self.tab == Tab::Albums && self.albums.showing_detail())
+            || (self.tab == Tab::Movies && self.movies.showing_page());
         let main_frame = if full_width {
             egui::Frame::central_panel(ui.style()).inner_margin(egui::Margin::same(0))
         } else {
@@ -738,7 +754,13 @@ impl eframe::App for App {
                         play = Some(request);
                     }
                 }
-                Tab::Movies => self.movies.show(ui),
+                Tab::Movies => {
+                    if let Some(request) =
+                        self.movies.show(ui, self.settings.tmdb_api_key.as_deref())
+                    {
+                        play = Some(request);
+                    }
+                }
                 Tab::Settings => {
                     action = settings_view::show(
                         ui,
@@ -746,6 +768,7 @@ impl eframe::App for App {
                         self.scan.is_some(),
                         &self.status,
                         &self.folder_files,
+                        self.processing.load(Ordering::Relaxed),
                     );
                 }
             });
@@ -855,6 +878,13 @@ impl eframe::App for App {
                 self.settings.crossfade_secs = secs;
                 if let Err(e) = self.settings.save(&self.paths.settings) {
                     self.status = format!("Could not save settings: {e}");
+                }
+            }
+            Some(settings_view::Action::SetTmdbKey(key)) => {
+                self.settings.tmdb_api_key = (!key.is_empty()).then_some(key);
+                match self.settings.save(&self.paths.settings) {
+                    Ok(()) => self.status = "Saved the TMDb key.".into(),
+                    Err(e) => self.status = format!("Could not save settings: {e}"),
                 }
             }
             Some(settings_view::Action::SetReplayGain(mode)) => {

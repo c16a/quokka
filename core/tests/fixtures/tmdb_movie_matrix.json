@@ -1,0 +1,28 @@
+{
+  "adult": false,
+  "id": 603,
+  "title": "The Matrix",
+  "original_title": "The Matrix",
+  "release_date": "1999-03-30",
+  "runtime": 136,
+  "genres": [
+    {"id": 28, "name": "Action"},
+    {"id": 878, "name": "Science Fiction"}
+  ],
+  "tagline": "Welcome to the Real World.",
+  "overview": "Sample overview text for the movie details.",
+  "poster_path": "/sample-poster.jpg",
+  "credits": {
+    "cast": [
+      {"id": 6384, "name": "Keanu Reeves", "character": "Neo", "order": 0, "profile_path": "/sample-keanu.jpg"},
+      {"id": 2975, "name": "Laurence Fishburne", "character": "Morpheus", "order": 2, "profile_path": null},
+      {"id": 530, "name": "Carrie-Anne Moss", "character": "Trinity", "order": 1, "profile_path": null}
+    ],
+    "crew": [
+      {"id": 9340, "name": "Lana Wachowski", "job": "Director", "department": "Directing", "profile_path": "/sample-lana.jpg"},
+      {"id": 9341, "name": "Lilly Wachowski", "job": "Director", "department": "Directing"},
+      {"id": 9340, "name": "Lana Wachowski", "job": "Writer", "department": "Writing"},
+      {"id": 9342, "name": "Don Davis", "job": "Original Music Composer", "department": "Sound"}
+    ]
+  }
+}

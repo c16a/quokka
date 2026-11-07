@@ -1,0 +1,4 @@
+# libmpv is installed by Homebrew under /opt/homebrew (Apple Silicon) or /usr/local (Intel),
+# and those directories are not on the default linker path. Non-existent directories are ignored.
+[target.'cfg(target_os = "macos")']
+rustflags = ["-L", "/opt/homebrew/lib", "-L", "/usr/local/lib"]

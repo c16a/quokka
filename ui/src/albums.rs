@@ -864,7 +864,7 @@ const SCROLL_SPEED: f32 = 30.0;
 /// Paint one line of a tile at `top`, in the tile whose area is `rect`. A line wider than the tile
 /// scrolls left in a loop, by `offset` points. Otherwise it starts at the tile's left edge, and the
 /// tile's painter clips what does not fit.
-fn tile_line(
+pub(crate) fn tile_line(
     painter: &egui::Painter,
     rect: egui::Rect,
     top: f32,
@@ -882,6 +882,25 @@ fn tile_line(
         painter.galley(egui::pos2(x + cycle, top), galley.clone(), colour);
     }
     painter.galley(egui::pos2(x, top), galley, colour);
+}
+
+/// The horizontal scroll of a tile's long line, in points. It moves on while the tile is hovered, and
+/// slides back to the start when the pointer leaves. It is kept per tile, under `id`.
+pub(crate) fn hover_scroll(ui: &egui::Ui, id: egui::Id, hovered: bool) -> f32 {
+    let step = ui.input(|i| i.stable_dt).min(0.1) * SCROLL_SPEED;
+    let offset = ui.ctx().data_mut(|data| {
+        let offset: &mut f32 = data.get_temp_mut_or_default(id);
+        *offset = if hovered {
+            *offset + step
+        } else {
+            (*offset - step).max(0.0)
+        };
+        *offset
+    });
+    if hovered || offset > 0.0 {
+        ui.ctx().request_repaint();
+    }
+    offset
 }
 
 /// A grid tile: square cover, then the album name and its composers. Text that doesn't fit is clipped,
@@ -914,22 +933,7 @@ pub(crate) fn album_tile(
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
     let text_top = cover_rect.bottom() + 6.0;
-    // The scroll position starts at the tile's left edge on each hover, moves on while the pointer is
-    // over the tile, and slides back to the start when it leaves. It is kept per tile.
-    let hovered = response.hovered();
-    let step = ui.input(|i| i.stable_dt).min(0.1) * SCROLL_SPEED;
-    let offset = ui.ctx().data_mut(|data| {
-        let offset: &mut f32 = data.get_temp_mut_or_default(response.id.with("scroll_offset"));
-        *offset = if hovered {
-            *offset + step
-        } else {
-            (*offset - step).max(0.0)
-        };
-        *offset
-    });
-    if hovered || offset > 0.0 {
-        ui.ctx().request_repaint();
-    }
+    let offset = hover_scroll(ui, response.id.with("scroll_offset"), response.hovered());
     let name_colour = ui.visuals().text_color();
     let composer_colour = ui.visuals().weak_text_color();
     tile_line(

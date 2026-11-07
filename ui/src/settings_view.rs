@@ -25,6 +25,8 @@ pub enum Action {
     SetReplayGain(ReplayGainMode),
     SetCrossfade(f32),
     SetLyricsOnline(bool),
+    /// The TMDb API key the user typed. Empty removes the saved key.
+    SetTmdbKey(String),
 }
 
 /// The kinds of folder, in the order the Library section lists them, with their names.
@@ -42,6 +44,9 @@ struct LibraryColours {
     text: egui::Color32,
     weak: egui::Color32,
     red: egui::Color32,
+    /// The amber "Processing" flag: its text and its tinted background.
+    amber: egui::Color32,
+    amber_fill: egui::Color32,
 }
 
 impl LibraryColours {
@@ -55,6 +60,8 @@ impl LibraryColours {
                 text: egui::Color32::from_rgb(0xF2, 0xF2, 0xF2),
                 weak: egui::Color32::from_rgb(0xA0, 0xA0, 0xA8),
                 red: egui::Color32::from_rgb(0xFF, 0x8A, 0x80),
+                amber: egui::Color32::from_rgb(0xFF, 0xB8, 0x4D),
+                amber_fill: egui::Color32::from_rgba_unmultiplied(0xFF, 0xB8, 0x4D, 0x2A),
             }
         } else {
             Self {
@@ -65,6 +72,8 @@ impl LibraryColours {
                 text: egui::Color32::from_rgb(0x11, 0x11, 0x11),
                 weak: egui::Color32::from_rgb(0x5C, 0x5C, 0x5C),
                 red: egui::Color32::from_rgb(0xA3, 0x27, 0x1F),
+                amber: egui::Color32::from_rgb(0x9A, 0x5B, 0x00),
+                amber_fill: egui::Color32::from_rgba_unmultiplied(0xFF, 0xB8, 0x4D, 0x40),
             }
         }
     }
@@ -322,6 +331,7 @@ pub fn show(
     busy: bool,
     status: &str,
     folder_files: &[i64],
+    processing: bool,
 ) -> Option<Action> {
     let mut action = None;
 
@@ -371,6 +381,20 @@ pub fn show(
                 }
             },
         );
+        if processing {
+            ui.add_space(4.0);
+            egui::Frame::new()
+                .fill(colours.amber_fill)
+                .corner_radius(999.0)
+                .inner_margin(egui::Margin::symmetric(10, 3))
+                .show(ui, |ui| {
+                    ui.label(
+                        egui::RichText::new("Processing")
+                            .size(12.0)
+                            .color(colours.amber),
+                    );
+                });
+        }
         if !status.is_empty() {
             ui.add_space(4.0);
             ui.label(egui::RichText::new(status).size(13.0).color(colours.weak));
@@ -595,6 +619,43 @@ pub fn show(
         );
         ui.add_space(8.0);
         ui.label(egui::RichText::new("For tracks with no .lrc file beside them. Sends each track's title, artist, album and length to lrclib.net. Lyrics found are cached in the library. A .lrc file always takes priority.").size(13.0).color(colours.weak));
+    });
+
+    ui.add_space(14.0);
+    card(ui, &colours, |ui| {
+        ui.label(egui::RichText::new("Movie details").size(16.0).strong());
+        ui.add_space(8.0);
+        ui.label(egui::RichText::new("Descriptions and cast for movies come from TMDb. Enter your own TMDb API key to use them. The key is saved in your settings file, readable only by your user account, and is sent only to TMDb.").size(13.0).color(colours.weak));
+        ui.add_space(10.0);
+        let draft_id = ui.scope_id().with("tmdb_key_draft");
+        let mut draft: String = ui.data_mut(|d| d.get_temp(draft_id).unwrap_or_default());
+        ui.horizontal(|ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut draft)
+                    .password(true)
+                    .hint_text("TMDb API key")
+                    .desired_width(280.0),
+            );
+            if ui.button("Save key").clicked() {
+                action = Some(Action::SetTmdbKey(draft.trim().to_owned()));
+            }
+            if settings.tmdb_api_key.is_some() && ui.button("Remove key").clicked() {
+                action = Some(Action::SetTmdbKey(String::new()));
+            }
+        });
+        ui.data_mut(|d| d.insert_temp(draft_id, draft.clone()));
+        if action.is_some() {
+            ui.data_mut(|d| d.insert_temp(draft_id, String::new()));
+        }
+        let state = if settings.tmdb_api_key.is_some() {
+            "A key is saved."
+        } else {
+            "No key saved. Movies show no descriptions or cast until you add one."
+        };
+        ui.add_space(6.0);
+        ui.label(egui::RichText::new(state).size(13.0).color(colours.weak));
+        ui.add_space(10.0);
+        ui.label(egui::RichText::new("This product uses the TMDB API but is not endorsed or certified by TMDB.").size(12.0).color(colours.weak));
     });
         });
         });
