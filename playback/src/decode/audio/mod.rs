@@ -5,7 +5,7 @@
 pub mod audiotoolbox;
 pub mod bundled;
 
-use player_core::video::AudioCodec;
+use quokka_core::video::AudioCodec;
 
 use super::DecodeError;
 

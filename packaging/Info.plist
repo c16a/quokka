@@ -7,9 +7,9 @@
     <key>CFBundleDisplayName</key>
     <string>Quokka</string>
     <key>CFBundleIdentifier</key>
-    <string>com.c16a.player.dev</string>
+    <string>com.c16a.quokka.dev</string>
     <key>CFBundleExecutable</key>
-    <string>player</string>
+    <string>quokka</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>

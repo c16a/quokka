@@ -1,6 +1,6 @@
 use std::fs;
 
-use player_core::{Library, MediaKind};
+use quokka_core::{Library, MediaKind};
 
 #[test]
 fn scan_indexes_media_skips_other_and_hidden_files() {

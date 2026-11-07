@@ -5,13 +5,13 @@ use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
 use eframe::egui;
-use player_playback::PlayerState;
+use quokka_playback::PlayerState;
 use souvlaki::{
     MediaControlEvent, MediaControls, MediaMetadata, MediaPlayback, MediaPosition, PlatformConfig,
     SeekDirection,
 };
 
-use player_core::MediaItem;
+use quokka_core::MediaItem;
 
 use crate::format;
 use crate::playback::Playback;
@@ -42,7 +42,7 @@ impl Media {
         }
         let config = PlatformConfig {
             display_name: "Quokka",
-            dbus_name: "player",
+            dbus_name: "quokka",
             hwnd: None,
         };
         let mut controls = MediaControls::new(config).ok()?;
@@ -139,8 +139,8 @@ impl Media {
 /// Write the track's embedded cover to a temporary file, and return its `file://` URL. The
 /// system reads the cover from there. `None` when the track has no cover or it can't be written.
 fn cover_file(item: &MediaItem) -> Option<String> {
-    let bytes = player_core::read_cover(&item.path)?;
-    let path = std::env::temp_dir().join(format!("player-cover-{}", item.id));
+    let bytes = quokka_core::read_cover(&item.path)?;
+    let path = std::env::temp_dir().join(format!("quokka-cover-{}", item.id));
     std::fs::write(&path, bytes).ok()?;
     Some(format!("file://{}", path.display()))
 }

@@ -5,7 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::icons;
 use eframe::egui::{self, Sense};
-use player_core::{Library, Station};
+use quokka_core::{Library, Station};
 
 /// What the user asked for on the Radio tab this frame.
 pub enum RadioAction {

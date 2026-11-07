@@ -1,13 +1,13 @@
 //! Time a seek in a movie. The file's tables are read once, as the app does when a movie loads, and
 //! then each seek opens the decoders at a new position. Run it with
-//! `cargo run --release -p player-playback --example seek_timing -- <file> <seconds> <seconds>`.
+//! `cargo run --release -p quokka-playback --example seek_timing -- <file> <seconds> <seconds>`.
 
 use std::path::Path;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
-use player_playback::decode::player::{FramePlayer, VideoSource};
-use player_playback::movie_audio::AudioSource;
+use quokka_playback::decode::player::{FramePlayer, VideoSource};
+use quokka_playback::movie_audio::AudioSource;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();

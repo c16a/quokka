@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use player_core::video::{Colour, Matrix, inspect};
+use quokka_core::video::{Colour, Matrix, inspect};
 
 fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))

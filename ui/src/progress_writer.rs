@@ -26,7 +26,7 @@ impl ProgressWriter {
         thread::Builder::new()
             .name("progress".into())
             .spawn(move || {
-                let Ok(library) = player_core::Library::open(&db) else {
+                let Ok(library) = quokka_core::Library::open(&db) else {
                     eprintln!("player: could not open the library to save progress");
                     return;
                 };

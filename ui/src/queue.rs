@@ -2,7 +2,7 @@
 //! and removed. These changes only touch the queue, never the files on disk.
 
 use eframe::egui;
-use player_core::{MediaItem, PlaylistSummary};
+use quokka_core::{MediaItem, PlaylistSummary};
 
 use crate::format;
 use crate::icons;

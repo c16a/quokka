@@ -10,7 +10,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 
 use eframe::egui;
-use player_core::{AlbumSummary, Library};
+use quokka_core::{AlbumSummary, Library};
 
 use crate::albums::{
     AlbumsView, TILE_COVER, TILE_GAP, TILE_TEXT, album_tile, back_icon_button, draw_cover,
@@ -243,7 +243,7 @@ impl Photos {
         thread::spawn(move || {
             // Ends when the view is dropped, which closes the request channel.
             for name in request_rx {
-                let result = player_core::fetch_artist_photo(&name, &dir).and_then(|photo| {
+                let result = quokka_core::fetch_artist_photo(&name, &dir).and_then(|photo| {
                     covers::decode(&photo.bytes, COVER_MAX_SIDE).map(|d| (d, photo.credit))
                 });
                 if result_tx.send((name, result)).is_err() {

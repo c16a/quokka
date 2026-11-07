@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::Path;
 
-use player_core::{AlbumFilter, AlbumSort, Library, Recent, SongQuery};
+use quokka_core::{AlbumFilter, AlbumSort, Library, Recent, SongQuery};
 
 /// A library scanned from placeholder files, which carry no tags.
 fn library_with(dir: &Path, names: &[&str]) -> Library {

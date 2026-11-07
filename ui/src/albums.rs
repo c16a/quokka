@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use eframe::egui;
-use player_core::{
+use quokka_core::{
     AlbumFilter, AlbumSort, AlbumSummary, FavoriteKind, Library, MediaItem, PlaylistSummary,
 };
 

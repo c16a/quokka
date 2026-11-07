@@ -1,6 +1,6 @@
 use std::fs;
 
-use player_core::{Library, LibraryKind, ReplayGainMode, Settings, Theme};
+use quokka_core::{Library, LibraryKind, ReplayGainMode, Settings, Theme};
 
 #[test]
 fn albums_group_tracks_and_movies_list_videos() {

@@ -6,8 +6,8 @@
 use std::error::Error;
 use std::path::Path;
 
-use player_core::Library;
-use player_core::matching::{self, MATCH_THRESHOLD};
+use quokka_core::Library;
+use quokka_core::matching::{self, MATCH_THRESHOLD};
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<String> = std::env::args().collect();

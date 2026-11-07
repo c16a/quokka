@@ -1,5 +1,5 @@
 [package]
-name = "player-app"
+name = "quokka-app"
 edition.workspace = true
 rust-version.workspace = true
 version.workspace = true
@@ -7,10 +7,10 @@ license.workspace = true
 publish.workspace = true
 
 [[bin]]
-name = "player"
+name = "quokka"
 path = "src/main.rs"
 
 [dependencies]
 directories.workspace = true
-player-core.workspace = true
-player-ui.workspace = true
+quokka-core.workspace = true
+quokka-ui.workspace = true

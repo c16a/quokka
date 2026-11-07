@@ -3,7 +3,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use player_core::video::{parse_srt, read_subtitles};
+use quokka_core::video::{parse_srt, read_subtitles};
 
 fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -11,7 +11,7 @@ fn fixture(name: &str) -> PathBuf {
         .join(name)
 }
 
-fn texts(cues: &[player_core::video::Cue]) -> Vec<&str> {
+fn texts(cues: &[quokka_core::video::Cue]) -> Vec<&str> {
     cues.iter().map(|cue| cue.text.as_str()).collect()
 }
 

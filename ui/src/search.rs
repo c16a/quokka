@@ -1,5 +1,5 @@
 use eframe::egui;
-use player_core::{AlbumSummary, Library, MediaItem, PlaylistSummary, SongQuery, Station};
+use quokka_core::{AlbumSummary, Library, MediaItem, PlaylistSummary, SongQuery, Station};
 
 use crate::albums::{self, AlbumsView, PlayRequest, TILE_GAP};
 use crate::format;

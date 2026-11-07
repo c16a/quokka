@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use player_core::MediaKind;
+use quokka_core::MediaKind;
 
 #[test]
 fn unsupported_formats_are_not_indexed() {

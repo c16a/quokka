@@ -6,7 +6,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let [_, db, root] = args.as_slice() else {
         return Err("usage: scan <db> <root>".into());
     };
-    let mut library = player_core::Library::open(Path::new(db))?;
+    let mut library = quokka_core::Library::open(Path::new(db))?;
     let stats = library.scan(Path::new(root))?;
     println!("{stats:?}");
     println!("items in library: {}", library.count()?);

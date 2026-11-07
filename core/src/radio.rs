@@ -17,7 +17,7 @@ const PAGE_SIZE: usize = 5_000;
 const PAGE_ATTEMPTS: u32 = 3;
 /// Pages fetched at the same time. Kept small so the directory isn't flooded.
 const PARALLEL_PAGES: usize = 4;
-const USER_AGENT: &str = concat!("player/", env!("CARGO_PKG_VERSION"));
+const USER_AGENT: &str = concat!("quokka/", env!("CARGO_PKG_VERSION"));
 
 /// One radio station. `url` is the stream address to play.
 #[derive(Debug, Clone, PartialEq, Eq)]

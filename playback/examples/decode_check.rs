@@ -5,7 +5,7 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
-use player_playback::decode::{self, Packet, StreamConfig, Surface};
+use quokka_playback::decode::{self, Packet, StreamConfig, Surface};
 
 fn main() {
     for path in std::env::args().skip(1) {
@@ -15,7 +15,7 @@ fn main() {
 
 fn report(path: &Path) {
     let name = path.display();
-    let track = match player_core::video::read_samples(path) {
+    let track = match quokka_core::video::read_samples(path) {
         Ok(Some(track)) => track,
         Ok(None) => {
             println!("{name}: no MP4 video track to read");
@@ -26,7 +26,7 @@ fn report(path: &Path) {
             return;
         }
     };
-    let format = player_core::video::inspect(path).unwrap_or_default();
+    let format = quokka_core::video::inspect(path).unwrap_or_default();
     let stream = StreamConfig {
         codec: track.codec,
         width: track.width,
@@ -34,7 +34,7 @@ fn report(path: &Path) {
         config: track.config.clone(),
         timescale: track.timescale,
         bit_depth: format.bit_depth.unwrap_or(8),
-        chroma: format.chroma.unwrap_or(player_core::video::Chroma::Yuv420),
+        chroma: format.chroma.unwrap_or(quokka_core::video::Chroma::Yuv420),
         colour: format.colour,
     };
     let mut decoder = match decode::open(&stream) {

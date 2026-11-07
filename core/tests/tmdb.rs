@@ -1,8 +1,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use player_core::matching::{self, MATCH_THRESHOLD};
-use player_core::tmdb;
+use quokka_core::matching::{self, MATCH_THRESHOLD};
+use quokka_core::tmdb;
 
 fn fixture(name: &str) -> String {
     let path: PathBuf = Path::new(env!("CARGO_MANIFEST_DIR"))

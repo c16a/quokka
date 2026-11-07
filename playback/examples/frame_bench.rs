@@ -1,11 +1,11 @@
 //! Measure how fast a file's frames decode and convert, from the start of the file. Run it on a
-//! release build: `cargo run --release -p player-playback --example frame_bench -- <file> <seconds>`.
+//! release build: `cargo run --release -p quokka-playback --example frame_bench -- <file> <seconds>`.
 
 use std::path::Path;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
-use player_playback::decode::player::FramePlayer;
+use quokka_playback::decode::player::FramePlayer;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();

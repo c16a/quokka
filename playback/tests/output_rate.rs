@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use player_playback::{Player, RodioPlayer};
+use quokka_playback::{Player, RodioPlayer};
 
 /// Write one second of silence as a 16-bit mono WAV file at `rate`.
 fn silent_wav(path: &PathBuf, rate: u32) {

@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use player_playback::SymphoniaSource;
+use quokka_playback::SymphoniaSource;
 use rodio::Source;
 
 /// Write a 16-bit PCM WAV of `seconds` of silence at 8 kHz, mono.
@@ -27,7 +27,7 @@ fn write_wav(path: &Path, seconds: u32) {
 }
 
 fn temp_wav(name: &str, seconds: u32) -> PathBuf {
-    let path = std::env::temp_dir().join(format!("player-test-{name}.wav"));
+    let path = std::env::temp_dir().join(format!("quokka-test-{name}.wav"));
     write_wav(&path, seconds);
     path
 }
@@ -63,17 +63,17 @@ fn seeks_into_the_middle_and_plays_the_rest() {
 
 #[test]
 fn unsupported_file_is_an_error_not_a_panic() {
-    let path = std::env::temp_dir().join("player-test-not-audio.mp3");
+    let path = std::env::temp_dir().join("quokka-test-not-audio.mp3");
     fs::write(&path, b"this is not audio").unwrap();
     assert!(SymphoniaSource::open(&path, Default::default()).is_err());
     fs::remove_file(path).ok();
 }
 
-/// Decode a real file: `PLAYER_TEST_FILE=/path/to/song.mp3 cargo test -p player-playback -- --ignored`.
+/// Decode a real file: `QUOKKA_TEST_FILE=/path/to/song.mp3 cargo test -p quokka-playback -- --ignored`.
 #[test]
 #[ignore]
 fn decodes_a_real_file_from_env() {
-    let path = std::env::var("PLAYER_TEST_FILE").expect("set PLAYER_TEST_FILE");
+    let path = std::env::var("QUOKKA_TEST_FILE").expect("set QUOKKA_TEST_FILE");
     let source = SymphoniaSource::open(Path::new(&path), Default::default()).unwrap();
     let rate = source.sample_rate().get();
     let channels = source.channels().get();

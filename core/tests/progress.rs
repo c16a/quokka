@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use player_core::{Library, Progress, finished};
+use quokka_core::{Library, Progress, finished};
 
 #[test]
 fn a_saved_position_is_kept_and_overwritten() {

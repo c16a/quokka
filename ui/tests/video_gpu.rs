@@ -8,10 +8,10 @@ use std::thread::sleep;
 use std::time::{Duration, Instant};
 
 use eframe::egui_wgpu::wgpu;
-use player_core::video::Matrix;
-use player_playback::decode::frames::{Layout, Yuv};
-use player_playback::decode::player::FramePlayer;
-use player_ui::video_gpu::{VideoGpu, offscreen_device};
+use quokka_core::video::Matrix;
+use quokka_playback::decode::frames::{Layout, Yuv};
+use quokka_playback::decode::player::FramePlayer;
+use quokka_ui::video_gpu::{VideoGpu, offscreen_device};
 
 /// A frame of pseudo-random samples in `layout`, so every chroma block and the clamping at the
 /// ends of the range are exercised.

@@ -1,7 +1,7 @@
 //! Recently added and recently played albums, each as a row of album tiles.
 
 use eframe::egui;
-use player_core::{AlbumSummary, Library, Recent};
+use quokka_core::{AlbumSummary, Library, Recent};
 
 use crate::albums::{AlbumsView, TILE_GAP, album_tile};
 

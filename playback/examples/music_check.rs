@@ -4,7 +4,7 @@
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use player_playback::SymphoniaSource;
+use quokka_playback::SymphoniaSource;
 use rodio::Source;
 
 fn main() {

@@ -1,4 +1,4 @@
-use player_core::MediaItem;
+use quokka_core::MediaItem;
 
 /// Display title: the tag title, or the file name without extension.
 pub fn title(item: &MediaItem) -> String {

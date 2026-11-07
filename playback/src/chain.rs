@@ -273,7 +273,7 @@ mod tests {
     }
 
     fn temp(name: &str) -> PathBuf {
-        std::env::temp_dir().join(format!("player-chain-{}-{name}.wav", std::process::id()))
+        std::env::temp_dir().join(format!("quokka-chain-{}-{name}.wav", std::process::id()))
     }
 
     fn open(path: &Path) -> SymphoniaSource {

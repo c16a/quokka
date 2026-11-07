@@ -1,11 +1,11 @@
 //! Check the captions a movie shows at chosen times. Run it with
-//! `cargo run -p player-playback --example caption_check -- <file with subtitles>`.
+//! `cargo run -p quokka-playback --example caption_check -- <file with subtitles>`.
 
 use std::path::Path;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
-use player_playback::{FrameVideo, Player};
+use quokka_playback::{FrameVideo, Player};
 
 fn main() {
     let Some(path) = std::env::args().nth(1) else {

@@ -6,7 +6,7 @@ use std::path::Path;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
-use player_playback::decode::player::FramePlayer;
+use quokka_playback::decode::player::FramePlayer;
 
 fn count_frames(path: &Path) -> (usize, usize) {
     let mut player = FramePlayer::open(path).expect("the file opens");

@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use player_core::matching::{self, MATCH_THRESHOLD, ParsedName};
+use quokka_core::matching::{self, MATCH_THRESHOLD, ParsedName};
 
 fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))

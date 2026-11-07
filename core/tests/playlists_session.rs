@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::Path;
 
-use player_core::{Library, MediaItem, RepeatMode, Session};
+use quokka_core::{Library, MediaItem, RepeatMode, Session};
 
 /// A library scanned from a folder of placeholder audio files named `names`.
 fn library_with(dir: &Path, names: &[&str]) -> (Library, Vec<MediaItem>) {

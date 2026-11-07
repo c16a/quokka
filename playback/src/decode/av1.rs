@@ -5,7 +5,7 @@
 use std::ffi::{c_int, c_void};
 use std::ptr;
 
-use player_core::video::Codec;
+use quokka_core::video::Codec;
 
 use super::{DecodeError, Packet, Picture, StreamConfig, Surface, VideoDecoder, layout_code};
 

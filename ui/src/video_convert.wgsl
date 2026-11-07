@@ -1,5 +1,5 @@
 // Converts one decoded video frame from Y'CbCr to RGB, one pixel per texel of the output. The
-// arithmetic matches `player_playback::decode::frames::convert`, so the two give the same pixels.
+// arithmetic matches `quokka_playback::decode::frames::convert`, so the two give the same pixels.
 
 struct Params {
     width: u32,

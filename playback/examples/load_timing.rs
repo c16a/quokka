@@ -1,12 +1,12 @@
 //! Time each step of loading a movie, as the Video window does: read the video and audio tables,
 //! open the first frames, read the subtitles, then open the sound. Run it with
-//! `cargo run [--release] -p player-playback --example load_timing -- <file>`.
+//! `cargo run [--release] -p quokka-playback --example load_timing -- <file>`.
 
 use std::path::Path;
 use std::time::Instant;
 
-use player_playback::decode::player::VideoSource;
-use player_playback::movie_audio::AudioSource;
+use quokka_playback::decode::player::VideoSource;
+use quokka_playback::movie_audio::AudioSource;
 
 fn main() {
     let Some(file) = std::env::args().nth(1) else {
@@ -28,7 +28,7 @@ fn main() {
     println!("video decoder open + first sample: {:?}", t.elapsed());
 
     let t = Instant::now();
-    let _cues = player_core::video::read_subtitles(path).unwrap_or_default();
+    let _cues = quokka_core::video::read_subtitles(path).unwrap_or_default();
     println!("subtitles: {:?}", t.elapsed());
 
     let t = Instant::now();

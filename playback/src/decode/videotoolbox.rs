@@ -6,7 +6,7 @@ use std::ffi::c_void;
 use std::ptr;
 use std::sync::Mutex;
 
-use player_core::video::{Chroma, Codec};
+use quokka_core::video::{Chroma, Codec};
 
 use super::{DecodeError, Packet, Picture, StreamConfig, Surface, VideoDecoder};
 

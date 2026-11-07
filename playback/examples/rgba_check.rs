@@ -1,11 +1,11 @@
 //! Write the first decoded frame of a file as RGBA bytes, to compare with another converter's
-//! output. Run it with `cargo run -p player-playback --example rgba_check -- <file> <output>`.
+//! output. Run it with `cargo run -p quokka-playback --example rgba_check -- <file> <output>`.
 
 use std::path::Path;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
-use player_playback::decode::player::FramePlayer;
+use quokka_playback::decode::player::FramePlayer;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();

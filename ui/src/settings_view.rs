@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use eframe::egui;
-use player_core::{LibraryKind, ReplayGainMode, Settings, Theme};
+use quokka_core::{LibraryKind, ReplayGainMode, Settings, Theme};
 
 use crate::slider;
 

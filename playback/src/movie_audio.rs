@@ -9,7 +9,7 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender};
 use std::thread;
 use std::time::Duration;
 
-use player_core::video::{AudioTrack, read_audio_samples};
+use quokka_core::video::{AudioTrack, read_audio_samples};
 use rodio::{ChannelCount, MixerDeviceSink, Player, SampleRate, Source};
 
 use crate::PlaybackError;

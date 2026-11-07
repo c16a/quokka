@@ -10,7 +10,7 @@ mod checks {
     use std::thread::sleep;
     use std::time::{Duration, Instant};
 
-    use player_playback::{MpvPlayer, Player, PlayerState};
+    use quokka_playback::{MpvPlayer, Player, PlayerState};
 
     /// How long to wait for mpv to report something that happens in the background.
     const WAIT: Duration = Duration::from_secs(10);
@@ -21,8 +21,8 @@ mod checks {
             a_missing_file_is_an_error,
         );
 
-        // The real-file checks need a video: `PLAYER_TEST_VIDEO=/path/to/clip.mkv just test-video`.
-        match std::env::var_os("PLAYER_TEST_VIDEO") {
+        // The real-file checks need a video: `QUOKKA_TEST_VIDEO=/path/to/clip.mkv just test-video`.
+        match std::env::var_os("QUOKKA_TEST_VIDEO") {
             Some(path) => {
                 let path = Path::new(&path);
                 run("plays_seeks_pauses_and_stops_a_real_video", || {
@@ -33,7 +33,7 @@ mod checks {
                     || finished_video_replays(path),
                 );
             }
-            None => println!("skipped real-video checks: set PLAYER_TEST_VIDEO to a video file"),
+            None => println!("skipped real-video checks: set QUOKKA_TEST_VIDEO to a video file"),
         }
     }
 

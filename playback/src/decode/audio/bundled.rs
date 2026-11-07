@@ -1,7 +1,7 @@
 //! The bundled audio decoder: symphonia, in pure Rust. It covers the codecs symphonia has decoders
 //! for, and it is the fallback where the operating system does not decode a codec.
 
-use player_core::video::AudioCodec;
+use quokka_core::video::AudioCodec;
 use symphonia::core::codecs::audio::well_known::{
     CODEC_ID_AAC, CODEC_ID_ALAC, CODEC_ID_FLAC, CODEC_ID_MP3,
 };

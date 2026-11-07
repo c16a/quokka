@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::thread;
 
-use player_core::video::{self, Chroma, Colour};
+use quokka_core::video::{self, Chroma, Colour};
 
 use super::frames::Yuv;
 use super::{DecodeError, Packet, Picture, StreamConfig};
@@ -71,7 +71,7 @@ pub struct VideoSource {
 impl VideoSource {
     /// Read the first video track of `path`.
     pub fn read(path: &Path) -> Result<Self, FrameError> {
-        let track = player_core::video::read_samples(path)
+        let track = quokka_core::video::read_samples(path)
             .map_err(|error| FrameError::Unreadable(error.to_string()))?
             .ok_or_else(|| FrameError::Unreadable("no video track in this file".into()))?;
         let format = video::inspect(path).unwrap_or_default();

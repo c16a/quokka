@@ -9,7 +9,7 @@ use std::task::{Context, Poll, Waker};
 
 use eframe::egui;
 use eframe::egui_wgpu::{self, wgpu};
-use player_playback::decode::frames::{Layout, Yuv, coefficients};
+use quokka_playback::decode::frames::{Layout, Yuv, coefficients};
 
 const CONVERT: &str = include_str!("video_convert.wgsl");
 const DRAW: &str = include_str!("video_draw.wgsl");

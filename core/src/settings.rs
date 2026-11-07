@@ -157,7 +157,7 @@ mod tests {
 
     #[test]
     fn kinds_survive_a_save_and_load() {
-        let dir = std::env::temp_dir().join(format!("player-kinds-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("quokka-kinds-{}", std::process::id()));
         let path = dir.join("settings.json");
         let mut settings = Settings::default();
         settings.library_roots.push(PathBuf::from("/films"));

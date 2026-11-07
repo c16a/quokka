@@ -7,7 +7,7 @@ use std::thread;
 use std::time::Duration;
 
 use eframe::egui;
-use player_core::{
+use quokka_core::{
     Library, LyricLine, Lyrics, LyricsQuery, MediaItem, RemoteLyrics, TrackDetails, best_lyrics,
     fetch_lyrics, lyrics_from_text, sidecar_lyrics, track_details,
 };

@@ -3,7 +3,7 @@
 #[test]
 #[ignore = "downloads the radio-browser.info station index"]
 fn the_whole_station_index_downloads() {
-    let stations = player_core::fetch_all_stations().unwrap();
+    let stations = quokka_core::fetch_all_stations().unwrap();
     println!("stations: {}", stations.len());
     assert!(stations.len() > 1000, "more than the first page");
     assert!(

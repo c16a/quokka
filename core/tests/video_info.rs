@@ -3,7 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
-use player_core::video::{self, Chroma, Codec, Container, FrameRate, VideoFormat};
+use quokka_core::video::{self, Chroma, Codec, Container, FrameRate, VideoFormat};
 
 fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))

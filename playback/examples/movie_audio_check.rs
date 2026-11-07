@@ -1,11 +1,11 @@
 //! Check that a movie's sound clock holds still while paused, and runs again after resuming.
-//! Run it with `cargo run -p player-playback --example movie_audio_check -- <file with sound>`.
+//! Run it with `cargo run -p quokka-playback --example movie_audio_check -- <file with sound>`.
 
 use std::path::Path;
 use std::thread::sleep;
 use std::time::Duration;
 
-use player_playback::movie_audio::MovieAudio;
+use quokka_playback::movie_audio::MovieAudio;
 
 fn main() {
     let Some(path) = std::env::args().nth(1) else {

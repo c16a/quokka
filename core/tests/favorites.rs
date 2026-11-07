@@ -1,4 +1,4 @@
-use player_core::{FavoriteKind, Library};
+use quokka_core::{FavoriteKind, Library};
 
 #[test]
 fn favourites_round_trip_and_stay_separate_by_kind() {

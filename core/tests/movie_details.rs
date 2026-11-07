@@ -1,9 +1,9 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use player_core::Library;
-use player_core::Settings;
-use player_core::tmdb::{CastMember, MovieInfo};
+use quokka_core::Library;
+use quokka_core::Settings;
+use quokka_core::tmdb::{CastMember, MovieInfo};
 
 fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))

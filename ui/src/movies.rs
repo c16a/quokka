@@ -10,8 +10,8 @@ use std::thread;
 
 use crate::colour::{self, Lab};
 use eframe::egui;
-use player_core::tmdb::{MovieInfo, Tmdb};
-use player_core::{Library, MatchOutcome, MediaItem, Progress, finished};
+use quokka_core::tmdb::{MovieInfo, Tmdb};
+use quokka_core::{Library, MatchOutcome, MediaItem, Progress, finished};
 
 use crate::albums::{PlayRequest, TILE_COVER, TILE_GAP, TILE_TEXT, hover_scroll, tile_line};
 use crate::format;
@@ -33,7 +33,7 @@ const SYNOPSIS_CHARS: usize = 280;
 const INFO_PANEL_WIDTH: f32 = 330.0;
 
 /// A background job: runs with the library database open, and says what it found.
-type Job = Box<dyn FnOnce(&Library) -> player_core::Result<MatchOutcome> + Send>;
+type Job = Box<dyn FnOnce(&Library) -> quokka_core::Result<MatchOutcome> + Send>;
 
 /// The result of a job: what it found, or an error message.
 type Lookup = Result<MatchOutcome, String>;

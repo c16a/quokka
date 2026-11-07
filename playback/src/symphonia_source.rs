@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::Duration;
 
-use player_core::video::AudioCodec;
+use quokka_core::video::AudioCodec;
 use rodio::source::SeekError;
 use rodio::{ChannelCount, SampleRate, Source};
 use symphonia::core::codecs::CodecParameters;
@@ -107,7 +107,7 @@ impl SymphoniaSource {
         if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
             hint.with_extension(ext);
         }
-        let priming = player_core::video::mp4_priming_frames(path).unwrap_or(0);
+        let priming = quokka_core::video::mp4_priming_frames(path).unwrap_or(0);
         Self::decode_source(Box::new(file), &hint, error, priming)
     }
 

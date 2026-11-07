@@ -2,14 +2,14 @@ use std::path::Path;
 use std::thread::sleep;
 use std::time::Duration;
 
-use player_playback::{Player, PlayerState, RodioPlayer};
+use quokka_playback::{Player, PlayerState, RodioPlayer};
 
 /// Needs an audio output device, so it only runs on demand:
-/// `PLAYER_TEST_FILE=/path/to/song.flac cargo test -p player-playback -- --ignored`.
+/// `QUOKKA_TEST_FILE=/path/to/song.flac cargo test -p quokka-playback -- --ignored`.
 #[test]
 #[ignore]
 fn plays_seeks_and_pauses_a_real_file() {
-    let path = std::env::var("PLAYER_TEST_FILE").expect("set PLAYER_TEST_FILE");
+    let path = std::env::var("QUOKKA_TEST_FILE").expect("set QUOKKA_TEST_FILE");
     let mut player = RodioPlayer::new().expect("open audio output");
 
     player.load(Path::new(&path)).unwrap();

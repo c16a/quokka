@@ -5,7 +5,7 @@
 use std::num::NonZeroUsize;
 use std::thread;
 
-use player_core::video::{Colour, Matrix};
+use quokka_core::video::{Colour, Matrix};
 
 use super::{Picture, Surface};
 

@@ -149,7 +149,7 @@ struct Record {
 }
 
 const API: &str = "https://lrclib.net/api";
-const USER_AGENT: &str = concat!("player/", env!("CARGO_PKG_VERSION"));
+const USER_AGENT: &str = concat!("quokka/", env!("CARGO_PKG_VERSION"));
 /// How far a result's length may differ from the file's, in seconds.
 const LENGTH_TOLERANCE: f64 = 2.0;
 

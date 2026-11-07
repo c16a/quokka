@@ -8,9 +8,9 @@ use std::path::Path;
 use std::thread::sleep;
 use std::time::Duration;
 
-use player_core::Library;
-use player_core::matching::{self, MATCH_THRESHOLD};
-use player_core::tmdb::{self, Tmdb};
+use quokka_core::Library;
+use quokka_core::matching::{self, MATCH_THRESHOLD};
+use quokka_core::tmdb::{self, Tmdb};
 
 /// TMDb allows about 40 requests every 10 seconds. Pausing between movies keeps well under that.
 const PAUSE: Duration = Duration::from_millis(300);

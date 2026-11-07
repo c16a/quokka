@@ -1,5 +1,5 @@
 //! A window that plays one video file, with its soundtrack, from the decoders, to check the playback
-//! path in a real window. Run it with `cargo run -p player-ui --example frame_view -- <file>`. Space
+//! path in a real window. Run it with `cargo run -p quokka-ui --example frame_view -- <file>`. Space
 //! pauses. The sound sets the clock. When the sound ends, the video carries on from the same point on
 //! the wall clock. A file without sound runs on the wall clock throughout.
 
@@ -7,9 +7,9 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use eframe::egui;
-use player_playback::decode::frames::Rgba;
-use player_playback::decode::player::{FramePlayer, VideoFrame};
-use player_playback::movie_audio::MovieAudio;
+use quokka_playback::decode::frames::Rgba;
+use quokka_playback::decode::player::{FramePlayer, VideoFrame};
+use quokka_playback::movie_audio::MovieAudio;
 
 struct FrameView {
     player: Option<FramePlayer>,

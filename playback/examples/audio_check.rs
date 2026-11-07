@@ -6,8 +6,8 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
-use player_playback::decode::audio::bundled::Bundled;
-use player_playback::decode::audio::{self, AudioStream};
+use quokka_playback::decode::audio::bundled::Bundled;
+use quokka_playback::decode::audio::{self, AudioStream};
 
 fn main() {
     for path in std::env::args().skip(1) {
@@ -17,7 +17,7 @@ fn main() {
 
 fn report(path: &Path) {
     let name = path.display();
-    let track = match player_core::video::read_audio_samples(path) {
+    let track = match quokka_core::video::read_audio_samples(path) {
         Ok(Some(track)) => track,
         Ok(None) => {
             println!("{name}: no audio track this reads");
@@ -37,7 +37,7 @@ fn report(path: &Path) {
     if std::env::var_os("AUDIO_CHECK_SYSTEM").is_some() {
         #[cfg(target_os = "macos")]
         if let Err(error) =
-            player_playback::decode::audio::audiotoolbox::AudioToolbox::open(&stream)
+            quokka_playback::decode::audio::audiotoolbox::AudioToolbox::open(&stream)
         {
             println!("{name}: AudioToolbox refused: {error}");
         }

@@ -1,7 +1,7 @@
 //! Compare the cost of getting a decoded frame onto the screen: the old path, which converts to RGBA
 //! on the CPU and uploads RGBA, and the GPU path, which uploads the planes and converts on the GPU.
 //! Each timed frame waits for the GPU, so the numbers include the GPU's work.
-//! Run it on a release build: `cargo run --release -p player-ui --example video_gpu_bench -- <file> <frames> <rounds>`.
+//! Run it on a release build: `cargo run --release -p quokka-ui --example video_gpu_bench -- <file> <frames> <rounds>`.
 
 #[cfg(target_os = "macos")]
 fn main() {
@@ -11,9 +11,9 @@ fn main() {
 
     use eframe::egui;
     use eframe::egui_wgpu::wgpu;
-    use player_playback::decode::frames::Yuv;
-    use player_playback::decode::player::FramePlayer;
-    use player_ui::video_gpu::{VideoGpu, offscreen_device};
+    use quokka_playback::decode::frames::Yuv;
+    use quokka_playback::decode::player::FramePlayer;
+    use quokka_ui::video_gpu::{VideoGpu, offscreen_device};
 
     let args: Vec<String> = std::env::args().collect();
     let [_, file, frames, rounds] = args.as_slice() else {

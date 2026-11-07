@@ -6,7 +6,7 @@ use std::path::Path;
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::{Duration, Instant};
 
-use player_core::video::{Cue, read_subtitles};
+use quokka_core::video::{Cue, read_subtitles};
 
 use std::sync::Arc;
 

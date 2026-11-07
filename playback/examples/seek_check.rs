@@ -1,11 +1,11 @@
 //! Check that seeking a movie moves its picture and its sound to the same place.
-//! Run it with `cargo run -p player-playback --example seek_check -- <file with video and sound>`.
+//! Run it with `cargo run -p quokka-playback --example seek_check -- <file with video and sound>`.
 
 use std::path::Path;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
-use player_playback::{FrameVideo, Player};
+use quokka_playback::{FrameVideo, Player};
 
 fn run_for(video: &mut FrameVideo, seconds: f64) {
     let until = Instant::now() + Duration::from_secs_f64(seconds);

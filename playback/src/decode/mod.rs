@@ -11,7 +11,7 @@ pub mod player;
 pub mod videotoolbox;
 pub mod vp9;
 
-use player_core::video::{Chroma, Codec, Colour};
+use quokka_core::video::{Chroma, Codec, Colour};
 use thiserror::Error;
 
 /// What a decoder needs to know about a stream before it opens.

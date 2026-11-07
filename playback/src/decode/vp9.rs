@@ -1,7 +1,7 @@
 //! A bundled VP9 decoder: rusty_vp9, a pure-Rust decoder under the Apache 2.0 licence. It is the
 //! fallback where the operating system does not decode VP9, which covers every Mac.
 
-use player_core::video::Codec;
+use quokka_core::video::Codec;
 use rusty_vp9::{DecodedFrame, Error as EngineError, Vp9Decoder as Engine};
 
 use super::{DecodeError, Packet, Picture, StreamConfig, Surface, VideoDecoder, layout_code};

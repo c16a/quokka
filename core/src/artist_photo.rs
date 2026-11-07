@@ -10,7 +10,7 @@ use std::fs;
 use std::path::Path;
 use std::time::Duration;
 
-const USER_AGENT: &str = concat!("player/", env!("CARGO_PKG_VERSION"));
+const USER_AGENT: &str = concat!("quokka/", env!("CARGO_PKG_VERSION"));
 const WIKIDATA: &str = "https://www.wikidata.org/w/api.php";
 const COMMONS: &str = "https://commons.wikimedia.org/wiki/Special:FilePath";
 const COMMONS_API: &str = "https://commons.wikimedia.org/w/api.php";

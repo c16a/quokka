@@ -75,7 +75,7 @@ mod tests {
     }
 
     fn temp(name: &str) -> PathBuf {
-        std::env::temp_dir().join(format!("player-loudness-{}-{name}.wav", std::process::id()))
+        std::env::temp_dir().join(format!("quokka-loudness-{}-{name}.wav", std::process::id()))
     }
 
     #[test]

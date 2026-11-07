@@ -10,7 +10,7 @@ use symphonia::core::io::ReadOnlySource;
 
 use crate::symphonia_source::{ErrorSlot, SymphoniaSource};
 
-const USER_AGENT: &str = concat!("player/", env!("CARGO_PKG_VERSION"));
+const USER_AGENT: &str = concat!("quokka/", env!("CARGO_PKG_VERSION"));
 
 /// A reader that can be shared between threads. The HTTP body reader is not `Sync` on its own,
 /// and the decoder needs a `Sync` source.

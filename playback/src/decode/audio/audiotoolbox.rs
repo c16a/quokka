@@ -4,7 +4,7 @@
 use std::ffi::c_void;
 use std::ptr;
 
-use player_core::video::AudioCodec;
+use quokka_core::video::AudioCodec;
 
 use super::{AudioDecoder, AudioStream};
 use crate::decode::DecodeError;

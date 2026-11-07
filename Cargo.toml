@@ -39,9 +39,9 @@ tempfile = { version = "3.27.0", default-features = false, features = ["getrando
 thiserror = { version = "2.0.21", default-features = false, features = ["std"] }
 ureq = { version = "3.4.0", default-features = false, features = ["rustls", "gzip"] }
 walkdir = { version = "2.5.0", default-features = false }
-player-core = { path = "core" }
-player-playback = { path = "playback" }
-player-ui = { path = "ui" }
+quokka-core = { path = "core" }
+quokka-playback = { path = "playback" }
+quokka-ui = { path = "ui" }
 
 # Dependencies are optimised in debug builds too, so decoding and the UI stay fast while developing.
 [profile.dev.package."*"]
@@ -49,7 +49,7 @@ opt-level = 2
 
 # The sample tables are read per frame, which is slow without optimisation. This crate is
 # optimised in debug builds, so opening a movie does not take seconds.
-[profile.dev.package.player-core]
+[profile.dev.package.quokka-core]
 opt-level = 3
 
 # Performance-optimised release build (`just release`, `just cross`).

@@ -34,7 +34,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use eframe::egui;
 use notify::{RecursiveMode, Watcher};
-use player_core::{Library, MediaItem, ScanStats, Session, Settings, Theme};
+use quokka_core::{Library, MediaItem, ScanStats, Session, Settings, Theme};
 
 use playback::{MenuRequest, Panel, Playback};
 
@@ -579,7 +579,7 @@ impl App {
         }
         let mut closed = false;
         ctx.show_viewport_immediate(
-            egui::ViewportId::from_hash_of("player-video"),
+            egui::ViewportId::from_hash_of("quokka-video"),
             egui::ViewportBuilder::default()
                 .with_title("Video")
                 .with_inner_size([960.0, 540.0]),
@@ -1155,7 +1155,7 @@ fn now_secs() -> i64 {
 /// Fetch the station list and store it, on the calling thread. Returns how many stations were
 /// stored.
 fn sync_stations(db: &Path) -> Result<usize, String> {
-    let stations = player_core::fetch_all_stations()?;
+    let stations = quokka_core::fetch_all_stations()?;
     let mut library = Library::open(db).map_err(|e| e.to_string())?;
     let count = library
         .replace_stations(&stations)

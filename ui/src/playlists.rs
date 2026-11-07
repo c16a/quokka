@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 
 use eframe::egui;
-use player_core::{Library, MediaItem, PlaylistSummary};
+use quokka_core::{Library, MediaItem, PlaylistSummary};
 
 use crate::albums::{
     PlayRequest, back_icon_button, play_icon_button, shuffle_icon_button, shuffled,
@@ -706,7 +706,7 @@ impl Thumbs {
         worker.submit(
             track.id,
             Box::new(move || {
-                player_core::read_cover(&path)
+                quokka_core::read_cover(&path)
                     .and_then(|bytes| covers::decode(&bytes, THUMB_MAX_SIDE))
             }),
         );

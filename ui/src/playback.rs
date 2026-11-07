@@ -3,10 +3,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use eframe::egui;
-use player_core::RepeatMode as Repeat;
-use player_core::Station;
-use player_core::{MediaItem, MediaKind, ReplayGainMode, Session};
-use player_playback::{
+use quokka_core::RepeatMode as Repeat;
+use quokka_core::Station;
+use quokka_core::{MediaItem, MediaKind, ReplayGainMode, Session};
+use quokka_playback::{
     Player, PlayerState, RodioPlayer, SymphoniaSource, VideoPlayer, open_stream,
     output_device_names,
 };
@@ -306,7 +306,7 @@ impl Playback {
                 }
                 let outcome = match self.player.as_mut() {
                     Some(player) => player.load_stream(source).and_then(|_| player.play()),
-                    None => Err(player_playback::PlaybackError::Backend(
+                    None => Err(quokka_playback::PlaybackError::Backend(
                         "no audio output device available".into(),
                     )),
                 };
@@ -825,11 +825,11 @@ impl Playback {
         if self.replay_gain == ReplayGainMode::Off {
             return 1.0;
         }
-        if let Some(gain) = player_core::tag_gain(path, self.replay_gain) {
+        if let Some(gain) = quokka_core::tag_gain(path, self.replay_gain) {
             return gain;
         }
         if let Some((lufs, peak)) = self.stored_loudness(path) {
-            return player_core::loudness_factor(lufs, peak);
+            return quokka_core::loudness_factor(lufs, peak);
         }
         self.request_measure(path);
         1.0
@@ -838,7 +838,7 @@ impl Playback {
     /// The loudness stored for a file, if it has been measured.
     fn stored_loudness(&self, path: &Path) -> Option<(f64, f64)> {
         let db = self.library.as_ref()?;
-        player_core::Library::open(db)
+        quokka_core::Library::open(db)
             .ok()?
             .loudness(path)
             .ok()
@@ -946,7 +946,7 @@ impl Playback {
         }
     }
 
-    fn with_player(&mut self, f: impl FnOnce(&mut dyn Player) -> player_playback::Result<()>) {
+    fn with_player(&mut self, f: impl FnOnce(&mut dyn Player) -> quokka_playback::Result<()>) {
         let result = match self.active_mut() {
             Some(player) => f(player),
             None => return,
@@ -1827,8 +1827,8 @@ fn spawn_measurer(db: PathBuf) -> (Sender<PathBuf>, Receiver<PathBuf>) {
     thread::spawn(move || {
         // Ends when the player is dropped, which closes the request channel.
         for path in queued {
-            if let Some(measured) = player_playback::measure_loudness(&path)
-                && let Ok(library) = player_core::Library::open(&db)
+            if let Some(measured) = quokka_playback::measure_loudness(&path)
+                && let Ok(library) = quokka_core::Library::open(&db)
             {
                 let _ = library.set_loudness(&path, measured.lufs, measured.peak);
             }
@@ -1953,7 +1953,7 @@ mod tests {
         MediaItem {
             id,
             path: PathBuf::from(format!("/music/{id}.flac")),
-            kind: player_core::MediaKind::Audio,
+            kind: quokka_core::MediaKind::Audio,
             size: 0,
             duration_ms: None,
             title: Some(format!("Track {id}")),
