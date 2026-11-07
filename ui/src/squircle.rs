@@ -1,33 +1,58 @@
-//! A button shaped as a squircle: the superellipse |x/a|⁴ + |y/b|⁴ = 1. The button wraps a child widget
-//! and is sized to it plus its padding, so its major axis (width) and minor axis (height) come from the
-//! child rather than being set by hand.
+//! A button with Apple-style continuous corners: straight sides, and each corner is a superellipse
+//! |x/r|⁴ + |y/r|⁴ = 1 of radius `r`. A wide button is a pill with flat top and bottom edges, and a
+//! square one is a full squircle. The button wraps a child widget and is sized to it plus its padding.
 
 use eframe::egui;
 
-/// The exponent of the superellipse. 4 gives the classic squircle.
+/// The exponent of the superellipse that each corner follows. 4 gives the classic squircle.
 const EXPONENT: f32 = 4.0;
-/// Points on each quarter of the outline. The outline is drawn as a polygon with `4 × this` sides.
-const POINTS_PER_QUARTER: usize = 48;
+/// Points on each corner of the outline. The outline is drawn as a polygon with `4 × (this + 1)` points.
+const POINTS_PER_CORNER: usize = 48;
 /// How far the fill moves towards the text colour while the pointer is over the button.
 const HOVER_TINT: f32 = 0.1;
 
-/// The outline of a squircle with half-axes `a` and `b`, centred on the origin. The points go round
-/// once, starting on the right-hand end of the major axis.
-pub fn outline(a: f32, b: f32) -> Vec<egui::Vec2> {
-    let count = 4 * POINTS_PER_QUARTER;
+/// The outline of a button with half-axes `a` and `b` and corners of radius `radius`, centred on the
+/// origin. The radius is limited to what the box allows. The points go round once, starting on the
+/// right-hand side.
+pub fn outline(a: f32, b: f32, radius: f32) -> Vec<egui::Vec2> {
+    let r = radius.clamp(0.0, a.min(b));
     let power = 2.0 / EXPONENT;
-    (0..count)
-        .map(|i| {
-            let angle = std::f32::consts::TAU * i as f32 / count as f32;
+    // Each corner is a quarter turn of a superellipse, centred where its straight sides meet it.
+    let corners = [
+        (a - r, b - r, 0.0),
+        (-(a - r), b - r, std::f32::consts::FRAC_PI_2),
+        (-(a - r), -(b - r), std::f32::consts::PI),
+        (a - r, -(b - r), 3.0 * std::f32::consts::FRAC_PI_2),
+    ];
+    let mut points = Vec::with_capacity(4 * (POINTS_PER_CORNER + 1));
+    for (cx, cy, start) in corners {
+        for i in 0..=POINTS_PER_CORNER {
+            let angle = start + std::f32::consts::FRAC_PI_2 * i as f32 / POINTS_PER_CORNER as f32;
             let (sin, cos) = angle.sin_cos();
-            egui::vec2(a * signed_power(cos, power), b * signed_power(sin, power))
-        })
-        .collect()
+            points.push(egui::vec2(
+                cx + r * signed_power(cos, power),
+                cy + r * signed_power(sin, power),
+            ));
+        }
+    }
+    points
 }
 
-/// Whether `offset` from the centre lies inside the squircle with half-axes `a` and `b`.
-pub fn contains(a: f32, b: f32, offset: egui::Vec2) -> bool {
-    (offset.x / a).abs().powf(EXPONENT) + (offset.y / b).abs().powf(EXPONENT) <= 1.0
+/// Whether `offset` from the centre lies inside a button with half-axes `a` and `b` and corners of
+/// radius `radius`.
+pub fn contains(a: f32, b: f32, radius: f32, offset: egui::Vec2) -> bool {
+    let r = radius.clamp(0.0, a.min(b));
+    let (x, y) = (offset.x.abs(), offset.y.abs());
+    if x > a || y > b {
+        return false;
+    }
+    // Only the corners curve in: beyond the straight sides' inset, the superellipse decides.
+    let dx = x - (a - r);
+    let dy = y - (b - r);
+    if dx <= 0.0 || dy <= 0.0 {
+        return true;
+    }
+    (dx / r).powf(EXPONENT) + (dy / r).powf(EXPONENT) <= 1.0
 }
 
 /// `value` raised to `power`, keeping its sign, so the curve is symmetric about both axes.
@@ -76,28 +101,38 @@ impl Padding {
     }
 }
 
-/// A squircle-shaped button around a child widget. Its size is the child's size plus the padding,
-/// and its outline is the squircle inscribed in that box. The child is laid out as it would be
-/// anywhere else, so a label, an icon or a layout of several widgets all work.
+/// A button with continuous corners around a child widget. Its size is the child's size plus the
+/// padding, and its outline fills that box. The child is laid out as it would be anywhere else, so a
+/// label, an icon or a layout of several widgets all work.
 pub struct SquircleButton<W> {
     child: W,
     padding: Padding,
     fill: Option<egui::Color32>,
     stroke: Option<egui::Stroke>,
+    radius: Option<f32>,
 }
 
 impl<W: egui::Widget> SquircleButton<W> {
-    /// A button around `child`, with no padding, the theme's fill and no outline.
+    /// A button around `child`, with no padding, the theme's fill, no outline and the default corners.
     pub fn new(child: W) -> Self {
         Self {
             child,
             padding: Padding::default(),
             fill: None,
             stroke: None,
+            radius: None,
         }
     }
 
-    /// An outline drawn round the squircle. Without one, there is none.
+    /// The radius of the corners, in points. Without one, the corners are as round as the box allows:
+    /// a pill for a wide button, and a full squircle for a square one.
+    #[must_use]
+    pub fn corner_radius(mut self, radius: f32) -> Self {
+        self.radius = Some(radius);
+        self
+    }
+
+    /// An outline drawn round the button. Without one, there is none.
     #[must_use]
     pub fn stroke(mut self, stroke: egui::Stroke) -> Self {
         self.stroke = Some(stroke);
@@ -118,8 +153,8 @@ impl<W: egui::Widget> SquircleButton<W> {
         self
     }
 
-    /// Lay the child out with the padding around it, then paint the squircle behind it. Clicks count
-    /// anywhere in the bounding box, and the painted outline is the squircle.
+    /// Lay the child out with the padding around it, then paint the button behind it. Clicks count
+    /// anywhere in the bounding box, and the painted outline has the continuous corners.
     pub fn show(self, ui: &mut egui::Ui) -> egui::Response {
         let padding = self.padding;
         // The fill is painted after the child has set the size, so it reserves a slot now, below the
@@ -157,7 +192,9 @@ impl<W: egui::Widget> SquircleButton<W> {
 
         if ui.is_rect_visible(outer) {
             let centre = outer.center();
-            let points = outline(outer.width() / 2.0, outer.height() / 2.0)
+            // Without a radius, the corners are as round as the box allows.
+            let radius = self.radius.unwrap_or(f32::MAX);
+            let points = outline(outer.width() / 2.0, outer.height() / 2.0, radius)
                 .into_iter()
                 .map(|offset| centre + offset)
                 .collect();
@@ -185,8 +222,8 @@ pub const TEXT_PADDING: Padding = Padding {
     bottom: 8.0,
 };
 
-/// A squircle button with one line of text, in the theme's text colour and fill. The text is never
-/// wrapped, so the button grows with it.
+/// A button with one line of text, in the theme's text colour and fill. The text is never wrapped,
+/// so the button grows with it.
 pub fn text_button(ui: &mut egui::Ui, text: impl Into<egui::WidgetText>) -> egui::Response {
     SquircleButton::new(egui::Label::new(text).extend())
         .padding(TEXT_PADDING)
@@ -197,19 +234,37 @@ pub fn text_button(ui: &mut egui::Ui, text: impl Into<egui::WidgetText>) -> egui
 mod tests {
     use super::*;
 
+    /// The value of the corner equation for a point: 1 on the outline, less inside.
+    fn boundary_value(a: f32, b: f32, r: f32, point: egui::Vec2) -> f32 {
+        let dx = (point.x.abs() - (a - r)).max(0.0) / r;
+        let dy = (point.y.abs() - (b - r)).max(0.0) / r;
+        dx.powf(EXPONENT) + dy.powf(EXPONENT)
+    }
+
     #[test]
-    fn the_outline_lies_on_the_superellipse() {
-        let (a, b) = (80.0, 30.0);
-        for point in outline(a, b) {
-            let on_curve = (point.x / a).abs().powf(EXPONENT) + (point.y / b).abs().powf(EXPONENT);
-            assert!((on_curve - 1.0).abs() < 1e-3, "{point:?} gives {on_curve}");
+    fn every_outline_point_is_on_the_boundary() {
+        for (a, b, r) in [(80.0, 30.0, 30.0), (30.0, 30.0, 30.0), (60.0, 40.0, 12.0)] {
+            for point in outline(a, b, r) {
+                let value = boundary_value(a, b, r, point);
+                assert!((value - 1.0).abs() < 1e-3, "{point:?} gives {value}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_straight_sides_are_flat() {
+        let (a, b, r) = (80.0, 30.0, 12.0);
+        for point in outline(a, b, r) {
+            if point.x.abs() <= a - r {
+                assert!((point.y.abs() - b).abs() < 1e-3, "{point:?} bows");
+            }
         }
     }
 
     #[test]
     fn the_outline_reaches_both_half_axes() {
-        let (a, b) = (80.0, 30.0);
-        let points = outline(a, b);
+        let (a, b, r) = (80.0, 30.0, 12.0);
+        let points = outline(a, b, r);
         let max_x = points.iter().map(|p| p.x).fold(f32::MIN, f32::max);
         let max_y = points.iter().map(|p| p.y).fold(f32::MIN, f32::max);
         assert!((max_x - a).abs() < 1e-3);
@@ -217,12 +272,27 @@ mod tests {
     }
 
     #[test]
-    fn the_corners_of_the_bounding_box_are_outside() {
-        let (a, b) = (80.0, 30.0);
-        assert!(contains(a, b, egui::vec2(0.0, 0.0)));
-        assert!(contains(a, b, egui::vec2(0.7 * a, 0.7 * b)));
-        assert!(!contains(a, b, egui::vec2(0.9 * a, 0.9 * b)));
-        assert!(!contains(a, b, egui::vec2(a, b)));
+    fn a_square_with_full_radius_is_a_squircle() {
+        let (a, b) = (30.0, 30.0);
+        for point in outline(a, b, f32::MAX) {
+            let on_curve = (point.x / a).abs().powf(EXPONENT) + (point.y / b).abs().powf(EXPONENT);
+            assert!((on_curve - 1.0).abs() < 1e-3, "{point:?} gives {on_curve}");
+        }
+    }
+
+    #[test]
+    fn containment_follows_the_outline() {
+        // A pill: the flat sides run between the rounded ends.
+        let (a, b, r) = (80.0, 30.0, 30.0);
+        assert!(contains(a, b, r, egui::vec2(0.0, 0.0)));
+        assert!(contains(a, b, r, egui::vec2(a - 0.5, 0.0)));
+        assert!(contains(a, b, r, egui::vec2(0.0, b - 0.5)));
+        assert!(!contains(a, b, r, egui::vec2(a - 1.0, b - 1.0)));
+        assert!(!contains(a, b, r, egui::vec2(a + 1.0, 0.0)));
+        // A square with full radius: the squircle.
+        let (a, b) = (30.0, 30.0);
+        assert!(contains(a, b, f32::MAX, egui::vec2(0.7 * a, 0.7 * b)));
+        assert!(!contains(a, b, f32::MAX, egui::vec2(0.9 * a, 0.9 * b)));
     }
 
     #[test]
