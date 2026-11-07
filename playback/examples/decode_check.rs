@@ -35,6 +35,7 @@ fn report(path: &Path) {
         timescale: track.timescale,
         bit_depth: format.bit_depth.unwrap_or(8),
         chroma: format.chroma.unwrap_or(player_core::video::Chroma::Yuv420),
+        colour: format.colour,
     };
     let mut decoder = match decode::open(&stream) {
         Ok(decoder) => decoder,

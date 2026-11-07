@@ -271,7 +271,11 @@ impl VideoToolbox {
         };
         let timescale = i32::try_from(stream.timescale)
             .map_err(|_| refused("the time scale is too large".into()))?;
-        let output_format = output_format(stream.bit_depth, stream.chroma);
+        let output_format = output_format(
+            stream.bit_depth,
+            stream.chroma,
+            stream.colour.full_range.unwrap_or(false),
+        );
 
         // SAFETY: every pointer passed to the frameworks is either valid for the call or null, and
         // every object created here is released on each path.
@@ -333,14 +337,22 @@ impl VideoToolbox {
 /// The pixel format to ask VideoToolbox for. Its own format for 10-bit pictures is not laid out
 /// in memory the way the frameworks describe, so a linear format is requested and VideoToolbox
 /// converts into it. `None` keeps the default for 8-bit 4:2:0.
-fn output_format(bit_depth: u8, chroma: Chroma) -> Option<u32> {
-    let code: &[u8; 4] = match (bit_depth, chroma) {
-        (8, Chroma::Yuv420) => b"420v",
-        (8, Chroma::Yuv422) => b"422v",
-        (8, Chroma::Yuv444) => b"444v",
-        (10, Chroma::Yuv420) => b"x420",
-        (10, Chroma::Yuv422) => b"x422",
-        (10, Chroma::Yuv444) => b"x444",
+fn output_format(bit_depth: u8, chroma: Chroma, full_range: bool) -> Option<u32> {
+    // A full-range stream gets a full-range picture: asking for limited levels would have the
+    // framework scale it down.
+    let code: &[u8; 4] = match (bit_depth, chroma, full_range) {
+        (8, Chroma::Yuv420, false) => b"420v",
+        (8, Chroma::Yuv422, false) => b"422v",
+        (8, Chroma::Yuv444, false) => b"444v",
+        (8, Chroma::Yuv420, true) => b"420f",
+        (8, Chroma::Yuv422, true) => b"422f",
+        (8, Chroma::Yuv444, true) => b"444f",
+        (10, Chroma::Yuv420, false) => b"x420",
+        (10, Chroma::Yuv422, false) => b"x422",
+        (10, Chroma::Yuv444, false) => b"x444",
+        (10, Chroma::Yuv420, true) => b"xf20",
+        (10, Chroma::Yuv422, true) => b"xf22",
+        (10, Chroma::Yuv444, true) => b"xf44",
         _ => return None,
     };
     Some(u32::from_be_bytes(*code))

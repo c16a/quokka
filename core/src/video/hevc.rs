@@ -3,7 +3,7 @@
 //! directly from an Annex B stream.
 
 use super::bits::{Bits, unescape};
-use super::{ASPECT_RATIOS, Chroma, Headers};
+use super::{ASPECT_RATIOS, Chroma, Headers, read_video_signal};
 
 /// The NAL unit type of a sequence parameter set.
 const SPS: u8 = 33;
@@ -252,13 +252,7 @@ fn read_vui(bits: &mut Bits, headers: &mut Headers) {
     if bits.flag().unwrap_or(false) {
         let _ = bits.skip(1);
     }
-    // video_signal_type_present_flag: video_format and full range flag, then the colour description.
-    if bits.flag().unwrap_or(false) {
-        let _ = bits.skip(4);
-        if bits.flag().unwrap_or(false) {
-            let _ = bits.skip(24);
-        }
-    }
+    read_video_signal(bits, &mut headers.colour);
     // chroma_loc_info_present_flag: two Exp-Golomb values.
     if bits.flag().unwrap_or(false) {
         let _ = bits.ue();

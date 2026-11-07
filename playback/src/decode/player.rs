@@ -8,7 +8,7 @@ use std::path::Path;
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::thread;
 
-use player_core::video::{self, Chroma};
+use player_core::video::{self, Chroma, Colour};
 
 use super::frames::{Rgba, to_rgba};
 use super::{DecodeError, Packet, Picture, StreamConfig};
@@ -77,6 +77,7 @@ impl FramePlayer {
             timescale: track.timescale,
             bit_depth: format.bit_depth.unwrap_or(8),
             chroma: format.chroma.unwrap_or(Chroma::Yuv420),
+            colour: format.colour,
         };
         let frame_count = track.samples.len();
         let target = start * track.timescale as f64;
@@ -177,6 +178,7 @@ fn run(
         return;
     };
     let timescale = track.timescale as f64;
+    let colour = stream.colour;
     let mut pending: Vec<Picture> = Vec::new();
     for sample in &track.samples[first..] {
         let mut data = vec![0u8; sample.size as usize];
@@ -198,7 +200,7 @@ fn run(
         pending.extend(decoder.take_pictures());
         pending.sort_by_key(|picture| picture.presentation_time);
         while pending.len() > REORDER_DEPTH {
-            if !emit(pending.remove(0), timescale, &sender) {
+            if !emit(pending.remove(0), timescale, &sender, colour) {
                 return;
             }
         }
@@ -210,7 +212,7 @@ fn run(
     pending.extend(decoder.take_pictures());
     pending.sort_by_key(|picture| picture.presentation_time);
     for picture in pending {
-        if !emit(picture, timescale, &sender) {
+        if !emit(picture, timescale, &sender, colour) {
             return;
         }
     }
@@ -218,9 +220,9 @@ fn run(
 }
 
 /// Convert one picture and send it. `false` means the window has gone and the worker should stop.
-fn emit(picture: Picture, timescale: f64, sender: &SyncSender<Message>) -> bool {
+fn emit(picture: Picture, timescale: f64, sender: &SyncSender<Message>, colour: Colour) -> bool {
     let time = picture.presentation_time as f64 / timescale;
-    let Some(image) = to_rgba(&picture) else {
+    let Some(image) = to_rgba(&picture, colour) else {
         return true;
     };
     sender

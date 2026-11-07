@@ -4,7 +4,9 @@ use std::collections::BTreeMap;
 use std::io::{Read, Seek};
 
 use super::bmff::{be, boxes, child, find_top, full_box};
-use super::{Codec, Container, Found, FrameRate, VideoFormat, assemble, codec_headers};
+use super::{
+    Codec, Colour, Container, Found, FrameRate, Matrix, VideoFormat, assemble, codec_headers,
+};
 
 /// The format of the first video track in an MP4 or MOV file.
 pub(crate) fn inspect<R: Read + Seek>(file: &mut R) -> std::io::Result<VideoFormat> {
@@ -55,6 +57,7 @@ fn first_video(moov: &[u8]) -> Option<Found> {
         }
     }
     found.display_aspect = display_aspect(trak);
+    found.colour = colour_box(children);
     if found.headers.sar.is_none() {
         found.headers.sar = pixel_aspect(children);
     }
@@ -167,4 +170,18 @@ fn stts_rate(stts: &[u8], timescale: u64) -> Option<(FrameRate, bool)> {
         FrameRate::new(timescale, common)?
     };
     Some((rate, variable))
+}
+
+/// The colour a `colr` box states, when it is an `nclx` box: the matrix and the range.
+fn colour_box(children: &[u8]) -> Colour {
+    let Some(colr) = child(children, b"colr") else {
+        return Colour::default();
+    };
+    if colr.get(0..4) != Some(b"nclx") || colr.len() < 11 {
+        return Colour::default();
+    }
+    Colour {
+        full_range: Some(colr[10] & 0x80 != 0),
+        matrix: Matrix::from_code(u64::from(u16::from_be_bytes([colr[8], colr[9]]))),
+    }
 }

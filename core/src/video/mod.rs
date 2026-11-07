@@ -95,6 +95,47 @@ impl Chroma {
     }
 }
 
+/// The colour matrix that turns a picture's Y'CbCr samples into RGB.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Matrix {
+    /// ITU-R BT.601, standard definition.
+    Bt601,
+    /// ITU-R BT.709, high definition.
+    Bt709,
+    /// ITU-R BT.2020, ultra high definition.
+    Bt2020,
+}
+
+impl Matrix {
+    /// The matrix a `matrix_coefficients` code names (ISO/IEC 23001-8), when it names one.
+    pub fn from_code(code: u64) -> Option<Matrix> {
+        match code {
+            1 => Some(Matrix::Bt709),
+            5 | 6 => Some(Matrix::Bt601),
+            9 | 10 => Some(Matrix::Bt2020),
+            _ => None,
+        }
+    }
+}
+
+/// How a picture's colours are encoded. Each field is `None` when the file does not say.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Colour {
+    /// Whether the samples use the full 0 to maximum range, rather than limited video levels.
+    pub full_range: Option<bool>,
+    pub matrix: Option<Matrix>,
+}
+
+impl Colour {
+    /// These values, with any the stream does not give taken from `other`.
+    pub(crate) fn or(self, other: Colour) -> Colour {
+        Colour {
+            full_range: self.full_range.or(other.full_range),
+            matrix: self.matrix.or(other.matrix),
+        }
+    }
+}
+
 /// A frame rate: frames per second, as a fraction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrameRate {
@@ -171,6 +212,8 @@ pub struct VideoFormat {
     pub frame_rate: Option<FrameRate>,
     /// True when frames do not follow one fixed duration. `frame_rate` is then the average.
     pub variable_frame_rate: bool,
+    /// How the colours are encoded.
+    pub colour: Colour,
 }
 
 /// Read the format of the video in `path`. Files that are not video, or that use a format this
@@ -206,8 +249,25 @@ pub(crate) struct Headers {
     pub chroma: Option<Chroma>,
     /// Pixel aspect ratio, horizontal then vertical.
     pub sar: Option<(u32, u32)>,
+    pub colour: Colour,
     /// Time scale and ticks per frame: the frame rate is `scale / ticks`.
     pub timing: Option<(u64, u64)>,
+}
+
+/// The video signal fields of a VUI, which H.264 and HEVC lay out the same way: the range and the
+/// colour matrix.
+pub(crate) fn read_video_signal(bits: &mut bits::Bits, colour: &mut Colour) {
+    if !bits.flag().unwrap_or(false) {
+        return;
+    }
+    // video_format, then video_full_range_flag.
+    let _ = bits.skip(3);
+    colour.full_range = bits.flag();
+    if bits.flag().unwrap_or(false) {
+        // colour_primaries and transfer_characteristics, then matrix_coefficients.
+        let _ = bits.skip(16);
+        colour.matrix = bits.bits(8).and_then(Matrix::from_code);
+    }
 }
 
 /// The pixel aspect ratios by `aspect_ratio_idc` 1 to 16 (H.264 and HEVC Table E-1).
@@ -243,6 +303,8 @@ pub(crate) struct Found {
     pub display_aspect: Option<f64>,
     /// The frame rate the container states or measures, and whether frames vary.
     pub frame_rate: Option<(FrameRate, bool)>,
+    /// The colour the container states, used where the codec headers do not give it.
+    pub colour: Colour,
     pub bit_depth: Option<u8>,
     pub chroma: Option<Chroma>,
 }
@@ -290,6 +352,7 @@ pub(crate) fn assemble(found: Found) -> VideoFormat {
         chroma: headers.chroma.or(found.chroma),
         frame_rate,
         variable_frame_rate,
+        colour: headers.colour.or(found.colour),
     }
 }
 

@@ -8,7 +8,8 @@ use super::audio::{AudioCodec, AudioTrack, aac_format, ac3_from_frame, eac3_from
 use super::ebml::{elements, text, uint, vint};
 use super::samples::{Sample, SampleTrack};
 use super::{
-    Chroma, Codec, Container, Found, FrameRate, Headers, VideoFormat, assemble, codec_headers, vp9,
+    Chroma, Codec, Colour, Container, Found, FrameRate, Headers, Matrix, VideoFormat, assemble,
+    codec_headers, vp9,
 };
 
 const SEGMENT: u64 = 0x1853_8067;
@@ -35,6 +36,8 @@ const COLOUR: u64 = 0x55B0;
 const BITS_PER_CHANNEL: u64 = 0x55B2;
 const CHROMA_SUBSAMPLING_HORZ: u64 = 0x55B3;
 const CHROMA_SUBSAMPLING_VERT: u64 = 0x55B4;
+const MATRIX_COEFFICIENTS: u64 = 0x55B1;
+const RANGE: u64 = 0x55B9;
 
 /// The TrackType of a video track.
 const VIDEO_TRACK: u64 = 1;
@@ -67,6 +70,8 @@ pub(crate) struct Track {
     pub(crate) bits_per_channel: Option<u64>,
     pub(crate) chroma_horizontal: Option<u64>,
     pub(crate) chroma_vertical: Option<u64>,
+    pub(crate) matrix_coefficients: Option<u64>,
+    pub(crate) range: Option<u64>,
     pub(crate) sampling_frequency: Option<f64>,
     pub(crate) channels: Option<u64>,
 }
@@ -122,6 +127,11 @@ fn found(data: &[u8]) -> Option<Found> {
             .bits_per_channel
             .and_then(|bits| u8::try_from(bits).ok()),
         chroma: chroma_from_colour(track.chroma_horizontal, track.chroma_vertical),
+        colour: Colour {
+            // Range 1 is broadcast (limited) and 2 is full.
+            full_range: track.range.map(|range| range == 2),
+            matrix: track.matrix_coefficients.and_then(Matrix::from_code),
+        },
     })
 }
 
@@ -180,6 +190,10 @@ fn parse_video(body: &[u8], track: &mut Track) {
                         CHROMA_SUBSAMPLING_VERT => {
                             track.chroma_vertical = Some(uint(colour_value));
                         }
+                        MATRIX_COEFFICIENTS => {
+                            track.matrix_coefficients = Some(uint(colour_value));
+                        }
+                        RANGE => track.range = Some(uint(colour_value)),
                         _ => {}
                     }
                 }

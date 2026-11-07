@@ -3,7 +3,7 @@
 //! directly from an Annex B stream.
 
 use super::bits::{Bits, unescape};
-use super::{ASPECT_RATIOS, Chroma, Headers};
+use super::{ASPECT_RATIOS, Chroma, Headers, read_video_signal};
 
 /// Profiles whose SPS carries the chroma format and bit depth fields (H.264 section 7.3.2.1.1).
 const HIGH_PROFILES: [u64; 13] = [100, 110, 122, 244, 44, 83, 86, 118, 128, 138, 139, 134, 135];
@@ -152,13 +152,7 @@ fn read_vui(bits: &mut Bits, headers: &mut Headers) {
     if bits.flag().unwrap_or(false) {
         bits.skip(1);
     }
-    // video_signal_type_present_flag: video_format, full range flag, then the colour description.
-    if bits.flag().unwrap_or(false) {
-        bits.skip(4);
-        if bits.flag().unwrap_or(false) {
-            bits.skip(24);
-        }
-    }
+    read_video_signal(bits, &mut headers.colour);
     // chroma_loc_info_present_flag: two Exp-Golomb values.
     if bits.flag().unwrap_or(false) {
         bits.ue();

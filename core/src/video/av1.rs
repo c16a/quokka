@@ -3,7 +3,7 @@
 //! the sequence header inside an `av1C` record.
 
 use super::bits::Bits;
-use super::{Chroma, Headers};
+use super::{Chroma, Colour, Headers, Matrix};
 
 /// The OBU type of a sequence header.
 const SEQUENCE_HEADER: u8 = 1;
@@ -192,19 +192,20 @@ fn sequence_header(payload: &[u8]) -> Option<Headers> {
 
     // enable_superres, enable_cdef, enable_restoration.
     bits.skip(3)?;
-    let (bit_depth, chroma) = color_config(&mut bits, profile)?;
+    let (bit_depth, chroma, colour) = color_config(&mut bits, profile)?;
     Some(Headers {
         width: u32::try_from(width).ok(),
         height: u32::try_from(height).ok(),
         bit_depth: Some(bit_depth),
         chroma: Some(chroma),
+        colour,
         timing,
         ..Headers::default()
     })
 }
 
 /// Read `color_config()` (section 5.5.2): the bit depth and chroma subsampling.
-fn color_config(bits: &mut Bits, profile: u64) -> Option<(u8, Chroma)> {
+fn color_config(bits: &mut Bits, profile: u64) -> Option<(u8, Chroma, Colour)> {
     let high_bitdepth = bits.flag()?;
     let bit_depth = if profile == 2 && high_bitdepth {
         if bits.flag()? { 12 } else { 10 }
@@ -222,18 +223,21 @@ fn color_config(bits: &mut Bits, profile: u64) -> Option<(u8, Chroma)> {
         transfer = bits.bits(8)?;
         matrix = bits.bits(8)?;
     }
+    let mut colour = Colour {
+        full_range: None,
+        matrix: Matrix::from_code(matrix),
+    };
     if mono_chrome {
-        // color_range.
-        bits.skip(1)?;
-        return Some((bit_depth, Chroma::Monochrome));
+        colour.full_range = Some(bits.flag()?);
+        return Some((bit_depth, Chroma::Monochrome, colour));
     }
-    // sRGB in 4:4:4 has no colour_range bit.
+    // sRGB in 4:4:4 has no colour_range bit, and is full range.
     let srgb = primaries == 1 && transfer == 13 && matrix == 0;
     let (subsampling_x, subsampling_y) = if srgb {
+        colour.full_range = Some(true);
         (0, 0)
     } else {
-        // color_range.
-        bits.skip(1)?;
+        colour.full_range = Some(bits.flag()?);
         match profile {
             0 => (1, 1),
             1 => (0, 0),
@@ -256,7 +260,7 @@ fn color_config(bits: &mut Bits, profile: u64) -> Option<(u8, Chroma)> {
         (1, 0) => Chroma::Yuv422,
         _ => Chroma::Yuv444,
     };
-    Some((bit_depth, chroma))
+    Some((bit_depth, chroma, colour))
 }
 
 /// A `uvlc()` value (section 4.10.3): leading zeros, then that many bits.

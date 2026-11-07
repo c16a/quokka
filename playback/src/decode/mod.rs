@@ -11,7 +11,7 @@ pub mod player;
 pub mod videotoolbox;
 pub mod vp9;
 
-use player_core::video::{Chroma, Codec};
+use player_core::video::{Chroma, Codec, Colour};
 use thiserror::Error;
 
 /// What a decoder needs to know about a stream before it opens.
@@ -28,6 +28,8 @@ pub struct StreamConfig {
     pub bit_depth: u8,
     /// The chroma subsampling, as the stream states it.
     pub chroma: Chroma,
+    /// The colour range and matrix, as the stream states them.
+    pub colour: Colour,
 }
 
 /// One compressed frame, with its times in the stream's ticks.

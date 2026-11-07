@@ -2,6 +2,8 @@
 
 use std::borrow::Cow;
 
+use player_core::video::{Colour, Matrix};
+
 use super::{Picture, Surface};
 
 /// A picture as tight RGBA rows, four bytes a pixel.
@@ -40,12 +42,12 @@ impl Layout {
             b"I012" => (false, 12, false, 1, 1),
             b"I212" => (false, 12, false, 1, 0),
             b"I412" => (false, 12, false, 0, 0),
-            b"420v" => (true, 8, false, 1, 1),
-            b"422v" => (true, 8, false, 1, 0),
-            b"444v" => (true, 8, false, 0, 0),
-            b"x420" => (true, 10, true, 1, 1),
-            b"x422" => (true, 10, true, 1, 0),
-            b"x444" => (true, 10, true, 0, 0),
+            b"420v" | b"420f" => (true, 8, false, 1, 1),
+            b"422v" | b"422f" => (true, 8, false, 1, 0),
+            b"444v" | b"444f" => (true, 8, false, 0, 0),
+            b"x420" | b"xf20" => (true, 10, true, 1, 1),
+            b"x422" | b"xf22" => (true, 10, true, 1, 0),
+            b"x444" | b"xf44" => (true, 10, true, 0, 0),
             _ => return None,
         };
         Some(Layout {
@@ -63,19 +65,62 @@ impl Layout {
     }
 }
 
-/// The RGBA pixels of a picture, or `None` when its pixel format is not one this converts.
-pub fn to_rgba(picture: &Picture) -> Option<Rgba> {
+/// The RGBA pixels of a picture, or `None` when its pixel format is not one this converts. The
+/// colour is what the stream states. Where it does not, the picture is taken as limited range, in
+/// BT.709 when it is high definition and BT.601 when it is not.
+pub fn to_rgba(picture: &Picture, colour: Colour) -> Option<Rgba> {
     let layout = Layout::of(&picture.pixel_format)?;
     let samples: Cow<[u8]> = match &picture.surface {
         Surface::Cpu(bytes) => Cow::Borrowed(bytes),
         #[cfg(target_os = "macos")]
         Surface::Platform(buffer) => Cow::Owned(buffer.to_bytes()),
     };
-    Some(convert(picture.width, picture.height, layout, &samples))
+    let matrix = colour.matrix.unwrap_or(if picture.height > 576 {
+        Matrix::Bt709
+    } else {
+        Matrix::Bt601
+    });
+    Some(convert(
+        picture.width,
+        picture.height,
+        layout,
+        &samples,
+        matrix,
+        colour.full_range.unwrap_or(false),
+    ))
 }
 
-/// Convert Y'CbCr to RGB, with the BT.709 matrix and limited range, which is what HD video uses.
-fn convert(width: u32, height: u32, layout: Layout, samples: &[u8]) -> Rgba {
+/// The luma weights of a matrix, `(Kr, Kb)`. The green weights follow from them.
+fn luma_weights(matrix: Matrix) -> (f32, f32) {
+    match matrix {
+        Matrix::Bt601 => (0.299, 0.114),
+        Matrix::Bt709 => (0.2126, 0.0722),
+        Matrix::Bt2020 => (0.2627, 0.0593),
+    }
+}
+
+/// Convert Y'CbCr to RGB with the given matrix, and full or limited range.
+fn convert(
+    width: u32,
+    height: u32,
+    layout: Layout,
+    samples: &[u8],
+    matrix: Matrix,
+    full_range: bool,
+) -> Rgba {
+    let (kr, kb) = luma_weights(matrix);
+    let kg = 1.0 - kr - kb;
+    // How much each chroma sample adds to each colour (green subtracts).
+    let r_from_cr = 2.0 * (1.0 - kr);
+    let g_from_cb = 2.0 * kb * (1.0 - kb) / kg;
+    let g_from_cr = 2.0 * kr * (1.0 - kr) / kg;
+    let b_from_cb = 2.0 * (1.0 - kb);
+    // Full range spans 0 to 255; limited range spans 16 to 235 for luma and 16 to 240 for chroma.
+    let (luma_offset, luma_scale, chroma_scale) = if full_range {
+        (0.0, 1.0 / 255.0, 1.0 / 255.0)
+    } else {
+        (16.0, 1.0 / 219.0, 1.0 / 224.0)
+    };
     let (w, h) = (width as usize, height as usize);
     let (cw, ch) = (
         (w + layout.shift_x as usize) >> layout.shift_x,
@@ -117,10 +162,12 @@ fn convert(width: u32, height: u32, layout: Layout, samples: &[u8]) -> Rgba {
                     read(luma_bytes + chroma_bytes + chroma * bytes) as f32,
                 )
             };
-            let (y_part, cb, cr) = (1.164 * (luma - 16.0), cb - 128.0, cr - 128.0);
-            let r = y_part + 1.793 * cr;
-            let g = y_part - 0.213 * cb - 0.533 * cr;
-            let b = y_part + 2.112 * cb;
+            let y_part = (luma - luma_offset) * luma_scale;
+            let cb = (cb - 128.0) * chroma_scale;
+            let cr = (cr - 128.0) * chroma_scale;
+            let r = 255.0 * (y_part + r_from_cr * cr);
+            let g = 255.0 * (y_part - g_from_cb * cb - g_from_cr * cr);
+            let b = 255.0 * (y_part + b_from_cb * cb);
             let at = (y * w + x) * 4;
             pixels[at] = clamp(r);
             pixels[at + 1] = clamp(g);
@@ -156,10 +203,10 @@ mod tests {
     #[test]
     fn video_black_and_white_convert_to_black_and_white() {
         // 2x2 4:2:0 with neutral chroma: luma 16 is black and 235 is white.
-        let black = to_rgba(&picture(
-            b"I420",
-            vec![16, 16, 16, 16, 128, 128, 128, 128, 128],
-        ))
+        let black = to_rgba(
+            &picture(b"I420", vec![16, 16, 16, 16, 128, 128, 128, 128, 128]),
+            Colour::default(),
+        )
         .unwrap();
         assert!(
             black
@@ -167,10 +214,10 @@ mod tests {
                 .chunks(4)
                 .all(|px| px[..3] == [0, 0, 0] && px[3] == 255)
         );
-        let white = to_rgba(&picture(
-            b"I420",
-            vec![235, 235, 235, 235, 128, 128, 128, 128, 128],
-        ))
+        let white = to_rgba(
+            &picture(b"I420", vec![235, 235, 235, 235, 128, 128, 128, 128, 128]),
+            Colour::default(),
+        )
         .unwrap();
         assert!(white.pixels.chunks(4).all(|px| px[..3] == [255, 255, 255]));
     }
@@ -180,11 +227,76 @@ mod tests {
         // The same picture, once planar and once biplanar with interleaved chroma.
         let planar = picture(b"I420", vec![100, 150, 60, 200, 128, 128, 128, 128, 128]);
         let biplanar = picture(b"420v", vec![100, 150, 60, 200, 128, 128, 128, 128, 128]);
-        assert_eq!(to_rgba(&planar), to_rgba(&biplanar));
+        assert_eq!(
+            to_rgba(&planar, Colour::default()),
+            to_rgba(&biplanar, Colour::default())
+        );
+    }
+
+    #[test]
+    fn full_range_uses_the_whole_scale() {
+        let full = Colour {
+            full_range: Some(true),
+            matrix: Some(Matrix::Bt709),
+        };
+        let white = to_rgba(
+            &picture(b"I420", vec![255, 255, 255, 255, 128, 128, 128, 128, 128]),
+            full,
+        )
+        .unwrap();
+        assert!(white.pixels.chunks(4).all(|px| px[..3] == [255, 255, 255]));
+        let black = to_rgba(
+            &picture(b"I420", vec![0, 0, 0, 0, 128, 128, 128, 128, 128]),
+            full,
+        )
+        .unwrap();
+        assert!(black.pixels.chunks(4).all(|px| px[..3] == [0, 0, 0]));
+    }
+
+    #[test]
+    fn limited_range_black_is_black_in_any_matrix() {
+        for matrix in [Matrix::Bt601, Matrix::Bt709, Matrix::Bt2020] {
+            let colour = Colour {
+                full_range: Some(false),
+                matrix: Some(matrix),
+            };
+            let black = to_rgba(
+                &picture(b"I420", vec![16, 16, 16, 16, 128, 128, 128, 128, 128]),
+                colour,
+            )
+            .unwrap();
+            assert!(
+                black.pixels.chunks(4).all(|px| px[..3] == [0, 0, 0]),
+                "{matrix:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_matrix_changes_saturated_colours() {
+        // A red chroma sample, limited range: BT.601 and BT.709 give different reds.
+        let sample = vec![81, 81, 81, 81, 90, 90, 90, 90, 240];
+        let red_601 = to_rgba(
+            &picture(b"I420", sample.clone()),
+            Colour {
+                full_range: Some(false),
+                matrix: Some(Matrix::Bt601),
+            },
+        )
+        .unwrap();
+        let red_709 = to_rgba(
+            &picture(b"I420", sample),
+            Colour {
+                full_range: Some(false),
+                matrix: Some(Matrix::Bt709),
+            },
+        )
+        .unwrap();
+        assert_ne!(red_601.pixels, red_709.pixels);
     }
 
     #[test]
     fn unknown_formats_are_not_converted() {
-        assert!(to_rgba(&picture(b"????", vec![0; 16])).is_none());
+        assert!(to_rgba(&picture(b"????", vec![0; 16]), Colour::default()).is_none());
     }
 }

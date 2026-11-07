@@ -2,7 +2,7 @@
 //! chroma subsampling. The picture size and frame rate come from the container.
 
 use super::bits::Bits;
-use super::{Chroma, Headers};
+use super::{Chroma, Colour, Headers, Matrix};
 
 /// The headers of a `vpcC` box body. It is a full box: four bytes of version and flags, then the
 /// profile, the level, and one byte holding the bit depth, chroma subsampling and range.
@@ -18,6 +18,12 @@ pub(crate) fn from_vpcc(record: &[u8]) -> Option<Headers> {
     Some(Headers {
         bit_depth: matches!(bit_depth, 8 | 10 | 12).then_some(bit_depth),
         chroma: Some(chroma),
+        colour: Colour {
+            full_range: Some(colour & 0x01 != 0),
+            matrix: record
+                .get(9)
+                .and_then(|&code| Matrix::from_code(u64::from(code))),
+        },
         ..Headers::default()
     })
 }
