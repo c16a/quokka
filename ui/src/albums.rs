@@ -353,9 +353,10 @@ impl AlbumsView {
         // A cover with a dominant colour gives the page its colour, as a movie's cover does.
         let palette = accent.map_or_else(|| AlbumPalette::of(ui), AlbumPalette::poster);
         if let Some(colour) = accent {
-            // The background is drawn on the GPU, and asks for a redraw so the strands keep moving.
+            // The background is a mesh gradient of the cover's dominant colour and its lighter and deeper shades,
+            // drawn on the GPU. It asks for a redraw so the colours keep moving.
             let area = ui.clip_rect();
-            let background = crate::flow_background::FlowBackground {
+            let background = crate::mesh_background::MeshBackground {
                 base: colour,
                 seed: (i % 1000) as f32,
                 time: ui.input(|input| input.time) as f32,

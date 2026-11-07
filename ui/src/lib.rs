@@ -9,6 +9,7 @@ mod fonts;
 mod format;
 mod icons;
 mod media;
+mod mesh_background;
 mod movies;
 mod playback;
 mod playlists;
@@ -161,6 +162,7 @@ pub fn run(paths: Paths) -> Result<(), Box<dyn std::error::Error>> {
         Box::new(move |cc| {
             if let Some(render_state) = cc.wgpu_render_state.as_ref() {
                 flow_background::install(render_state);
+                mesh_background::install(render_state);
             }
             #[cfg(target_os = "macos")]
             if let Some(render_state) = cc.wgpu_render_state.as_ref() {
