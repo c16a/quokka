@@ -10,6 +10,10 @@ const EXPONENT: f32 = 4.0;
 const POINTS_PER_CORNER: usize = 48;
 /// How far the fill moves towards the text colour while the pointer is over the button.
 const HOVER_TINT: f32 = 0.1;
+/// The height of every squircle button and text field, in points, so they line up in a row.
+pub const CONTROL_HEIGHT: f32 = 36.0;
+/// The space between a text field's outline and the text on each side, in points.
+const FIELD_INSET: f32 = 16.0;
 
 /// The outline of a button with half-axes `a` and `b` and corners of radius `radius`, centred on the
 /// origin. The radius is limited to what the box allows. The points go round once, starting on the
@@ -121,6 +125,7 @@ pub struct SquircleButton<W> {
     fill: Option<egui::Color32>,
     stroke: Option<egui::Stroke>,
     radius: Option<f32>,
+    min_height: f32,
 }
 
 impl<W: egui::Widget> SquircleButton<W> {
@@ -132,6 +137,7 @@ impl<W: egui::Widget> SquircleButton<W> {
             fill: None,
             stroke: None,
             radius: None,
+            min_height: CONTROL_HEIGHT,
         }
     }
 
@@ -147,6 +153,14 @@ impl<W: egui::Widget> SquircleButton<W> {
     #[must_use]
     pub fn stroke(mut self, stroke: egui::Stroke) -> Self {
         self.stroke = Some(stroke);
+        self
+    }
+
+    /// The least height of the button, in points. It defaults to `CONTROL_HEIGHT`, which keeps buttons
+    /// and text fields the same height.
+    #[must_use]
+    pub fn min_height(mut self, height: f32) -> Self {
+        self.min_height = height;
         self
     }
 
@@ -199,6 +213,7 @@ impl<W: egui::Widget> SquircleButton<W> {
             used.min - egui::vec2(padding.left, padding.top),
             used.max + egui::vec2(padding.right, padding.bottom),
         );
+        let outer = grow_to_height(outer, self.min_height);
         let response = ui.allocate_rect(outer, egui::Sense::click());
         let hover = ui.ctx().animate_bool_with_time(
             response.id.with("squircle_hover"),
@@ -212,43 +227,137 @@ impl<W: egui::Widget> SquircleButton<W> {
         let fill = base.lerp_to_gamma(base.lerp_to_gamma(text, HOVER_TINT), hover);
 
         if ui.is_rect_visible(outer) {
-            let centre = outer.center();
-            // Without a radius, the corners are as round as the box allows.
-            let radius = self.radius.unwrap_or(f32::MAX);
-            let points: Vec<egui::Pos2> =
-                outline(outer.width() / 2.0, outer.height() / 2.0, radius)
-                    .into_iter()
-                    .map(|offset| centre + offset)
-                    .collect();
-            // The fill is a fan of triangles from the centre. egui's own convex-polygon fill draws a
-            // wedge across the button for these outlines, so the triangles are built here instead.
-            let mut mesh = egui::Mesh::default();
-            let centre_index = mesh.vertices.len() as u32;
-            mesh.colored_vertex(centre, fill);
-            for point in &points {
-                mesh.colored_vertex(*point, fill);
-            }
-            let count = points.len() as u32;
-            for i in 0..count {
-                mesh.add_triangle(
-                    centre_index,
-                    centre_index + 1 + i,
-                    centre_index + 1 + (i + 1) % count,
-                );
-            }
-            // A transparent fill draws nothing useful: its triangles leave a line along one edge.
-            if fill.a() > 0 {
-                ui.painter().set(background, egui::Shape::mesh(mesh));
-            }
-            // egui's closed-line stroke leaves a line running across the page from one of the corners,
-            // so the outline is drawn as an open line that returns to its first point.
-            if let Some(stroke) = self.stroke {
-                let mut outline_points = points;
-                outline_points.push(outline_points[0]);
-                ui.painter().add(egui::Shape::line(outline_points, stroke));
-            }
+            let shapes = squircle_shapes(outer, self.radius, fill, self.stroke);
+            ui.painter().set(background, egui::Shape::Vec(shapes));
         }
         response
+    }
+}
+
+/// `rect` made taller about its centre, if it is shorter than `height`.
+fn grow_to_height(rect: egui::Rect, height: f32) -> egui::Rect {
+    if rect.height() >= height {
+        rect
+    } else {
+        rect.expand2(egui::vec2(0.0, (height - rect.height()) / 2.0))
+    }
+}
+
+/// The shapes that paint a squircle over `rect`: the fill, then the outline when there is one.
+/// Without a radius, the corners are as round as the box allows.
+fn squircle_shapes(
+    rect: egui::Rect,
+    radius: Option<f32>,
+    fill: egui::Color32,
+    stroke: Option<egui::Stroke>,
+) -> Vec<egui::Shape> {
+    let centre = rect.center();
+    let radius = radius.unwrap_or(f32::MAX);
+    let points: Vec<egui::Pos2> = outline(rect.width() / 2.0, rect.height() / 2.0, radius)
+        .into_iter()
+        .map(|offset| centre + offset)
+        .collect();
+    let mut shapes = Vec::with_capacity(2);
+    // A transparent fill draws nothing useful: its triangles leave a line along one edge.
+    if fill.a() > 0 {
+        // The fill is a fan of triangles from the centre. egui's own convex-polygon fill draws a
+        // wedge across the shape for these outlines, so the triangles are built here instead.
+        let mut mesh = egui::Mesh::default();
+        let centre_index = mesh.vertices.len() as u32;
+        mesh.colored_vertex(centre, fill);
+        for point in &points {
+            mesh.colored_vertex(*point, fill);
+        }
+        let count = points.len() as u32;
+        for i in 0..count {
+            mesh.add_triangle(
+                centre_index,
+                centre_index + 1 + i,
+                centre_index + 1 + (i + 1) % count,
+            );
+        }
+        shapes.push(egui::Shape::mesh(mesh));
+    }
+    // egui's closed-line stroke leaves a line running across the page from one of the corners, so
+    // the outline is drawn as an open line that returns to its first point.
+    if let Some(stroke) = stroke {
+        let mut outline_points = points;
+        outline_points.push(outline_points[0]);
+        shapes.push(egui::Shape::line(outline_points, stroke));
+    }
+    shapes
+}
+
+/// A single-line text field with the same continuous corners as a squircle button, and the same
+/// height. Its outline is the theme's, and turns to the selection colour while it has focus.
+pub struct SquircleTextField<'t> {
+    edit: egui::TextEdit<'t>,
+    width: f32,
+}
+
+impl<'t> SquircleTextField<'t> {
+    /// A field that edits `text`. It is 200 points wide until `desired_width` says otherwise.
+    pub fn singleline(text: &'t mut dyn egui::TextBuffer) -> Self {
+        Self {
+            edit: egui::TextEdit::singleline(text)
+                .frame(egui::Frame::NONE)
+                .margin(egui::Margin::ZERO),
+            width: 200.0,
+        }
+    }
+
+    /// The text shown while the field is empty.
+    #[must_use]
+    pub fn hint_text(mut self, text: impl Into<egui::WidgetText>) -> Self {
+        self.edit = self.edit.hint_text(text);
+        self
+    }
+
+    /// Show the text as dots.
+    #[must_use]
+    pub fn password(mut self, on: bool) -> Self {
+        self.edit = self.edit.password(on);
+        self
+    }
+
+    /// The width of the whole field, outline included. `f32::INFINITY` takes the space available.
+    #[must_use]
+    pub fn desired_width(mut self, width: f32) -> Self {
+        self.width = width;
+        self
+    }
+
+    /// Lay the field out and paint its outline. The response is the text edit's, so focus and changes
+    /// read as they would for a plain text edit, but its rectangle is the whole field.
+    pub fn show(self, ui: &mut egui::Ui) -> egui::Response {
+        let width = if self.width.is_finite() {
+            self.width
+        } else {
+            ui.available_width()
+        };
+        let (rect, _) =
+            ui.allocate_exact_size(egui::vec2(width, CONTROL_HEIGHT), egui::Sense::hover());
+        // The outline is painted before the text, so it sits behind it. Its colour depends on the
+        // focus, which is known only once the edit has been laid out, so the slot is reserved first.
+        let background = ui.painter().add(egui::Shape::Noop);
+        let inner = rect.shrink2(egui::vec2(FIELD_INSET, 0.0));
+        let mut edit = ui
+            .new_child(
+                egui::UiBuilder::new()
+                    .max_rect(inner)
+                    .layout(egui::Layout::left_to_right(egui::Align::Center)),
+            )
+            .add(self.edit.desired_width(inner.width()));
+        let visuals = ui.visuals();
+        let stroke = if edit.has_focus() {
+            egui::Stroke::new(1.5, visuals.selection.stroke.color)
+        } else {
+            visuals.widgets.inactive.bg_stroke
+        };
+        let shapes = squircle_shapes(rect, None, visuals.extreme_bg_color, Some(stroke));
+        ui.painter().set(background, egui::Shape::Vec(shapes));
+        edit.rect = rect;
+        edit
     }
 }
 
@@ -380,8 +489,11 @@ mod tests {
                     .rect;
             });
         });
+        // A short child grows to CONTROL_HEIGHT about its centre, so the button may start that much
+        // above the row's top and no further.
+        let growth = (CONTROL_HEIGHT - (child_height + padding.vertical())).max(0.0) / 2.0;
         assert!(
-            button_rect.top() >= row_top - 1e-3,
+            button_rect.top() >= row_top - growth - 1e-3,
             "button starts at {} above its row at {}",
             button_rect.top(),
             row_top
@@ -514,11 +626,38 @@ mod tests {
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
             child_size = ui.add(egui::Label::new("Hello")).rect.size();
             button_size = ui
-                .add(SquircleButton::new(egui::Label::new("Hello")).padding(padding))
+                .add(
+                    SquircleButton::new(egui::Label::new("Hello"))
+                        .padding(padding)
+                        .min_height(0.0),
+                )
                 .rect
                 .size();
         });
         assert!((button_size.x - (child_size.x + padding.horizontal())).abs() < 1e-3);
         assert!((button_size.y - (child_size.y + padding.vertical())).abs() < 1e-3);
+    }
+
+    #[test]
+    fn a_text_field_is_the_same_height_as_a_text_button() {
+        let ctx = egui::Context::default();
+        let mut text = String::new();
+        let mut field_rect = egui::Rect::NOTHING;
+        let mut button_rect = egui::Rect::NOTHING;
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            field_rect = SquircleTextField::singleline(&mut text)
+                .hint_text("Name")
+                .show(ui)
+                .rect;
+            button_rect = text_button(ui, "Save").rect;
+        });
+        assert!(
+            (field_rect.height() - CONTROL_HEIGHT).abs() < 1e-3,
+            "{field_rect:?}"
+        );
+        assert!(
+            (button_rect.height() - CONTROL_HEIGHT).abs() < 1e-3,
+            "{button_rect:?}"
+        );
     }
 }

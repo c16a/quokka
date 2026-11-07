@@ -420,14 +420,10 @@ fn search_field(ui: &mut egui::Ui, query: &mut String) -> bool {
                     ui.visuals().weak_text_color(),
                 );
                 ui.add_space(6.0);
-                let field = ui.add(
-                    egui::TextEdit::singleline(query)
-                        .frame(egui::Frame::NONE)
-                        .hint_text("Search by name, country, language or genre")
-                        .margin(egui::Margin::symmetric(10, 6))
-                        .align(egui::Align2::LEFT_CENTER)
-                        .desired_width(f32::INFINITY),
-                );
+                let field = crate::squircle::SquircleTextField::singleline(query)
+                    .hint_text("Search by name, country, language or genre")
+                    .desired_width(f32::INFINITY)
+                    .show(ui);
                 changed = field.changed();
             });
         });

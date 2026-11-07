@@ -146,7 +146,7 @@ fn segmented<T: Copy + PartialEq>(
                     } else {
                         (egui::Color32::TRANSPARENT, colours.text)
                     };
-                    if pill(ui, label, fill, text, 32.0) && !selected {
+                    if pill(ui, label, fill, text) && !selected {
                         picked = Some(value);
                     }
                 }
@@ -191,20 +191,11 @@ fn row_button(ui: &mut egui::Ui, label: &str, fill: egui::Color32, text: egui::C
     squircle_label(ui, label, fill, text, Padding::symmetric(14.0, 6.0)).clicked()
 }
 
-/// A rounded button with a label, at least `height` points tall. Returns true when it is clicked.
-fn pill(
-    ui: &mut egui::Ui,
-    label: &str,
-    fill: egui::Color32,
-    text: egui::Color32,
-    height: f32,
-) -> bool {
-    let vertical = ((height - LABEL_LINE) / 2.0).max(0.0);
-    squircle_label(ui, label, fill, text, Padding::symmetric(18.0, vertical)).clicked()
+/// A rounded button with a label, the same height as every other squircle button. Returns true when
+/// it is clicked.
+fn pill(ui: &mut egui::Ui, label: &str, fill: egui::Color32, text: egui::Color32) -> bool {
+    squircle_label(ui, label, fill, text, Padding::symmetric(18.0, 0.0)).clicked()
 }
-
-/// The height of one line of 14-point text, which the padding is measured from.
-const LABEL_LINE: f32 = 18.0;
 
 /// A squircle button with one line of 14-point text.
 fn squircle_label(
@@ -297,7 +288,7 @@ fn folder_row(
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new("Holds:").size(13.0).color(colours.weak));
                     for (kind, label) in KINDS {
-                        if pill(ui, label, colours.button, colours.text, 28.0) {
+                        if pill(ui, label, colours.button, colours.text) {
                             action = Some(Action::SetFolderKind { index, kind });
                         }
                     }
@@ -378,7 +369,7 @@ pub fn show(
                     let clicked = ui
                         .scope(|ui| {
                             ui.spacing_mut().button_padding.x = 22.0;
-                            pill(ui, "Rescan all", colours.button, colours.text, 36.0)
+                            pill(ui, "Rescan all", colours.button, colours.text)
                         })
                         .inner;
                     if clicked {
@@ -509,7 +500,7 @@ pub fn show(
                                 } else {
                                     (egui::Color32::TRANSPARENT, colours.text)
                                 };
-                                if pill(ui, label, fill, text, 32.0) {
+                                if pill(ui, label, fill, text) {
                                     kind = k;
                                 }
                             }
@@ -525,7 +516,7 @@ pub fn show(
                         });
                     });
                 ui.add_space(8.0);
-                if pill(ui, "Choose folder…", colours.text, colours.card, 40.0)
+                if pill(ui, "Choose folder…", colours.text, colours.card)
                     && let Some(path) = rfd::FileDialog::new()
                         .set_title("Choose a folder for your library")
                         .pick_folder()
@@ -633,12 +624,11 @@ pub fn show(
         let draft_id = ui.scope_id().with("tmdb_key_draft");
         let mut draft: String = ui.data_mut(|d| d.get_temp(draft_id).unwrap_or_default());
         ui.horizontal(|ui| {
-            ui.add(
-                egui::TextEdit::singleline(&mut draft)
-                    .password(true)
-                    .hint_text("TMDb API key")
-                    .desired_width(280.0),
-            );
+            crate::squircle::SquircleTextField::singleline(&mut draft)
+                .password(true)
+                .hint_text("TMDb API key")
+                .desired_width(280.0)
+                .show(ui);
             if squircle::text_button(ui, "Save key").clicked() {
                 action = Some(Action::SetTmdbKey(draft.trim().to_owned()));
             }

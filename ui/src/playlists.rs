@@ -126,14 +126,10 @@ impl PlaylistsView {
                             ui.visuals().weak_text_color(),
                         );
                         ui.add_space(6.0);
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.new_name)
-                                .frame(egui::Frame::NONE)
-                                .hint_text("New playlist name")
-                                .margin(egui::Margin::symmetric(10, 6))
-                                .align(egui::Align2::LEFT_CENTER)
-                                .desired_width(200.0),
-                        )
+                        crate::squircle::SquircleTextField::singleline(&mut self.new_name)
+                            .hint_text("New playlist name")
+                            .desired_width(200.0)
+                            .show(ui)
                     })
                     .inner
                 });
@@ -251,12 +247,9 @@ impl PlaylistsView {
         let mut start_rename = false;
         match &mut self.renaming {
             Some(buffer) => ui.horizontal(|ui| {
-                let field = ui.add(
-                    egui::TextEdit::singleline(buffer)
-                        .margin(egui::Margin::symmetric(10, 6))
-                        .align(egui::Align2::LEFT_CENTER)
-                        .desired_width(260.0),
-                );
+                let field = crate::squircle::SquircleTextField::singleline(buffer)
+                    .desired_width(260.0)
+                    .show(ui);
                 if !field.has_focus() && !field.lost_focus() {
                     field.request_focus();
                 }

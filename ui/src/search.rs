@@ -69,14 +69,10 @@ impl SearchView {
                 ui.horizontal(|ui| {
                     search_icon(ui);
                     ui.add_space(6.0);
-                    let field = ui.add(
-                        egui::TextEdit::singleline(&mut self.query)
-                            .frame(egui::Frame::NONE)
-                            .hint_text("Search albums, songs, playlists and stations")
-                            .margin(egui::Margin::symmetric(10, 6))
-                            .align(egui::Align2::LEFT_CENTER)
-                            .desired_width(f32::INFINITY),
-                    );
+                    let field = crate::squircle::SquircleTextField::singleline(&mut self.query)
+                        .hint_text("Search albums, songs, playlists and stations")
+                        .desired_width(f32::INFINITY)
+                        .show(ui);
                     if std::mem::take(&mut self.focus_pending) {
                         field.request_focus();
                     }

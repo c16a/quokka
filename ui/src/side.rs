@@ -382,10 +382,9 @@ impl SidePanels {
                                 for (line, draft) in details.tags.iter().zip(drafts.iter_mut()) {
                                     ui.weak(&line.name);
                                     if line.editable {
-                                        ui.add(
-                                            egui::TextEdit::singleline(draft)
-                                                .desired_width(f32::INFINITY),
-                                        );
+                                        crate::squircle::SquircleTextField::singleline(draft)
+                                            .desired_width(f32::INFINITY)
+                                            .show(ui);
                                     } else {
                                         ui.add(egui::Label::new(line.value.as_str()).wrap());
                                     }
