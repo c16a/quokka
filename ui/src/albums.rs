@@ -780,6 +780,42 @@ pub(crate) fn draw_cover(
     id: egui::Id,
     hovered: bool,
 ) {
+    fade_cover(ui, cover, id, hovered, |ui, texture, uv, tint| {
+        ui.put(
+            rect,
+            egui::Image::new(texture)
+                .uv(uv)
+                .tint(tint)
+                .fit_to_exact_size(rect.size())
+                .corner_radius(radius),
+        );
+    });
+}
+
+/// Draw an album cover in grey, fading to its full colour on hover, shaped as a squircle with
+/// continuous corners of `radius`. The fade is the same as `draw_cover`'s.
+fn draw_squircle_cover(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    cover: &Cover,
+    radius: f32,
+    id: egui::Id,
+    hovered: bool,
+) {
+    fade_cover(ui, cover, id, hovered, |ui, texture, uv, tint| {
+        paint_squircle(ui.painter(), rect, texture.id(), uv, tint, radius);
+    });
+}
+
+/// The hover fade shared by the cover shapes. `draw` paints one layer: the grey cover at full
+/// strength, then the colour cover over it at the hover fraction.
+fn fade_cover(
+    ui: &mut egui::Ui,
+    cover: &Cover,
+    id: egui::Id,
+    hovered: bool,
+    mut draw: impl FnMut(&mut egui::Ui, &egui::TextureHandle, egui::Rect, egui::Color32),
+) {
     let hover = ui.ctx().animate_bool_with_time_and_easing(
         id,
         hovered,
@@ -787,27 +823,54 @@ pub(crate) fn draw_cover(
         egui::emath::easing::quadratic_in,
     );
     let uv = square_uv(cover.colour.size_vec2());
-    ui.put(
-        rect,
-        egui::Image::new(&cover.grayscaled)
-            .uv(uv)
-            .tint(egui::Color32::WHITE)
-            .fit_to_exact_size(rect.size())
-            .corner_radius(radius),
-    );
+    draw(ui, &cover.grayscaled, uv, egui::Color32::WHITE);
     if hover > 0.0 {
         // Laying the colour over the grey at this fraction mixes the two pixel by pixel, as
         // CSS does when it changes the grayscale amount.
         let alpha = (hover * 255.0).round() as u8;
-        ui.put(
-            rect,
-            egui::Image::new(&cover.colour)
-                .uv(uv)
-                .tint(egui::Color32::from_white_alpha(alpha))
-                .fit_to_exact_size(rect.size())
-                .corner_radius(radius),
+        draw(
+            ui,
+            &cover.colour,
+            uv,
+            egui::Color32::from_white_alpha(alpha),
         );
     }
+}
+
+/// Paint `texture` (or a flat `tint` when it is the default white texture) over `rect` in the shape of
+/// a squircle with corners of `radius`. `uv` is the part of the texture that covers the rectangle.
+fn paint_squircle(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    texture: egui::TextureId,
+    uv: egui::Rect,
+    tint: egui::Color32,
+    radius: f32,
+) {
+    let centre = rect.center();
+    let half = rect.size() / 2.0;
+    let outline = crate::squircle::outline(half.x, half.y, radius);
+    let mut mesh = egui::Mesh::with_texture(texture);
+    mesh.vertices.push(egui::epaint::Vertex {
+        pos: centre,
+        uv: uv.center(),
+        color: tint,
+    });
+    for offset in &outline {
+        let t = *offset / (half * 2.0) + egui::vec2(0.5, 0.5);
+        mesh.vertices.push(egui::epaint::Vertex {
+            pos: centre + *offset,
+            uv: uv.min + t * uv.size(),
+            color: tint,
+        });
+    }
+    // A fan of triangles from the centre, as the tilted covers use. egui's convex-polygon fill
+    // draws a wedge across the page for these outlines.
+    let n = outline.len() as u32;
+    for i in 0..n {
+        mesh.add_triangle(0, 1 + i, 1 + (i + 1) % n);
+    }
+    painter.add(egui::Shape::mesh(mesh));
 }
 
 /// The part of a texture that is its central square, in texture coordinates.
@@ -918,7 +981,7 @@ pub(crate) fn album_tile(
     let cover_rect = egui::Rect::from_min_size(rect.min, egui::vec2(TILE_COVER, TILE_COVER));
     let painter = ui.painter_at(rect);
     match cover {
-        Some(cover) => draw_cover(
+        Some(cover) => draw_squircle_cover(
             ui,
             cover_rect,
             cover,
@@ -927,7 +990,14 @@ pub(crate) fn album_tile(
             response.hovered(),
         ),
         None => {
-            painter.rect_filled(cover_rect, TILE_RADIUS, ui.visuals().faint_bg_color);
+            paint_squircle(
+                &painter,
+                cover_rect,
+                egui::TextureId::default(),
+                egui::Rect::ZERO,
+                ui.visuals().faint_bg_color,
+                TILE_RADIUS,
+            );
         }
     };
     if response.hovered() {
