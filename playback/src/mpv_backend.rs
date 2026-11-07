@@ -39,7 +39,8 @@ struct Snapshot {
 
 /// A request from the UI to the worker thread.
 enum Command {
-    Load(String),
+    /// Open a file at a position, in seconds.
+    Load(String, f64),
     Play,
     Pause,
     Stop,
@@ -192,27 +193,27 @@ fn init(video_output: &str) -> std::result::Result<Mpv, String> {
 }
 
 /// The worker loop: apply each command, then refresh the snapshot from mpv.
-fn run(mpv: Mpv, requests: Receiver<Command>, shared: Arc<Mutex<Snapshot>>) {
+fn run(mut mpv: Mpv, requests: Receiver<Command>, shared: Arc<Mutex<Snapshot>>) {
     // Closing the video window stops the file, rather than leaving it paused in a window.
     let _ = mpv.command("keybind", &["CLOSE_WIN", "stop"]);
     loop {
         match requests.recv_timeout(POLL) {
-            Ok(command) => apply(&mpv, command, &shared),
+            Ok(command) => apply(&mut mpv, command, &shared),
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => break,
         }
-        refresh(&mpv, &shared);
+        refresh(&mut mpv, &shared);
     }
 }
 
-fn apply(mpv: &Mpv, command: Command, shared: &Mutex<Snapshot>) {
+fn apply(mpv: &mut Mpv, command: Command, shared: &Mutex<Snapshot>) {
     let update = |f: &dyn Fn(&mut Snapshot)| {
         if let Ok(mut s) = shared.lock() {
             f(&mut s);
         }
     };
     match command {
-        Command::Load(path) => {
+        Command::Load(path, start) => {
             // Forget any events left from the previous file, then open the new one paused.
             drain(mpv, shared);
             update(&|s| {
@@ -224,8 +225,12 @@ fn apply(mpv: &Mpv, command: Command, shared: &Mutex<Snapshot>) {
                 s.duration = None;
                 s.failure = None;
             });
+            // The `start` property sets where the next file opens. It is set before the file loads,
+            // and works on every mpv version, unlike the options argument of `loadfile`.
+            let start_text = format!("{start}");
             let opened = mpv
                 .set_property("pause", true)
+                .and_then(|_| mpv.set_property("start", start_text.as_str()))
                 .and_then(|_| mpv.command("loadfile", &[path.as_str(), "replace"]));
             if let Err(e) = opened {
                 update(&|s| {
@@ -270,7 +275,7 @@ fn apply(mpv: &Mpv, command: Command, shared: &Mutex<Snapshot>) {
 }
 
 /// Read mpv's events and properties into the snapshot.
-fn refresh(mpv: &Mpv, shared: &Mutex<Snapshot>) {
+fn refresh(mpv: &mut Mpv, shared: &Mutex<Snapshot>) {
     drain(mpv, shared);
     let loaded = shared.lock().map(|s| s.loaded).unwrap_or(false);
     if !loaded {
@@ -324,7 +329,7 @@ fn refresh(mpv: &Mpv, shared: &Mutex<Snapshot>) {
 }
 
 /// Take the events mpv has queued. An error event means the file could not play.
-fn drain(mpv: &Mpv, shared: &Mutex<Snapshot>) {
+fn drain(mpv: &mut Mpv, shared: &Mutex<Snapshot>) {
     while let Some(event) = mpv.wait_event(0.0) {
         if let Err(e) = event
             && let Ok(mut s) = shared.lock()
@@ -334,8 +339,9 @@ fn drain(mpv: &Mpv, shared: &Mutex<Snapshot>) {
     }
 }
 
-impl Player for MpvPlayer {
-    fn load(&mut self, path: &Path) -> Result<()> {
+impl MpvPlayer {
+    /// Load `path` to start at `start` seconds, paused until play is pressed.
+    pub fn load_at(&mut self, path: &Path, start: f64) -> Result<()> {
         let name = path
             .to_str()
             .ok_or_else(|| PlaybackError::Open(path.display().to_string()))?;
@@ -347,7 +353,13 @@ impl Player for MpvPlayer {
                 ..Snapshot::default()
             };
         }
-        self.send(Command::Load(name.to_owned()))
+        self.send(Command::Load(name.to_owned(), start))
+    }
+}
+
+impl Player for MpvPlayer {
+    fn load(&mut self, path: &Path) -> Result<()> {
+        self.load_at(path, 0.0)
     }
 
     fn play(&mut self) -> Result<()> {

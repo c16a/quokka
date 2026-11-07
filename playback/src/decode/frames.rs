@@ -153,11 +153,14 @@ impl Yuv {
     /// it is not.
     pub fn from_picture(picture: Picture, colour: Colour) -> Option<Yuv> {
         let layout = Layout::of(&picture.pixel_format)?;
+        // Only macOS decoders hand over a platform buffer; elsewhere every picture is CPU bytes.
+        #[cfg(target_os = "macos")]
         let samples = match picture.surface {
             Surface::Cpu(bytes) => bytes,
-            #[cfg(target_os = "macos")]
             Surface::Platform(buffer) => buffer.to_bytes(),
         };
+        #[cfg(not(target_os = "macos"))]
+        let Surface::Cpu(samples) = picture.surface;
         if samples.len() < layout.total_bytes(picture.width, picture.height) {
             return None;
         }

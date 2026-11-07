@@ -625,9 +625,40 @@ impl App {
                     self.video_window_open = false;
                     closed = true;
                 }
-                egui::Panel::bottom("video_controls").show(ui, |ui| {
-                    self.playback.show_video_controls(ui);
-                });
+                // The video window is always dark, as the picture is, so its controls are too.
+                ui.style_mut().visuals = egui::Visuals::dark();
+                let fullscreen = ui
+                    .ctx()
+                    .input(|input| input.viewport().fullscreen)
+                    .unwrap_or(false);
+                let bar = || {
+                    egui::Frame::new()
+                        .fill(egui::Color32::from_black_alpha(184))
+                        .inner_margin(egui::Margin::symmetric(20, 12))
+                };
+                if let Some(title) = self.playback.video_title() {
+                    egui::Panel::top("video_title")
+                        .show_separator_line(false)
+                        .frame(bar())
+                        .show(ui, |ui| {
+                            ui.label(egui::RichText::new(title).size(16.0).strong());
+                        });
+                }
+                // The keys (F, Escape) and the full-screen button both ask for a change.
+                let mut toggle_fullscreen =
+                    playback::handle_video_keys(ui.ctx(), &mut self.playback, fullscreen);
+                egui::Panel::bottom("video_controls")
+                    .show_separator_line(false)
+                    .frame(bar())
+                    .show(ui, |ui| {
+                        toggle_fullscreen |= self.playback.show_video_controls(ui, fullscreen);
+                    });
+                if toggle_fullscreen {
+                    ui.ctx().send_viewport_cmd_to(
+                        egui::ViewportId::from_hash_of("quokka-video"),
+                        egui::ViewportCommand::Fullscreen(!fullscreen),
+                    );
+                }
                 egui::CentralPanel::default()
                     .frame(egui::Frame::new().fill(egui::Color32::BLACK))
                     .show(ui, |ui| self.playback.show_video(ui));

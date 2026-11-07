@@ -9,18 +9,22 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::Duration;
 
+#[cfg(target_os = "macos")]
 use quokka_core::video::AudioCodec;
 use rodio::source::SeekError;
 use rodio::{ChannelCount, SampleRate, Source};
 use symphonia::core::codecs::CodecParameters;
+#[cfg(target_os = "macos")]
 use symphonia::core::codecs::audio::well_known::{
     CODEC_ID_AAC, CODEC_ID_ALAC, CODEC_ID_FLAC, CODEC_ID_MP3,
 };
 use symphonia::core::codecs::audio::{AudioCodecParameters, AudioDecoder, AudioDecoderOptions};
 
+use crate::decode::audio::AudioDecoder as SystemDecoder;
+#[cfg(target_os = "macos")]
+use crate::decode::audio::AudioStream;
 #[cfg(target_os = "macos")]
 use crate::decode::audio::audiotoolbox::AudioToolbox;
-use crate::decode::audio::{AudioDecoder as SystemDecoder, AudioStream};
 use symphonia::core::codecs::registry::CodecRegistry;
 use symphonia::core::errors::Error as DecodeError;
 use symphonia::core::formats::probe::Hint;

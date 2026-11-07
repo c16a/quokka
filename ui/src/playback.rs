@@ -968,6 +968,7 @@ impl Playback {
 
     /// Stop the movie and release its decoders and sound output. Its position is kept, so playing
     /// it again resumes from there.
+    #[cfg(target_os = "macos")]
     pub fn close_video(&mut self) {
         if self.video_loaded
             && let Some(item) = self.current()
@@ -1080,6 +1081,7 @@ impl Playback {
     /// pause, and next.
     /// Whether a video is loaded, so the main pane should show its picture. Only the decoders draw
     /// into the pane; libmpv plays in its own window.
+    #[cfg(target_os = "macos")]
     pub fn video_showing(&self) -> bool {
         cfg!(target_os = "macos") && self.video_loaded && self.video.is_some()
     }
@@ -1096,38 +1098,109 @@ impl Playback {
         }
     }
 
-    /// Controls for the video window, in its bottom strip: play or pause, a seek slider with the
-    /// elapsed and total times, and the volume. A seek is made when the slider is let go.
+    /// Controls for the video window, in its bottom strip. A seek bar runs across the width. Below it:
+    /// back 10 seconds, play or pause, forward 10 seconds, and the elapsed and total times. On the
+    /// right: mute, volume and full screen. A seek is made when the bar is let go. Returns true when
+    /// the full-screen button was clicked, so the window can change its own state.
     #[cfg(target_os = "macos")]
-    pub fn show_video_controls(&mut self, ui: &mut egui::Ui) {
+    pub fn show_video_controls(&mut self, ui: &mut egui::Ui, fullscreen: bool) -> bool {
         let total = self.duration().map_or(0.0, |d| d.as_secs_f64());
         let position = self.position().map_or(0.0, |p| p.as_secs_f64());
         let playing = self.is_playing();
+        let mut full_screen_clicked = false;
+
+        let mut secs = position.min(total);
+        let seek = slider::show(
+            ui,
+            &mut secs,
+            0.0..=total.max(1.0),
+            0.0,
+            ui.available_width(),
+        );
+        if total > 0.0 && (seek.drag_stopped() || seek.clicked()) {
+            self.seek(secs);
+        }
+
         ui.horizontal(|ui| {
-            if ui.button(if playing { "Pause" } else { "Play" }).clicked() {
+            if transport_button(ui, Icon::Previous, 36.0)
+                .on_hover_text("Back 10 seconds (Left arrow)")
+                .clicked()
+            {
+                self.seek_relative(-10.0);
+            }
+
+            // Play or pause in an accent circle, as the design has it.
+            let (rect, response) =
+                ui.allocate_exact_size(egui::vec2(44.0, 44.0), egui::Sense::click());
+            let accent = ui.visuals().hyperlink_color;
+            let fill = if response.hovered() {
+                accent.gamma_multiply(0.85)
+            } else {
+                accent
+            };
+            let painter = ui.painter();
+            painter.circle_filled(rect.center(), 22.0, fill);
+            let glyph = if playing { icons::PAUSE } else { icons::PLAY };
+            icons::paint(painter, rect.center(), glyph, 20.0, egui::Color32::BLACK);
+            if response
+                .on_hover_text(if playing {
+                    "Pause (Space)"
+                } else {
+                    "Play (Space)"
+                })
+                .clicked()
+            {
                 self.toggle();
             }
-            let mut secs = position.min(total);
-            let slider = ui.add_enabled(
-                total > 0.0,
-                egui::Slider::new(&mut secs, 0.0..=total.max(1.0)).show_value(false),
-            );
-            if slider.drag_stopped() || slider.clicked() {
-                self.seek(secs);
-            }
-            ui.label(format!(
-                "{} / {}",
-                crate::format::clock(position),
-                crate::format::clock(total)
-            ));
-            let mut volume = f64::from(self.volume);
-            if ui
-                .add(egui::Slider::new(&mut volume, 0.0..=1.0).show_value(false))
-                .changed()
+
+            if transport_button(ui, Icon::Next, 36.0)
+                .on_hover_text("Forward 10 seconds (Right arrow)")
+                .clicked()
             {
-                self.set_volume(volume as f32);
+                self.seek_relative(10.0);
             }
+
+            let text = ui.visuals().text_color();
+            ui.label(
+                egui::RichText::new(format!(
+                    "{} / {}",
+                    crate::format::clock(position),
+                    crate::format::clock(total)
+                ))
+                .color(text),
+            );
+
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let label = if fullscreen {
+                    "Exit full screen (Escape)"
+                } else {
+                    "Full screen (F)"
+                };
+                if fullscreen_button(ui, fullscreen)
+                    .on_hover_text(label)
+                    .clicked()
+                {
+                    full_screen_clicked = true;
+                }
+                let mut level = f64::from(self.volume);
+                if slider::show(ui, &mut level, 0.0..=1.0, 0.0, 100.0).changed() {
+                    self.set_volume(level as f32);
+                }
+                if speaker_button(ui, self.muted)
+                    .on_hover_text(if self.muted { "Unmute" } else { "Mute" })
+                    .clicked()
+                {
+                    self.toggle_mute();
+                }
+            });
         });
+        full_screen_clicked
+    }
+
+    /// The title of the movie in the video window, shown above the picture when it has one.
+    #[cfg(target_os = "macos")]
+    pub fn video_title(&self) -> Option<String> {
+        self.current().and_then(|item| item.title.clone())
     }
 
     /// Draw the video's picture, fitted to the pane. The frame's planes are converted to RGB on the
@@ -1191,10 +1264,6 @@ impl Playback {
 
     #[cfg(not(target_os = "macos"))]
     pub fn toggle_subtitles(&mut self) {}
-
-    /// Without the decoders there is no picture in the pane.
-    #[cfg(not(target_os = "macos"))]
-    pub fn show_video(&mut self, _ui: &mut egui::Ui) {}
 
     pub fn show(&mut self, ui: &mut egui::Ui, compact: bool) {
         if self.radio.is_some() {
@@ -1609,6 +1678,28 @@ pub fn handle_keys(ctx: &egui::Context, playback: &mut Playback) {
     });
 }
 
+/// Keyboard shortcuts for the video window. Its keys reach only that window, so it runs this as
+/// well as `handle_keys`, which covers the main window. Returns true when full screen should change:
+/// F toggles it, and Escape leaves it.
+#[cfg(target_os = "macos")]
+pub fn handle_video_keys(ctx: &egui::Context, playback: &mut Playback, fullscreen: bool) -> bool {
+    if ctx.egui_wants_keyboard_input() {
+        return false;
+    }
+    let none = egui::Modifiers::NONE;
+    let mut toggle_fullscreen = false;
+    ctx.input_mut(|input| {
+        if input.consume_key(none, egui::Key::F) {
+            toggle_fullscreen = true;
+        }
+        if fullscreen && input.consume_key(none, egui::Key::Escape) {
+            toggle_fullscreen = true;
+        }
+    });
+    handle_keys(ctx, playback);
+    toggle_fullscreen
+}
+
 /// Shuffle `items` in place (Fisher-Yates). The generator is seeded from the clock; nothing
 /// here needs real randomness, so no extra crate is used.
 pub fn shuffle<T>(items: &mut [T]) {
@@ -1924,6 +2015,30 @@ fn output_button(ui: &mut egui::Ui, active: bool) -> egui::Response {
     };
     let painter = ui.painter();
     icons::paint(painter, rect.center(), icons::AIRPLAY, 16.0, colour);
+    response
+}
+
+/// Full-screen button: four corner brackets, drawn rather than read from the icon font. The brackets
+/// point inwards to enter full screen and outwards to leave it.
+fn fullscreen_button(ui: &mut egui::Ui, active: bool) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(22.0, 22.0), egui::Sense::click());
+    let visuals = ui.style().interact(&response);
+    hover_fill(ui, rect, 11.0, &response);
+    let stroke = egui::Stroke::new(1.5, visuals.fg_stroke.color);
+    let painter = ui.painter();
+    let frame = rect.shrink(5.0);
+    let arm = 4.0;
+    let sign = if active { -1.0 } else { 1.0 };
+    for (corner, dx, dy) in [
+        (frame.left_top(), 1.0, 1.0),
+        (frame.right_top(), -1.0, 1.0),
+        (frame.left_bottom(), 1.0, -1.0),
+        (frame.right_bottom(), -1.0, -1.0),
+    ] {
+        let across = corner + egui::vec2(dx * arm * sign, 0.0);
+        let down = corner + egui::vec2(0.0, dy * arm * sign);
+        painter.line(vec![across, corner, down], stroke);
+    }
     response
 }
 
