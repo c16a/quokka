@@ -41,6 +41,9 @@ const LOSSLESS: [&str; 7] = ["FLAC", "ALAC", "WAV", "AIFF", "APE", "WAVPACK", "P
 pub(crate) const TILE_TEXT: f32 = 44.0;
 /// Corner radius of a grid cover.
 const TILE_RADIUS: f32 = 14.0;
+/// The corner radius of album covers, which are squircles. A squircle only reads as one with
+/// corners about a quarter of the cover's width.
+const TILE_SQUIRCLE_RADIUS: f32 = 40.0;
 pub(crate) const TILE_GAP: f32 = 20.0;
 /// Most covers kept as textures. The least recently used are dropped beyond this.
 const COVER_CAP: usize = 300;
@@ -985,7 +988,7 @@ pub(crate) fn album_tile(
             ui,
             cover_rect,
             cover,
-            TILE_RADIUS,
+            TILE_SQUIRCLE_RADIUS,
             response.id.with("cover_hover"),
             response.hovered(),
         ),
@@ -996,7 +999,7 @@ pub(crate) fn album_tile(
                 egui::TextureId::default(),
                 egui::Rect::ZERO,
                 ui.visuals().faint_bg_color,
-                TILE_RADIUS,
+                TILE_SQUIRCLE_RADIUS,
             );
         }
     };
