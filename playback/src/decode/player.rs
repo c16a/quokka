@@ -59,6 +59,12 @@ impl FramePlayer {
     /// Start reading and decoding the first video track of `path`. Returns once a decoder has
     /// accepted the stream, or with the reason it did not.
     pub fn open(path: &Path) -> Result<Self, FrameError> {
+        Self::open_at(path, 0.0)
+    }
+
+    /// As `open`, but starting at the last keyframe at or before `start`, in seconds. Frames
+    /// before `start` still come out, so the last one at or before it is the one to show.
+    pub fn open_at(path: &Path, start: f64) -> Result<Self, FrameError> {
         let track = player_core::video::read_samples(path)
             .map_err(|error| FrameError::Unreadable(error.to_string()))?
             .ok_or_else(|| FrameError::Unreadable("no video track in this file".into()))?;
@@ -73,6 +79,12 @@ impl FramePlayer {
             chroma: format.chroma.unwrap_or(Chroma::Yuv420),
         };
         let frame_count = track.samples.len();
+        let target = start * track.timescale as f64;
+        let first = track
+            .samples
+            .iter()
+            .rposition(|sample| sample.sync && (sample.presentation_time as f64) <= target)
+            .unwrap_or(0);
         let duration = track.samples.last().and_then(|last| {
             let times: Vec<i64> = track
                 .samples
@@ -93,7 +105,7 @@ impl FramePlayer {
         });
         let (sender, messages) = mpsc::sync_channel(QUEUE_DEPTH);
         let path = path.to_path_buf();
-        thread::spawn(move || run(&path, track, stream, sender));
+        thread::spawn(move || run(&path, track, stream, sender, first));
 
         match messages.recv() {
             Ok(Message::Ready) => Ok(FramePlayer {
@@ -143,7 +155,13 @@ impl FramePlayer {
 
 /// The worker: decode every sample, then send the frames in order. The decoder is opened here,
 /// since decoders are not sent between threads.
-fn run(path: &Path, track: video::SampleTrack, stream: StreamConfig, sender: SyncSender<Message>) {
+fn run(
+    path: &Path,
+    track: video::SampleTrack,
+    stream: StreamConfig,
+    sender: SyncSender<Message>,
+    first: usize,
+) {
     let mut decoder = match super::open(&stream) {
         Ok(decoder) => decoder,
         Err(error) => {
@@ -160,7 +178,7 @@ fn run(path: &Path, track: video::SampleTrack, stream: StreamConfig, sender: Syn
     };
     let timescale = track.timescale as f64;
     let mut pending: Vec<Picture> = Vec::new();
-    for sample in &track.samples {
+    for sample in &track.samples[first..] {
         let mut data = vec![0u8; sample.size as usize];
         if file.seek(SeekFrom::Start(sample.offset)).is_err() || file.read_exact(&mut data).is_err()
         {

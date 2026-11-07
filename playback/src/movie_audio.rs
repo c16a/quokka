@@ -46,11 +46,28 @@ impl MovieAudio {
     /// Start the first audio track of `path`. `Ok(None)` when the file has no audio this reads.
     /// The audio starts paused.
     pub fn open(path: &Path) -> Result<Option<Self>, PlaybackError> {
+        Self::open_at(path, 0.0)
+    }
+
+    /// As `open`, but starting at `start` seconds. The decoder starts at the frame before `start`,
+    /// and the samples up to `start` are dropped, so the sound begins exactly there.
+    pub fn open_at(path: &Path, start: f64) -> Result<Option<Self>, PlaybackError> {
         let Some(track) =
             read_audio_samples(path).map_err(|error| PlaybackError::Open(error.to_string()))?
         else {
             return Ok(None);
         };
+        let target = start * track.timescale as f64;
+        let first = track
+            .samples
+            .iter()
+            .rposition(|sample| (sample.presentation_time as f64) <= target)
+            .unwrap_or(0);
+        let frame_start = track.samples.get(first).map_or(0.0, |sample| {
+            sample.presentation_time as f64 / track.timescale as f64
+        });
+        let skip_frames = ((start - frame_start).max(0.0) * f64::from(track.sample_rate)) as usize;
+        let skip = skip_frames * track.channels as usize;
         let stream = AudioStream {
             codec: track.codec,
             sample_rate: track.sample_rate,
@@ -60,7 +77,7 @@ impl MovieAudio {
         let (channels, sample_rate) = (stream.channels, stream.sample_rate);
         let (sender, messages) = mpsc::sync_channel(CHUNKS_IN_FLIGHT);
         let path = path.to_path_buf();
-        thread::spawn(move || decode(&path, track, stream, sender));
+        thread::spawn(move || decode(&path, track, stream, sender, first, skip));
 
         match messages.recv() {
             Ok(Message::Ready) => {}
@@ -139,6 +156,8 @@ fn decode(
     track: player_core::video::AudioTrack,
     stream: AudioStream,
     sender: SyncSender<Message>,
+    first: usize,
+    mut skip: usize,
 ) {
     use std::fs::File;
     use std::io::{Read, Seek, SeekFrom};
@@ -157,7 +176,7 @@ fn decode(
         let _ = sender.send(Message::Failed("could not reopen the file".into()));
         return;
     };
-    for sample in &track.samples {
+    for sample in &track.samples[first..] {
         let mut data = vec![0u8; sample.size as usize];
         if file.seek(SeekFrom::Start(sample.offset)).is_err() || file.read_exact(&mut data).is_err()
         {
@@ -165,7 +184,11 @@ fn decode(
             return;
         }
         match decoder.decode(&data) {
-            Ok(chunk) => {
+            Ok(mut chunk) => {
+                // Samples before the requested start are dropped, so the sound starts there.
+                let dropped = skip.min(chunk.len());
+                chunk.drain(..dropped);
+                skip -= dropped;
                 if !chunk.is_empty() && sender.send(Message::Chunk(chunk)).is_err() {
                     return;
                 }

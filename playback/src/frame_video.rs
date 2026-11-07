@@ -15,6 +15,10 @@ use crate::{PlaybackError, Player, PlayerState, Result};
 pub struct FrameVideo {
     frames: Option<FramePlayer>,
     audio: Option<MovieAudio>,
+    /// The file being played, for reopening it at a new position.
+    path: Option<std::path::PathBuf>,
+    /// The position the sound's clock started from: zero, or the last seek target.
+    audio_offset: f64,
     /// A frame whose time has not come up yet.
     next: Option<VideoFrame>,
     /// The frame on screen, and how many frames have been shown, so the window knows when to redraw.
@@ -98,7 +102,7 @@ impl FrameVideo {
     /// Where playback is, in seconds.
     fn clock(&self) -> f64 {
         match &self.audio {
-            Some(audio) if !self.sound_done => audio.clock(),
+            Some(audio) if !self.sound_done => self.audio_offset + audio.clock(),
             _ => self.wall_position(),
         }
     }
@@ -146,6 +150,7 @@ impl Player for FrameVideo {
         self.duration = frames.duration();
         self.frames = Some(frames);
         self.audio = MovieAudio::open(path)?;
+        self.path = Some(path.to_path_buf());
         self.loaded = true;
         Ok(())
     }
@@ -179,12 +184,24 @@ impl Player for FrameVideo {
         Ok(())
     }
 
-    fn seek(&mut self, _position: Duration) -> Result<()> {
-        // Seeking needs the decoders restarted from a keyframe. That comes after the playback
-        // controls are settled.
-        Err(PlaybackError::Backend(
-            "seeking in video is not available yet".into(),
-        ))
+    fn seek(&mut self, position: Duration) -> Result<()> {
+        let Some(path) = self.path.clone() else {
+            return Ok(());
+        };
+        let target = position.as_secs_f64();
+        let frames = FramePlayer::open_at(&path, target)
+            .map_err(|error| PlaybackError::Open(error.to_string()))?;
+        let audio = MovieAudio::open_at(&path, target)?;
+        let was_playing = self.playing;
+        self.frames = Some(frames);
+        self.audio = audio;
+        self.audio_offset = target;
+        self.next = None;
+        self.sound_done = false;
+        self.ended = false;
+        self.wall_base = target;
+        self.wall_started = None;
+        if was_playing { self.play() } else { Ok(()) }
     }
 
     fn position(&self) -> Option<Duration> {
