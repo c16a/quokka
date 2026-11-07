@@ -394,7 +394,12 @@ impl MoviesView {
             if info.is_some() {
                 if let Some(key) = tmdb_key
                     && ui
-                        .add(outline_button("Wrong movie? Choose another", &p))
+                        .scope(|ui| {
+                            // Wider than the default, to match the pill buttons' side padding.
+                            ui.spacing_mut().button_padding.x = 22.0;
+                            ui.add(outline_button("Wrong movie? Choose another", &p))
+                        })
+                        .inner
                         .clicked()
                 {
                     let job = find_job(movie.id, movie.path.clone(), key.to_owned(), true);

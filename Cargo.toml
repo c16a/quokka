@@ -46,6 +46,10 @@ quokka-ui = { path = "ui" }
 # Dependencies are optimised in debug builds too, so decoding and the UI stay fast while developing.
 [profile.dev.package."*"]
 opt-level = 2
+# The decoder's hot loops run far slower with its debug assertions and overflow checks on: a 960×540
+# film plays at about 10 frames a second with them, and about 280 without. Release builds have both off.
+debug-assertions = false
+overflow-checks = false
 
 # The sample tables are read per frame, which is slow without optimisation. This crate is
 # optimised in debug builds, so opening a movie does not take seconds.
