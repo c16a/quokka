@@ -1,6 +1,8 @@
 //! Turning decoded pictures into RGBA pixels for display.
 
 use std::borrow::Cow;
+use std::num::NonZeroUsize;
+use std::thread;
 
 use player_core::video::{Colour, Matrix};
 
@@ -148,8 +150,15 @@ fn convert(
         }
     };
 
-    let mut pixels = vec![0u8; w * h * 4];
-    for y in 0..h {
+    if w == 0 || h == 0 {
+        return Rgba {
+            width,
+            height,
+            pixels: Vec::new(),
+        };
+    }
+    // Converts one row into `out`, four bytes a pixel. Rows do not depend on each other.
+    let convert_row = |y: usize, out: &mut [u8]| {
         for x in 0..w {
             let luma = read((y * w + x) * bytes) as f32;
             let chroma = (y >> layout.shift_y) * cw + (x >> layout.shift_x);
@@ -168,13 +177,29 @@ fn convert(
             let r = 255.0 * (y_part + r_from_cr * cr);
             let g = 255.0 * (y_part - g_from_cb * cb - g_from_cr * cr);
             let b = 255.0 * (y_part + b_from_cb * cb);
-            let at = (y * w + x) * 4;
-            pixels[at] = clamp(r);
-            pixels[at + 1] = clamp(g);
-            pixels[at + 2] = clamp(b);
-            pixels[at + 3] = 255;
+            let at = x * 4;
+            out[at] = clamp(r);
+            out[at + 1] = clamp(g);
+            out[at + 2] = clamp(b);
+            out[at + 3] = 255;
         }
-    }
+    };
+    // Bands of rows convert on separate threads, one band per available core.
+    let mut pixels = vec![0u8; w * h * 4];
+    let threads = thread::available_parallelism()
+        .map_or(1, NonZeroUsize::get)
+        .min(h);
+    let rows_per_band = h.div_ceil(threads);
+    thread::scope(|scope| {
+        for (band, rows) in pixels.chunks_mut(rows_per_band * w * 4).enumerate() {
+            let convert_row = &convert_row;
+            scope.spawn(move || {
+                for (i, row) in rows.chunks_mut(w * 4).enumerate() {
+                    convert_row(band * rows_per_band + i, row);
+                }
+            });
+        }
+    });
     Rgba {
         width,
         height,

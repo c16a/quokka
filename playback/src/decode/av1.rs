@@ -58,7 +58,6 @@ unsafe extern "C" {
     fn dav1d_picture_unref(picture: *mut c_void);
     fn dav1d_data_create(data: *mut c_void, size: usize) -> *mut u8;
     fn dav1d_data_unref(data: *mut c_void);
-    fn dav1d_flush(context: Context);
     fn dav1d_close(context_out: *mut Context);
 }
 
@@ -86,8 +85,11 @@ impl Av1 {
         unsafe {
             dav1d_default_settings(settings.as_mut_ptr().cast());
             let fields = settings.as_mut_ptr().cast::<c_int>();
-            *fields = 1;
-            *fields.add(1) = 1;
+            // Threads for frames and tiles, as many as the machine has up to eight. A frame delay
+            // of zero lets rav1d choose how many frames to decode at once.
+            let threads = std::thread::available_parallelism().map_or(1, |n| n.get().min(8));
+            *fields = threads as c_int;
+            *fields.add(1) = 0;
             let status = dav1d_open(&mut context, settings.as_ptr().cast());
             if status != 0 || context.is_null() {
                 return Err(DecodeError::Unsupported {
@@ -239,8 +241,8 @@ impl VideoDecoder for Av1 {
     }
 
     fn finish(&mut self) -> Result<(), DecodeError> {
-        // SAFETY: the context is valid until `Drop`.
-        unsafe { dav1d_flush(self.context) };
+        // Taking pictures until none is left drains the frames still in flight. A flush would
+        // discard them.
         self.collect()
     }
 

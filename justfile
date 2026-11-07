@@ -78,3 +78,8 @@ cross-all:
 # `just decode-check ~/Movies/clip.mp4 core/tests/fixtures/video/h264_8_420.mp4`.
 decode-check *files:
     cargo run -q -p player-playback --example decode_check -- {{files}}
+
+# Measure how fast a file's frames decode, on an optimised build: `just frame-bench clip.mkv 10`
+# decodes for ten seconds and reports the frame rate.
+frame-bench file seconds:
+    cargo run -q --release -p player-playback --example frame_bench -- {{file}} {{seconds}}
