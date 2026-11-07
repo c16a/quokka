@@ -13,7 +13,10 @@ use eframe::egui;
 use quokka_core::tmdb::{MovieInfo, Tmdb};
 use quokka_core::{Library, MatchOutcome, MediaItem, Progress, finished};
 
-use crate::albums::{PlayRequest, TILE_COVER, TILE_GAP, TILE_TEXT, hover_scroll, tile_line};
+use crate::albums::{
+    PlayRequest, TILE_COVER, TILE_GAP, TILE_TEXT, hover_scroll, paint_squircle, squircle_radius,
+    tile_line, tilted_cover,
+};
 use crate::format;
 use crate::icons;
 use crate::squircle::{self, Padding, SquircleButton};
@@ -23,7 +26,8 @@ const TILE_POSTER_HEIGHT: f32 = 225.0;
 const TILE_WIDTH: f32 = TILE_POSTER_HEIGHT * 2.0 / 3.0;
 /// Height of the poster on a movie's page.
 const PAGE_POSTER_HEIGHT: f32 = 360.0;
-const POSTER_RADIUS: f32 = 8.0;
+/// The whole texture, for a poster that fills its box.
+const FULL_UV: egui::Rect = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
 const GRID_GAP: f32 = 18.0;
 /// The size of a cover on a choice card.
 const CHOICE_WIDTH: f32 = 92.0;
@@ -297,12 +301,11 @@ impl MoviesView {
         ui.add_space(28.0);
 
         ui.horizontal_top(|ui| {
-            let _ = self.cover(
+            self.page_poster(
                 ui,
                 poster_path.as_deref(),
                 PAGE_POSTER_HEIGHT * 2.0 / 3.0,
                 PAGE_POSTER_HEIGHT,
-                egui::Sense::hover(),
             );
             ui.add_space(32.0);
             ui.vertical(|ui| {
@@ -714,16 +717,46 @@ impl MoviesView {
         sense: egui::Sense,
     ) -> egui::Response {
         let (rect, response) = ui.allocate_exact_size(egui::vec2(width, height), sense);
-        ui.painter()
-            .rect_filled(rect, POSTER_RADIUS, ui.visuals().faint_bg_color);
-        if let Some(path) = path
-            && let Some(texture) = self.texture_for(ui.ctx(), path)
-        {
-            egui::Image::new(&texture)
-                .corner_radius(POSTER_RADIUS)
-                .paint_at(ui, rect);
+        let radius = squircle_radius(width.min(height));
+        match path.and_then(|path| self.texture_for(ui.ctx(), path)) {
+            Some(texture) => paint_squircle(
+                ui.painter(),
+                rect,
+                texture.id(),
+                FULL_UV,
+                egui::Color32::WHITE,
+                radius,
+            ),
+            None => paint_squircle(
+                ui.painter(),
+                rect,
+                egui::TextureId::default(),
+                egui::Rect::ZERO,
+                ui.visuals().faint_bg_color,
+                radius,
+            ),
         }
         response
+    }
+
+    /// The poster on a movie's page. It tilts toward the pointer and shines, as an album's cover does.
+    fn page_poster(&mut self, ui: &mut egui::Ui, path: Option<&str>, width: f32, height: f32) {
+        let (rect, response) =
+            ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
+        let radius = squircle_radius(width.min(height));
+        match path.and_then(|path| self.texture_for(ui.ctx(), path)) {
+            Some(texture) => {
+                tilted_cover(ui, ui.painter(), rect, &texture, FULL_UV, radius, &response)
+            }
+            None => paint_squircle(
+                ui.painter(),
+                rect,
+                egui::TextureId::default(),
+                egui::Rect::ZERO,
+                ui.visuals().faint_bg_color,
+                radius,
+            ),
+        }
     }
 
     /// The texture of a TMDb image, once it has downloaded. The download starts on the first call.

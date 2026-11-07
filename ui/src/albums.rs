@@ -39,8 +39,6 @@ const NARROW_DETAIL: f32 = 560.0;
 const LOSSLESS: [&str; 7] = ["FLAC", "ALAC", "WAV", "AIFF", "APE", "WAVPACK", "PCM"];
 /// Space under a grid tile's cover for its title and composer, and the gap between tiles.
 pub(crate) const TILE_TEXT: f32 = 44.0;
-/// Corner radius of a grid cover.
-const TILE_RADIUS: f32 = 14.0;
 /// The corner radius of album covers, which are squircles. A squircle only reads as one with
 /// corners about a quarter of the cover's width.
 const TILE_SQUIRCLE_RADIUS: f32 = 40.0;
@@ -663,33 +661,15 @@ fn project(p: egui::Vec2, tilt: egui::Vec2, dist: f32) -> egui::Vec2 {
     egui::vec2(x2 * scale, y1 * scale)
 }
 
-/// The outline of a rounded rectangle with half-size `half` and corner `radius`, as `per_corner`
-/// points on each corner, going round once.
-fn rounded_outline(half: egui::Vec2, radius: f32, per_corner: usize) -> Vec<egui::Vec2> {
-    let r = radius.min(half.x).min(half.y);
-    let corners: [(f32, f32, f32); 4] = [
-        (half.x - r, half.y - r, 0.0),
-        (-half.x + r, half.y - r, 90.0),
-        (-half.x + r, -half.y + r, 180.0),
-        (half.x - r, -half.y + r, 270.0),
-    ];
-    let mut points = Vec::with_capacity(4 * per_corner);
-    for (cx, cy, start) in corners {
-        for k in 0..per_corner {
-            let a = (start + 90.0 * k as f32 / per_corner as f32).to_radians();
-            points.push(egui::vec2(cx + r * a.cos(), cy + r * a.sin()));
-        }
-    }
-    points
-}
-
 /// Paint a cover tilted toward the pointer, with a highlight that follows the pointer. The tilt and the
 /// highlight ease in on hover and back out when the pointer leaves.
-fn tilted_cover(
+pub(crate) fn tilted_cover(
     ui: &egui::Ui,
     painter: &egui::Painter,
     rect: egui::Rect,
     texture: &egui::TextureHandle,
+    uv: egui::Rect,
+    radius: f32,
     response: &egui::Response,
 ) {
     let ctx = ui.ctx();
@@ -725,8 +705,8 @@ fn tilted_cover(
     let half = rect.size() / 2.0;
     let dist = rect.width() * 4.0;
     let centre = rect.center();
-    let uv_rect = square_uv(texture.size_vec2());
-    let outline = rounded_outline(half, TILE_RADIUS, 16);
+    let uv_rect = uv;
+    let outline = crate::squircle::outline(half.x, half.y, radius);
     let screen: Vec<egui::Pos2> = outline
         .iter()
         .map(|&p| centre + project(p, tilt, dist))
@@ -810,6 +790,11 @@ fn draw_squircle_cover(
     });
 }
 
+/// The corner radius of a squircle cover: a quarter of its shorter side.
+pub(crate) fn squircle_radius(size: f32) -> f32 {
+    size * 0.25
+}
+
 /// The hover fade shared by the cover shapes. `draw` paints one layer: the grey cover at full
 /// strength, then the colour cover over it at the hover fraction.
 fn fade_cover(
@@ -842,7 +827,7 @@ fn fade_cover(
 
 /// Paint `texture` (or a flat `tint` when it is the default white texture) over `rect` in the shape of
 /// a squircle with corners of `radius`. `uv` is the part of the texture that covers the rectangle.
-fn paint_squircle(
+pub(crate) fn paint_squircle(
     painter: &egui::Painter,
     rect: egui::Rect,
     texture: egui::TextureId,
@@ -913,13 +898,26 @@ fn cover_image(ui: &mut egui::Ui, texture: Option<&egui::TextureHandle>, size: f
             color: egui::Color32::from_black_alpha(40),
         }
     };
-    ui.painter().add(shadow.as_shape(rect, 14.0));
+    let radius = squircle_radius(size);
+    ui.painter().add(shadow.as_shape(rect, radius));
     match texture {
-        Some(texture) => tilted_cover(ui, ui.painter(), rect, texture, &response),
-        None => {
-            ui.painter()
-                .rect_filled(rect, 14.0, ui.visuals().faint_bg_color);
-        }
+        Some(texture) => tilted_cover(
+            ui,
+            ui.painter(),
+            rect,
+            texture,
+            square_uv(texture.size_vec2()),
+            radius,
+            &response,
+        ),
+        None => paint_squircle(
+            ui.painter(),
+            rect,
+            egui::TextureId::default(),
+            egui::Rect::ZERO,
+            ui.visuals().faint_bg_color,
+            radius,
+        ),
     }
 }
 
