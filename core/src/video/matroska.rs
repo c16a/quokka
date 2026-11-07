@@ -38,6 +38,8 @@ const CHROMA_SUBSAMPLING_VERT: u64 = 0x55B4;
 
 /// The TrackType of a video track.
 const VIDEO_TRACK: u64 = 1;
+/// The TrackType of a subtitle track.
+pub(crate) const SUBTITLE_TRACK: u64 = 17;
 /// The TrackType of an audio track.
 const AUDIO_TRACK: u64 = 2;
 const AUDIO: u64 = 0xE1;

@@ -1059,6 +1059,7 @@ impl Playback {
             }
             self.video_texture_shown = shown;
         }
+        let caption = self.video.as_ref().and_then(VideoPlayer::caption);
         match &self.video_texture {
             Some(texture) => {
                 ui.centered_and_justified(|ui| {
@@ -1069,7 +1070,38 @@ impl Playback {
                 ui.label("Loading video…");
             }
         }
+        if let Some(text) = caption {
+            let pane = ui.max_rect();
+            egui::Area::new(ui.scope_id().with("captions"))
+                .order(egui::Order::Foreground)
+                .pivot(egui::Align2::CENTER_BOTTOM)
+                .fixed_pos(egui::pos2(pane.center().x, pane.bottom() - 48.0))
+                .show(ui.ctx(), |ui| {
+                    egui::Frame::new()
+                        .fill(egui::Color32::from_black_alpha(170))
+                        .corner_radius(6.0)
+                        .inner_margin(egui::Margin::symmetric(14, 8))
+                        .show(ui, |ui| {
+                            ui.label(
+                                egui::RichText::new(text)
+                                    .size(20.0)
+                                    .color(egui::Color32::WHITE),
+                            );
+                        });
+                });
+        }
     }
+
+    /// Show or hide the subtitles of the video, if it has any.
+    #[cfg(target_os = "macos")]
+    pub fn toggle_subtitles(&mut self) {
+        if let Some(video) = self.video.as_mut() {
+            video.toggle_subtitles();
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    pub fn toggle_subtitles(&mut self) {}
 
     /// Without the decoders there is no picture in the pane.
     #[cfg(not(target_os = "macos"))]
@@ -1450,7 +1482,7 @@ impl Playback {
 }
 
 /// Playback keys. Space plays or pauses, Left and Right seek 10 seconds, Up and Down change the
-/// volume, M mutes, and N and P go to the next and previous track. Keys are ignored while text
+/// volume, M mutes, C shows or hides subtitles, and N and P go to the next and previous track. Keys are ignored while text
 /// is being typed.
 pub fn handle_keys(ctx: &egui::Context, playback: &mut Playback) {
     if ctx.egui_wants_keyboard_input() {
@@ -1463,6 +1495,9 @@ pub fn handle_keys(ctx: &egui::Context, playback: &mut Playback) {
         }
         if input.consume_key(none, egui::Key::ArrowLeft) {
             playback.seek_relative(-10.0);
+        }
+        if input.consume_key(none, egui::Key::C) {
+            playback.toggle_subtitles();
         }
         if input.consume_key(none, egui::Key::ArrowRight) {
             playback.seek_relative(10.0);

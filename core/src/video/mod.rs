@@ -20,10 +20,12 @@ mod matroska;
 mod mp4;
 mod raw;
 mod samples;
+mod subtitles;
 mod vp9;
 
 pub use audio::{AudioCodec, AudioTrack};
 pub use samples::{Sample, SampleTrack, read_audio_samples, read_samples};
+pub use subtitles::{Cue, parse_srt, read_subtitles};
 
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};

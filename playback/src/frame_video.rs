@@ -5,6 +5,8 @@
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+use player_core::video::{Cue, read_subtitles};
+
 use crate::decode::frames::Rgba;
 use crate::decode::player::{FramePlayer, VideoFrame};
 use crate::movie_audio::MovieAudio;
@@ -17,6 +19,9 @@ pub struct FrameVideo {
     audio: Option<MovieAudio>,
     /// The file being played, for reopening it at a new position.
     path: Option<std::path::PathBuf>,
+    /// The subtitles of the file, and whether they are shown.
+    cues: Vec<Cue>,
+    subtitles_on: bool,
     /// The position the sound's clock started from: zero, or the last seek target.
     audio_offset: f64,
     /// A frame whose time has not come up yet.
@@ -37,7 +42,30 @@ pub struct FrameVideo {
 
 impl FrameVideo {
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            subtitles_on: true,
+            ..Self::default()
+        }
+    }
+
+    /// The caption due at the current position, if subtitles are shown and one is due.
+    pub fn caption(&self) -> Option<String> {
+        if !self.subtitles_on || !self.loaded {
+            return None;
+        }
+        let now = self.clock();
+        let due: Vec<&str> = self
+            .cues
+            .iter()
+            .filter(|cue| cue.start <= now && now < cue.end)
+            .map(|cue| cue.text.as_str())
+            .collect();
+        (!due.is_empty()).then(|| due.join("\n"))
+    }
+
+    /// Show or hide the subtitles.
+    pub fn toggle_subtitles(&mut self) {
+        self.subtitles_on = !self.subtitles_on;
     }
 
     /// Take the frames whose times have come. `true` when the frame on screen has changed.
@@ -151,6 +179,7 @@ impl Player for FrameVideo {
         self.frames = Some(frames);
         self.audio = MovieAudio::open(path)?;
         self.path = Some(path.to_path_buf());
+        self.cues = read_subtitles(path).unwrap_or_default();
         self.loaded = true;
         Ok(())
     }
