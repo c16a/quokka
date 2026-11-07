@@ -2086,6 +2086,7 @@ mod tests {
             video_fps: None,
             video_fps_variable: false,
             video_aspect: None,
+            hdr: None,
             bitrate_kbps: None,
             track: None,
             year: None,

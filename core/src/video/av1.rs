@@ -3,7 +3,7 @@
 //! the sequence header inside an `av1C` record.
 
 use super::bits::Bits;
-use super::{Chroma, Colour, Headers, Matrix};
+use super::{Chroma, Colour, Headers, Matrix, specified_code};
 
 /// The OBU type of a sequence header.
 const SEQUENCE_HEADER: u8 = 1;
@@ -226,6 +226,8 @@ fn color_config(bits: &mut Bits, profile: u64) -> Option<(u8, Chroma, Colour)> {
     let mut colour = Colour {
         full_range: None,
         matrix: Matrix::from_code(matrix),
+        primaries: specified_code(primaries),
+        transfer: specified_code(transfer),
     };
     if mono_chrome {
         colour.full_range = Some(bits.flag()?);

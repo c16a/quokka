@@ -6,6 +6,7 @@ use std::io::{Read, Seek};
 use super::bmff::{be, boxes, child, find_top, full_box};
 use super::{
     Codec, Colour, Container, Found, FrameRate, Matrix, VideoFormat, assemble, codec_headers,
+    specified_code,
 };
 
 /// The format of the first video track in an MP4 or MOV file.
@@ -183,5 +184,7 @@ fn colour_box(children: &[u8]) -> Colour {
     Colour {
         full_range: Some(colr[10] & 0x80 != 0),
         matrix: Matrix::from_code(u64::from(u16::from_be_bytes([colr[8], colr[9]]))),
+        primaries: specified_code(u64::from(u16::from_be_bytes([colr[4], colr[5]]))),
+        transfer: specified_code(u64::from(u16::from_be_bytes([colr[6], colr[7]]))),
     }
 }

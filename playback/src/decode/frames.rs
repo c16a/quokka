@@ -351,6 +351,7 @@ mod tests {
         let full = Colour {
             full_range: Some(true),
             matrix: Some(Matrix::Bt709),
+            ..Colour::default()
         };
         let white = to_rgba(
             &picture(b"I420", vec![255, 255, 255, 255, 128, 128, 128, 128, 128]),
@@ -372,6 +373,7 @@ mod tests {
             let colour = Colour {
                 full_range: Some(false),
                 matrix: Some(matrix),
+                ..Colour::default()
             };
             let black = to_rgba(
                 &picture(b"I420", vec![16, 16, 16, 16, 128, 128, 128, 128, 128]),
@@ -394,6 +396,7 @@ mod tests {
             Colour {
                 full_range: Some(false),
                 matrix: Some(Matrix::Bt601),
+                ..Colour::default()
             },
         )
         .unwrap();
@@ -402,6 +405,7 @@ mod tests {
             Colour {
                 full_range: Some(false),
                 matrix: Some(Matrix::Bt709),
+                ..Colour::default()
             },
         )
         .unwrap();

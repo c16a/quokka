@@ -1183,6 +1183,14 @@ fn file_info_rows(movie: &MediaItem) -> Vec<(&'static str, String)> {
             known(movie.video_bit_depth.map(|bits| format!("{bits}-bit"))),
         ),
         ("Chroma subsampling", known(movie.video_chroma.clone())),
+        (
+            "Dynamic range",
+            known(
+                movie
+                    .hdr
+                    .map(|hdr| if hdr { "HDR".into() } else { "SDR".into() }),
+            ),
+        ),
         ("Resolution", known(resolution_label(movie))),
         ("Aspect ratio", known(aspect)),
         (

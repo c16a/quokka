@@ -124,6 +124,10 @@ pub struct Colour {
     /// Whether the samples use the full 0 to maximum range, rather than limited video levels.
     pub full_range: Option<bool>,
     pub matrix: Option<Matrix>,
+    /// The colour primaries, as the code of ITU-T H.273 (9 is BT.2020).
+    pub primaries: Option<u8>,
+    /// The transfer characteristics, as the code of ITU-T H.273 (16 is PQ, 18 is HLG, 2 is unspecified).
+    pub transfer: Option<u8>,
 }
 
 impl Colour {
@@ -132,8 +136,25 @@ impl Colour {
         Colour {
             full_range: self.full_range.or(other.full_range),
             matrix: self.matrix.or(other.matrix),
+            primaries: self.primaries.or(other.primaries),
+            transfer: self.transfer.or(other.transfer),
         }
     }
+
+    /// Whether the picture is HDR: its transfer characteristics are PQ (SMPTE ST 2084) or HLG (ARIB
+    /// STD-B67). `None` when the file does not say, which includes the unspecified code 2.
+    pub fn hdr(&self) -> Option<bool> {
+        match self.transfer? {
+            16 | 18 => Some(true),
+            2 => None,
+            _ => Some(false),
+        }
+    }
+}
+
+/// A colour code of ITU-T H.273 as a file states it. The unspecified code 2 counts as not stated.
+pub(crate) fn specified_code(code: u64) -> Option<u8> {
+    u8::try_from(code).ok().filter(|&code| code != 2)
 }
 
 /// A frame rate: frames per second, as a fraction.
@@ -264,8 +285,9 @@ pub(crate) fn read_video_signal(bits: &mut bits::Bits, colour: &mut Colour) {
     let _ = bits.skip(3);
     colour.full_range = bits.flag();
     if bits.flag().unwrap_or(false) {
-        // colour_primaries and transfer_characteristics, then matrix_coefficients.
-        let _ = bits.skip(16);
+        // colour_primaries, transfer_characteristics, then matrix_coefficients.
+        colour.primaries = bits.bits(8).and_then(specified_code);
+        colour.transfer = bits.bits(8).and_then(specified_code);
         colour.matrix = bits.bits(8).and_then(Matrix::from_code);
     }
 }
@@ -380,5 +402,37 @@ mod tests {
         );
         let whole = FrameRate::approximate(25.0, 1001).unwrap();
         assert_eq!((whole.numerator, whole.denominator), (25, 1));
+    }
+}
+
+#[cfg(test)]
+mod colour_tests {
+    use super::Colour;
+
+    fn transfer(code: Option<u8>) -> Colour {
+        Colour {
+            transfer: code,
+            ..Colour::default()
+        }
+    }
+
+    #[test]
+    fn pq_and_hlg_are_hdr() {
+        assert_eq!(transfer(Some(16)).hdr(), Some(true));
+        assert_eq!(transfer(Some(18)).hdr(), Some(true));
+    }
+
+    #[test]
+    fn sdr_transfers_are_not_hdr() {
+        // BT.709 (1), BT.601 (6) and sRGB (13).
+        assert_eq!(transfer(Some(1)).hdr(), Some(false));
+        assert_eq!(transfer(Some(6)).hdr(), Some(false));
+        assert_eq!(transfer(Some(13)).hdr(), Some(false));
+    }
+
+    #[test]
+    fn a_file_that_does_not_say_is_unknown() {
+        assert_eq!(transfer(None).hdr(), None);
+        assert_eq!(transfer(Some(2)).hdr(), None);
     }
 }

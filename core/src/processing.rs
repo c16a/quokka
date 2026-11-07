@@ -23,7 +23,7 @@ pub(crate) fn process_pending(conn: &Connection) -> Result<()> {
         "UPDATE media SET video_codec = COALESCE(?2, video_codec), \
            width = COALESCE(?3, width), height = COALESCE(?4, height), \
            video_bit_depth = ?5, video_chroma = ?6, video_fps = ?7, \
-           video_fps_variable = ?8, video_aspect = ?9, processed = 1 WHERE id = ?1",
+           video_fps_variable = ?8, video_aspect = ?9, hdr = ?10, processed = 1 WHERE id = ?1",
     )?;
     for (id, path) in pending {
         // A file that cannot be read gives nothing, and is not tried again until it changes.
@@ -38,6 +38,7 @@ pub(crate) fn process_pending(conn: &Connection) -> Result<()> {
             format.frame_rate.map(|rate| rate.per_second()),
             format.variable_frame_rate,
             format.display_aspect,
+            format.colour.hdr().map(i64::from),
         ])?;
     }
     Ok(())

@@ -9,7 +9,7 @@ use super::ebml::{elements, text, uint, vint};
 use super::samples::{Sample, SampleTrack};
 use super::{
     Chroma, Codec, Colour, Container, Found, FrameRate, Headers, Matrix, VideoFormat, assemble,
-    codec_headers, vp9,
+    codec_headers, specified_code, vp9,
 };
 
 const SEGMENT: u64 = 0x1853_8067;
@@ -37,6 +37,8 @@ const BITS_PER_CHANNEL: u64 = 0x55B2;
 const CHROMA_SUBSAMPLING_HORZ: u64 = 0x55B3;
 const CHROMA_SUBSAMPLING_VERT: u64 = 0x55B4;
 const MATRIX_COEFFICIENTS: u64 = 0x55B1;
+const TRANSFER_CHARACTERISTICS: u64 = 0x55BA;
+const PRIMARIES: u64 = 0x55BB;
 const RANGE: u64 = 0x55B9;
 
 /// The TrackType of a video track.
@@ -71,6 +73,8 @@ pub(crate) struct Track {
     pub(crate) chroma_horizontal: Option<u64>,
     pub(crate) chroma_vertical: Option<u64>,
     pub(crate) matrix_coefficients: Option<u64>,
+    pub(crate) transfer_characteristics: Option<u64>,
+    pub(crate) primaries: Option<u64>,
     pub(crate) range: Option<u64>,
     pub(crate) sampling_frequency: Option<f64>,
     pub(crate) channels: Option<u64>,
@@ -131,6 +135,8 @@ fn found(data: &[u8]) -> Option<Found> {
             // Range 1 is broadcast (limited) and 2 is full.
             full_range: track.range.map(|range| range == 2),
             matrix: track.matrix_coefficients.and_then(Matrix::from_code),
+            primaries: track.primaries.and_then(specified_code),
+            transfer: track.transfer_characteristics.and_then(specified_code),
         },
     })
 }
@@ -193,6 +199,10 @@ fn parse_video(body: &[u8], track: &mut Track) {
                         MATRIX_COEFFICIENTS => {
                             track.matrix_coefficients = Some(uint(colour_value));
                         }
+                        TRANSFER_CHARACTERISTICS => {
+                            track.transfer_characteristics = Some(uint(colour_value));
+                        }
+                        PRIMARIES => track.primaries = Some(uint(colour_value)),
                         RANGE => track.range = Some(uint(colour_value)),
                         _ => {}
                     }

@@ -3,7 +3,7 @@ use rusqlite::Connection;
 use crate::Result;
 
 /// Bump when the schema changes and add a matching migration step below.
-const SCHEMA_VERSION: i64 = 19;
+const SCHEMA_VERSION: i64 = 20;
 
 /// Per-connection settings and schema migration.
 pub(crate) fn configure(conn: &Connection) -> Result<()> {
@@ -72,6 +72,9 @@ pub(crate) fn configure(conn: &Connection) -> Result<()> {
     }
     if version < 19 {
         conn.execute_batch(SCHEMA_V19)?;
+    }
+    if version < 20 {
+        conn.execute_batch(SCHEMA_V20)?;
     }
     if version != SCHEMA_VERSION {
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
@@ -290,6 +293,13 @@ UPDATE media SET mtime = -1 WHERE kind = 'video';
 /// processed again.
 const SCHEMA_V16: &str = "
 ALTER TABLE media ADD COLUMN processed INTEGER NOT NULL DEFAULT 0;
+";
+
+/// Whether a video is HDR, from its colour transfer characteristics. Existing videos are processed
+/// again to fill it in.
+const SCHEMA_V20: &str = "
+ALTER TABLE media ADD COLUMN hdr INTEGER;
+UPDATE media SET processed = 0 WHERE kind = 'video';
 ";
 
 /// Frame rate, whether it varies, and display aspect ratio of video files, from the video module.

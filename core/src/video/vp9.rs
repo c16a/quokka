@@ -23,6 +23,7 @@ pub(crate) fn from_vpcc(record: &[u8]) -> Option<Headers> {
             matrix: record
                 .get(9)
                 .and_then(|&code| Matrix::from_code(u64::from(code))),
+            ..Colour::default()
         },
         ..Headers::default()
     })
