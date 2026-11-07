@@ -5,6 +5,7 @@ mod chain;
 pub mod decode;
 mod loudness;
 mod mock;
+pub mod movie_audio;
 mod mpv_backend;
 mod rodio_backend;
 mod stream;

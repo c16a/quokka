@@ -41,7 +41,7 @@ struct Current {
 /// Open an output device. Tries the default device first, then every other output in turn.
 /// rodio's own fallback skips devices that report no driver name (which includes all macOS
 /// devices), so it can give up while a working output such as the built-in speakers exists.
-fn open_output(rate: Option<u32>) -> Result<MixerDeviceSink> {
+pub(crate) fn open_output(rate: Option<u32>) -> Result<MixerDeviceSink> {
     let host = rodio::cpal::default_host();
     let default = host.default_output_device();
     let default_name = default
