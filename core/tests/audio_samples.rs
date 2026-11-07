@@ -49,3 +49,12 @@ fn aac_tracks_carry_their_audio_specific_config() {
         assert_eq!(track.config[0] >> 3, 2, "{name}: AAC LC");
     }
 }
+
+#[test]
+fn the_edit_list_gives_the_priming_to_drop() {
+    // ffmpeg's AAC files open with the encoder's 1024-frame delay, which the edit list names.
+    let track = read_audio_samples(&fixture("aac_stereo.mp4"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(track.priming_frames, 1024);
+}

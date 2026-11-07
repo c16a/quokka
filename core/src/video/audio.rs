@@ -46,6 +46,9 @@ pub struct AudioTrack {
     pub config: Vec<u8>,
     /// Ticks per second for the samples' times.
     pub timescale: u64,
+    /// Frames the decoder makes before the sound proper, which the file's edit list says to drop.
+    /// Zero when the file says nothing.
+    pub priming_frames: u64,
     pub samples: Vec<Sample>,
 }
 

@@ -66,7 +66,14 @@ impl MovieAudio {
         let frame_start = track.samples.get(first).map_or(0.0, |sample| {
             sample.presentation_time as f64 / track.timescale as f64
         });
-        let skip_frames = ((start - frame_start).max(0.0) * f64::from(track.sample_rate)) as usize;
+        // From the start of the file, the decoder's priming is dropped as well.
+        let priming = if first == 0 {
+            track.priming_frames as f64
+        } else {
+            0.0
+        };
+        let skip_frames =
+            (priming + (start - frame_start).max(0.0) * f64::from(track.sample_rate)) as usize;
         let skip = skip_frames * track.channels as usize;
         let stream = AudioStream {
             codec: track.codec,

@@ -286,6 +286,51 @@ fn audio_track(moov: &[u8]) -> Option<AudioTrack> {
         channels,
         config,
         timescale,
+        priming_frames: priming_frames(trak, sample_rate, timescale),
         samples,
     })
+}
+
+/// The frames the edit list drops from the start: the media time of the first entry that plays
+/// media, in frames. Encoders write this for the delay the decoder adds.
+fn priming_frames(trak: &[u8], sample_rate: u32, timescale: u64) -> u64 {
+    let Some(elst) = child(trak, b"edts").and_then(|edts| child(edts, b"elst")) else {
+        return 0;
+    };
+    let Some((version, rest)) = full_box(elst) else {
+        return 0;
+    };
+    let entries = be::<4>(rest, 0).unwrap_or(0) as usize;
+    // Each entry: a segment duration, then a media time, then the rate. Version 1 uses 64 bits.
+    let (size, media_at) = if version == 1 { (20, 8) } else { (12, 4) };
+    for index in 0..entries {
+        let at = 4 + index * size;
+        let media = if version == 1 {
+            be::<8>(rest, at + media_at).map(|value| value as i64)
+        } else {
+            be::<4>(rest, at + media_at).map(|value| i64::from(value as u32 as i32))
+        };
+        if let Some(media) = media.filter(|media| *media >= 0) {
+            return (media as u64).saturating_mul(u64::from(sample_rate)) / timescale.max(1);
+        }
+    }
+    0
+}
+
+/// The frames an MP4 file's first audio track asks the decoder to drop at its start, from its edit
+/// list. `None` when the file is not an MP4 with an audio track.
+pub fn mp4_priming_frames(path: &Path) -> Option<u64> {
+    let mut file = File::open(path).ok()?;
+    let moov = find_top(&mut file, b"moov").ok()??;
+    let trak = boxes(&moov)
+        .filter(|(kind, _)| kind == b"trak")
+        .map(|(_, body)| body)
+        .find(|trak| handler(trak) == Some(*b"soun"))?;
+    let mdia = child(trak, b"mdia")?;
+    let timescale = timescale(child(mdia, b"mdhd")?)?;
+    let stbl = child(child(mdia, b"minf")?, b"stbl")?;
+    let (_, entry) = sample_entry(stbl)?;
+    // The sample rate is a 16.16 fixed point number in the audio sample entry.
+    let rate = (be::<4>(entry, 24)? >> 16) as u32;
+    Some(priming_frames(trak, rate, timescale))
 }

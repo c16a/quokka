@@ -455,6 +455,8 @@ pub(crate) fn read_audio<R: Read + Seek>(file: &mut R) -> io::Result<Option<Audi
         channels,
         config: track.private,
         timescale,
+        // Matroska files carry the delay in the track, which is not read here.
+        priming_frames: 0,
         samples,
     }))
 }

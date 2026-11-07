@@ -107,7 +107,8 @@ impl SymphoniaSource {
         if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
             hint.with_extension(ext);
         }
-        Self::from_source(Box::new(file), &hint, error)
+        let priming = player_core::video::mp4_priming_frames(path).unwrap_or(0);
+        Self::decode_source(Box::new(file), &hint, error, priming)
     }
 
     /// Decode from any source. `hint` names the format when the caller knows it. A source that
@@ -116,6 +117,16 @@ impl SymphoniaSource {
         source: Box<dyn MediaSource>,
         hint: &Hint,
         error: ErrorSlot,
+    ) -> Result<Self, String> {
+        Self::decode_source(source, hint, error, 0)
+    }
+
+    /// As `from_source`, with the frames the file asks the decoder to drop at its start.
+    fn decode_source(
+        source: Box<dyn MediaSource>,
+        hint: &Hint,
+        error: ErrorSlot,
+        priming: u64,
     ) -> Result<Self, String> {
         let stream = MediaSourceStream::new(source, Default::default());
         let format = symphonia::default::get_probe()
@@ -127,12 +138,12 @@ impl SymphoniaSource {
             )
             .map_err(|e| e.to_string())?;
 
-        let (track_id, params, num_frames) = format
+        let (track_id, params, num_frames, delay) = format
             .tracks()
             .iter()
             .find_map(|track| match &track.codec_params {
                 Some(CodecParameters::Audio(params)) => {
-                    Some((track.id, params.clone(), track.num_frames))
+                    Some((track.id, params.clone(), track.num_frames, track.delay))
                 }
                 _ => None,
             })
@@ -160,13 +171,19 @@ impl SymphoniaSource {
 
         let (command_tx, command_rx) = mpsc::channel();
         let (message_tx, message_rx) = mpsc::sync_channel(BUFFER_CHUNKS);
+        // The system decoder does not trim the encoder's delay; symphonia's own decoder does.
+        let skip_samples = if system.is_some() {
+            delay.map_or(priming, u64::from) as usize * usize::from(channels.get())
+        } else {
+            0
+        };
         let worker = Worker {
             format,
             decoder,
             system,
             track_id,
             channels: channels.get() as usize,
-            skip_samples: 0,
+            skip_samples,
             generation: 0,
             error,
         };
