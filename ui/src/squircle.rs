@@ -24,16 +24,27 @@ pub fn outline(a: f32, b: f32, radius: f32) -> Vec<egui::Vec2> {
         (-(a - r), -(b - r), std::f32::consts::PI),
         (a - r, -(b - r), 3.0 * std::f32::consts::FRAC_PI_2),
     ];
-    let mut points = Vec::with_capacity(4 * (POINTS_PER_CORNER + 1));
+    let mut points: Vec<egui::Vec2> = Vec::with_capacity(4 * (POINTS_PER_CORNER + 1));
     for (cx, cy, start) in corners {
         for i in 0..=POINTS_PER_CORNER {
             let angle = start + std::f32::consts::FRAC_PI_2 * i as f32 / POINTS_PER_CORNER as f32;
             let (sin, cos) = angle.sin_cos();
-            points.push(egui::vec2(
+            let point = egui::vec2(
                 cx + r * signed_power(cos, power),
                 cy + r * signed_power(sin, power),
-            ));
+            );
+            // A pill's sides have no length, so neighbouring corners meet at one point. A repeated
+            // point gives a degenerate join, which the outline stroke draws as a line across the page.
+            if points
+                .last()
+                .is_none_or(|last| (*last - point).length() > 1e-4)
+            {
+                points.push(point);
+            }
         }
+    }
+    while points.len() > 1 && (points[0] - points[points.len() - 1]).length() <= 1e-4 {
+        points.pop();
     }
     points
 }
@@ -225,9 +236,16 @@ impl<W: egui::Widget> SquircleButton<W> {
                     centre_index + 1 + (i + 1) % count,
                 );
             }
-            ui.painter().set(background, egui::Shape::mesh(mesh));
+            // A transparent fill draws nothing useful: its triangles leave a line along one edge.
+            if fill.a() > 0 {
+                ui.painter().set(background, egui::Shape::mesh(mesh));
+            }
+            // egui's closed-line stroke leaves a line running across the page from one of the corners,
+            // so the outline is drawn as an open line that returns to its first point.
             if let Some(stroke) = self.stroke {
-                ui.painter().add(egui::Shape::closed_line(points, stroke));
+                let mut outline_points = points;
+                outline_points.push(outline_points[0]);
+                ui.painter().add(egui::Shape::line(outline_points, stroke));
             }
         }
         response
@@ -273,6 +291,25 @@ mod tests {
             for point in outline(a, b, r) {
                 let value = boundary_value(a, b, r, point);
                 assert!((value - 1.0).abs() < 1e-3, "{point:?} gives {value}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_outline_has_no_repeated_points() {
+        for (a, b, r) in [
+            (80.0, 30.0, 30.0),
+            (30.0, 30.0, 30.0),
+            (60.0, 40.0, 12.0),
+            (44.0, 18.0, f32::MAX),
+        ] {
+            let points = outline(a, b, r);
+            for i in 0..points.len() {
+                let next = points[(i + 1) % points.len()];
+                assert!(
+                    (points[i] - next).length() > 1e-4,
+                    "repeated point at {i} for {a}x{b}"
+                );
             }
         }
     }
