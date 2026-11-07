@@ -410,6 +410,50 @@ mod tests {
     }
 
     #[test]
+    fn a_button_in_a_settings_folder_row_is_only_as_tall_as_its_child() {
+        let ctx = egui::Context::default();
+        let padding = Padding::new(6.0, 4.0, 10.0, 8.0);
+        let mut button_rect = egui::Rect::NOTHING;
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(900.0, 700.0),
+            )),
+            ..Default::default()
+        };
+        let _ = ctx.run_ui(input, |ui| {
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                ui.add_space(120.0);
+                egui::Frame::new()
+                    .inner_margin(egui::Margin::symmetric(14, 12))
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.horizontal(|ui| {
+                            ui.allocate_exact_size(egui::vec2(20.0, 20.0), egui::Sense::hover());
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    button_rect = ui
+                                        .add(
+                                            SquircleButton::new(
+                                                egui::Label::new("Rescan").extend(),
+                                            )
+                                            .padding(padding),
+                                        )
+                                        .rect;
+                                },
+                            );
+                        });
+                    });
+            });
+        });
+        assert!(
+            button_rect.height() < 60.0,
+            "button rect {button_rect:?} is too tall in a settings row"
+        );
+    }
+
+    #[test]
     fn the_button_is_its_child_plus_the_padding() {
         let ctx = egui::Context::default();
         let padding = Padding::new(6.0, 4.0, 10.0, 8.0);
