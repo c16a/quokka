@@ -277,7 +277,7 @@ impl MoviesView {
         if let Some(colour) = accent {
             // The background is drawn on the GPU, and asks for a redraw so the strands keep moving.
             let area = ui.clip_rect();
-            let background = crate::flow_background::FlowBackground {
+            let background = crate::mesh_background::MeshBackground {
                 base: colour,
                 seed: (movie.id % 1000) as f32,
                 time: ui.input(|input| input.time) as f32,
