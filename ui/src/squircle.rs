@@ -301,7 +301,8 @@ impl<'t> SquircleTextField<'t> {
         Self {
             edit: egui::TextEdit::singleline(text)
                 .frame(egui::Frame::NONE)
-                .margin(egui::Margin::ZERO),
+                .margin(egui::Margin::ZERO)
+                .align(egui::Align2::LEFT_CENTER),
             width: 200.0,
         }
     }
@@ -330,6 +331,13 @@ impl<'t> SquircleTextField<'t> {
     /// Lay the field out and paint its outline. The response is the text edit's, so focus and changes
     /// read as they would for a plain text edit, but its rectangle is the whole field.
     pub fn show(self, ui: &mut egui::Ui) -> egui::Response {
+        let (rect, mut response) = self.lay_out(ui);
+        response.rect = rect;
+        response
+    }
+
+    /// The field's whole rectangle, and the text edit's own response, whose rectangle is the edit's.
+    fn lay_out(self, ui: &mut egui::Ui) -> (egui::Rect, egui::Response) {
         let width = if self.width.is_finite() {
             self.width
         } else {
@@ -341,13 +349,19 @@ impl<'t> SquircleTextField<'t> {
         // focus, which is known only once the edit has been laid out, so the slot is reserved first.
         let background = ui.painter().add(egui::Shape::Noop);
         let inner = rect.shrink2(egui::vec2(FIELD_INSET, 0.0));
-        let mut edit = ui
+        let edit = ui
             .new_child(
                 egui::UiBuilder::new()
                     .max_rect(inner)
                     .layout(egui::Layout::left_to_right(egui::Align::Center)),
             )
-            .add(self.edit.desired_width(inner.width()));
+            .add(
+                self.edit
+                    .desired_width(inner.width())
+                    // The edit fills the field's height, so its text is centred in the field whatever
+                    // the font's line height.
+                    .min_size(inner.size()),
+            );
         let visuals = ui.visuals();
         let stroke = if edit.has_focus() {
             egui::Stroke::new(1.5, visuals.selection.stroke.color)
@@ -356,8 +370,7 @@ impl<'t> SquircleTextField<'t> {
         };
         let shapes = squircle_shapes(rect, None, visuals.extreme_bg_color, Some(stroke));
         ui.painter().set(background, egui::Shape::Vec(shapes));
-        edit.rect = rect;
-        edit
+        (rect, edit)
     }
 }
 
@@ -639,6 +652,32 @@ mod tests {
     }
 
     #[test]
+    fn a_text_field_centres_its_text_vertically() {
+        let ctx = egui::Context::default();
+        let mut text = String::from("Hello");
+        let mut field_rect = egui::Rect::NOTHING;
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            field_rect = SquircleTextField::singleline(&mut text).lay_out(ui).0;
+        });
+        // The text as it is painted: the top of its galley, plus half the galley's height.
+        let text_centre = output
+            .shapes
+            .iter()
+            .find_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(shape) if shape.galley.text() == "Hello" => {
+                    Some(shape.pos.y + shape.galley.size().y / 2.0)
+                }
+                _ => None,
+            })
+            .expect("the field's text is painted");
+        assert!(
+            (text_centre - field_rect.center().y).abs() < 0.5,
+            "text centred at {text_centre} in a field centred at {}",
+            field_rect.center().y
+        );
+    }
+
+    #[test]
     fn a_text_field_is_the_same_height_as_a_text_button() {
         let ctx = egui::Context::default();
         let mut text = String::new();
@@ -647,8 +686,8 @@ mod tests {
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
             field_rect = SquircleTextField::singleline(&mut text)
                 .hint_text("Name")
-                .show(ui)
-                .rect;
+                .lay_out(ui)
+                .0;
             button_rect = text_button(ui, "Save").rect;
         });
         assert!(
