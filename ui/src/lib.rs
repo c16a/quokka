@@ -137,7 +137,7 @@ pub fn run(paths: Paths) -> Result<(), Box<dyn std::error::Error>> {
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title("Player")
+            .with_title("Quokka")
             .with_inner_size([1100.0, 720.0])
             // The narrowest the window can be dragged. Narrow layouts still need room for the page padding and the rail.
             .with_min_inner_size([MIN_WINDOW_WIDTH, 0.0]),
@@ -145,7 +145,7 @@ pub fn run(paths: Paths) -> Result<(), Box<dyn std::error::Error>> {
         ..Default::default()
     };
     eframe::run_native(
-        "Player",
+        "Quokka",
         options,
         Box::new(move |cc| {
             if let Some(render_state) = cc.wgpu_render_state.as_ref() {

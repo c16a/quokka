@@ -37,13 +37,13 @@ check: libmpv-check
 run: libmpv-check
     cargo run -p player-app
 
-# Package the debug build as ~/Applications/Player.app, so macOS and the computer-use tools can find it
+# Package the debug build as ~/Applications/Quokka.app, so macOS and the computer-use tools can find it
 # by name. The bundle is ad-hoc signed, for this Mac only. The Info.plist is in packaging/.
 bundle: build
-    APP="$HOME/Applications/Player.app"; rm -rf "$APP"; mkdir -p "$APP/Contents/MacOS"; cp target/debug/player "$APP/Contents/MacOS/player"; cp packaging/Info.plist "$APP/Contents/Info.plist"; codesign --force --sign - "$APP"; echo "Built $APP"
+    APP="$HOME/Applications/Quokka.app"; rm -rf "$APP"; mkdir -p "$APP/Contents/MacOS"; cp target/debug/player "$APP/Contents/MacOS/player"; cp packaging/Info.plist "$APP/Contents/Info.plist"; codesign --force --sign - "$APP"; echo "Built $APP"
 
 bundle-release: release
-    APP="$HOME/Applications/Player.app"; rm -rf "$APP"; mkdir -p "$APP/Contents/MacOS"; cp target/release/player "$APP/Contents/MacOS/player"; cp packaging/Info.plist "$APP/Contents/Info.plist"; codesign --force --sign - "$APP"; echo "Built $APP"
+    APP="$HOME/Applications/Quokka.app"; rm -rf "$APP"; mkdir -p "$APP/Contents/MacOS"; cp target/release/player "$APP/Contents/MacOS/player"; cp packaging/Info.plist "$APP/Contents/Info.plist"; codesign --force --sign - "$APP"; echo "Built $APP"
 
 
 # Scan a directory into a library database: `just scan ./library.db ~/Music`.

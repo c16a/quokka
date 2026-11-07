@@ -3,9 +3,9 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleName</key>
-    <string>Player</string>
+    <string>Quokka</string>
     <key>CFBundleDisplayName</key>
-    <string>Player</string>
+    <string>Quokka</string>
     <key>CFBundleIdentifier</key>
     <string>com.c16a.player.dev</string>
     <key>CFBundleExecutable</key>

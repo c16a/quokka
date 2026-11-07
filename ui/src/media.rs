@@ -41,7 +41,7 @@ impl Media {
             return None;
         }
         let config = PlatformConfig {
-            display_name: "Player",
+            display_name: "Quokka",
             dbus_name: "player",
             hwnd: None,
         };
