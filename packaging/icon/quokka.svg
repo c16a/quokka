@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- Background: macOS-style rounded square -->
+  <rect x="0" y="0" width="1024" height="1024" rx="224" ry="224" fill="#24667A"/>
+
+  <!-- Ears: small, round, set at the sides -->
+  <circle cx="196" cy="396" r="104" fill="#8E7B69"/>
+  <circle cx="828" cy="396" r="104" fill="#8E7B69"/>
+  <circle cx="200" cy="402" r="56" fill="#E7B3A4"/>
+  <circle cx="824" cy="402" r="56" fill="#E7B3A4"/>
+
+  <!-- Head: broad and round -->
+  <ellipse cx="512" cy="560" rx="352" ry="290" fill="#CDBBA6"/>
+
+  <!-- Cheeks, pushed up by the smile -->
+  <ellipse cx="318" cy="598" rx="56" ry="34" fill="#E9A090" opacity="0.85"/>
+  <ellipse cx="706" cy="598" rx="56" ry="34" fill="#E9A090" opacity="0.85"/>
+
+  <!-- Eyes, with highlights -->
+  <circle cx="416" cy="500" r="34" fill="#2A2320"/>
+  <circle cx="608" cy="500" r="34" fill="#2A2320"/>
+  <circle cx="427" cy="489" r="11" fill="#FFFFFF"/>
+  <circle cx="619" cy="489" r="11" fill="#FFFFFF"/>
+
+  <!-- Nose -->
+  <ellipse cx="512" cy="556" rx="40" ry="30" fill="#2A2320"/>
+
+  <!-- Wide, upturned smile -->
+  <path d="M 512 586 L 512 606 M 366 592 Q 512 716 658 592" fill="none" stroke="#2A2320" stroke-width="24" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

@@ -37,13 +37,18 @@ check: libmpv-check
 run: libmpv-check
     cargo run -p quokka-app
 
+# Build the app icon, packaging/AppIcon.icns, from packaging/icon/quokka.svg. Needs ImageMagick
+# (`brew install imagemagick`) and macOS's iconutil. Run it after the SVG changes, then commit the .icns.
+icon:
+    SET="$(mktemp -d)/AppIcon.iconset"; mkdir -p "$SET"; magick -background none -density 192 packaging/icon/quokka.svg -resize 1024x1024 "$SET/icon_512x512@2x.png"; for s in 16 32 128 256 512; do magick "$SET/icon_512x512@2x.png" -resize ${s}x${s} "$SET/icon_${s}x${s}.png"; magick "$SET/icon_512x512@2x.png" -resize $((s*2))x$((s*2)) "$SET/icon_${s}x${s}@2x.png"; done; iconutil -c icns "$SET" -o packaging/AppIcon.icns; echo "Wrote packaging/AppIcon.icns"
+
 # Package the debug build as ~/Applications/Quokka.app, so macOS and the computer-use tools can find it
-# by name. The bundle is ad-hoc signed, for this Mac only. The Info.plist is in packaging/.
+# by name. The bundle is ad-hoc signed, for this Mac only. The Info.plist and the icon are in packaging/.
 bundle: build
-    APP="$HOME/Applications/Quokka.app"; rm -rf "$APP"; mkdir -p "$APP/Contents/MacOS"; cp target/debug/quokka "$APP/Contents/MacOS/quokka"; cp packaging/Info.plist "$APP/Contents/Info.plist"; codesign --force --sign - "$APP"; echo "Built $APP"
+    APP="$HOME/Applications/Quokka.app"; rm -rf "$APP"; mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"; cp target/debug/quokka "$APP/Contents/MacOS/quokka"; cp packaging/Info.plist "$APP/Contents/Info.plist"; cp packaging/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"; codesign --force --sign - "$APP"; echo "Built $APP"
 
 bundle-release: release
-    APP="$HOME/Applications/Quokka.app"; rm -rf "$APP"; mkdir -p "$APP/Contents/MacOS"; cp target/release/quokka "$APP/Contents/MacOS/quokka"; cp packaging/Info.plist "$APP/Contents/Info.plist"; codesign --force --sign - "$APP"; echo "Built $APP"
+    APP="$HOME/Applications/Quokka.app"; rm -rf "$APP"; mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"; cp target/release/quokka "$APP/Contents/MacOS/quokka"; cp packaging/Info.plist "$APP/Contents/Info.plist"; cp packaging/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"; codesign --force --sign - "$APP"; echo "Built $APP"
 
 
 # Scan a directory into a library database: `just scan ./library.db ~/Music`.
