@@ -896,10 +896,15 @@ impl eframe::App for App {
         } else {
             egui::Frame::central_panel(ui.style()).inner_margin(egui::Margin::symmetric(32, 32))
         };
-        // A movie with cover art is drawn on the cover's dominant colour.
-        let main_frame = match (self.tab, self.movies.page_background()) {
-            (Tab::Movies, Some(colour)) => main_frame.fill(colour),
-            _ => main_frame,
+        // A movie or album with cover art is drawn on the cover's dominant colour.
+        let page = match self.tab {
+            Tab::Movies => self.movies.page_background(),
+            Tab::Albums => self.albums.page_background(),
+            _ => None,
+        };
+        let main_frame = match page {
+            Some(colour) => main_frame.fill(colour),
+            None => main_frame,
         };
         egui::CentralPanel::default()
             .frame(main_frame)

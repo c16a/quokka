@@ -5,6 +5,7 @@ use quokka_core::{
     AlbumFilter, AlbumSort, AlbumSummary, FavoriteKind, Library, MediaItem, PlaylistSummary,
 };
 
+use crate::colour::{self, Lab};
 use crate::covers::{self, COVER_MAX_SIDE, Cover, Worker, evict, upload};
 use crate::format;
 use crate::icons;
@@ -135,6 +136,15 @@ impl AlbumsView {
     /// Whether an album's detail page is open rather than the grid.
     pub fn showing_detail(&self) -> bool {
         self.selected.is_some()
+    }
+
+    /// The colour the open album's page is drawn on: the dominant colour of its cover, once known.
+    pub fn page_background(&self) -> Option<egui::Color32> {
+        let index = self.selected?;
+        match self.covers.get(&index) {
+            Some((_, CoverSlot::Ready(Some(cover)))) => cover.dominant,
+            _ => None,
+        }
     }
 
     /// Open the album called `name`. If the grid's filters hide it, they are cleared first.
@@ -336,9 +346,28 @@ impl AlbumsView {
         let mut play = None;
         let mut back = false;
         let ctx = ui.ctx().clone();
-        let palette = AlbumPalette::of(ui);
         let album = self.albums[i].clone();
-        let cover = self.cover_for(&ctx, library, i).map(|c| c.colour);
+        let loaded = self.cover_for(&ctx, library, i);
+        let accent = loaded.as_ref().and_then(|c| c.dominant);
+        let cover = loaded.map(|c| c.colour);
+        // A cover with a dominant colour gives the page its colour, as a movie's cover does.
+        let palette = accent.map_or_else(|| AlbumPalette::of(ui), AlbumPalette::poster);
+        if let Some(colour) = accent {
+            // The background is drawn on the GPU, and asks for a redraw so the strands keep moving.
+            let area = ui.clip_rect();
+            let background = crate::flow_background::FlowBackground {
+                base: colour,
+                seed: (i % 1000) as f32,
+                time: ui.input(|input| input.time) as f32,
+                aspect: area.width() / area.height().max(1.0),
+            };
+            ui.painter()
+                .add(eframe::egui_wgpu::Callback::new_paint_callback(
+                    area, background,
+                ));
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(33));
+        }
         let album_key = album.album.clone().unwrap_or_default();
         let favorite_album = self.favorite_albums.contains(&album_key);
         let mut toggle_album = false;
@@ -1140,6 +1169,24 @@ struct AlbumPalette {
 }
 
 impl AlbumPalette {
+    /// The palette for an album with cover art: the cover's dominant colour is the page, and what is
+    /// drawn on it is the complement of that colour, as a movie's page is.
+    fn poster(dominant: egui::Color32) -> Self {
+        let hue = Lab::from_srgb(dominant).complement();
+        let text = colour::readable_on(dominant, hue, 4.5);
+        let weak = colour::readable_on(dominant, hue, 3.0);
+        Self {
+            text,
+            weak,
+            accent: text,
+            row: dominant.lerp_to_gamma(text, 0.08),
+            fill: text,
+            on_fill: dominant,
+            outline: text,
+            back: dominant.lerp_to_gamma(text, 0.12),
+        }
+    }
+
     fn of(ui: &egui::Ui) -> Self {
         let v = ui.visuals();
         if v.dark_mode {

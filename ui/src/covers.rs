@@ -20,6 +20,8 @@ pub(crate) const COVER_GREY: f32 = 0.5;
 pub(crate) struct Cover {
     pub(crate) colour: egui::TextureHandle,
     pub(crate) grayscaled: egui::TextureHandle,
+    /// The colour that covers most of the cover, which a page is drawn on.
+    pub(crate) dominant: Option<egui::Color32>,
 }
 
 /// A cover's pixels, decoded and ready to upload.
@@ -50,7 +52,9 @@ fn decoded_from(image: image::RgbaImage) -> Decoded {
 
 /// Upload decoded pixels as a cover. `key` names the textures.
 pub(crate) fn upload(ctx: &egui::Context, key: &str, decoded: Decoded) -> Cover {
+    let dominant = crate::colour::dominant_colour(&decoded.colour);
     Cover {
+        dominant,
         colour: ctx.load_texture(key, decoded.colour, egui::TextureOptions::LINEAR),
         grayscaled: ctx.load_texture(
             format!("{key}-grayscaled"),

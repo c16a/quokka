@@ -796,7 +796,7 @@ impl MoviesView {
         for (path, image) in finished {
             let thumb = match image {
                 Some(image) => {
-                    if let Some(colour) = dominant_colour(&image) {
+                    if let Some(colour) = colour::dominant_colour(&image) {
                         self.accents.insert(path.clone(), colour);
                     }
                     Thumb::Ready(ctx.load_texture(
@@ -1051,49 +1051,6 @@ fn pill_button(
             .stroke(egui::Stroke::new(1.0, p.outline))
             .show(ui)
     }
-}
-
-/// The colour that covers most of a poster, found in OKLab. Near-black, near-white and grey pixels
-/// are left out, so the art's colour shows rather than its background. `None` when no colour stands
-/// out.
-fn dominant_colour(image: &egui::ColorImage) -> Option<egui::Color32> {
-    const LIGHTNESS_STEPS: usize = 6;
-    const AXIS_STEPS: usize = 8;
-    // Per bucket: how many pixels, and the sums of their lightness, a and b.
-    let mut buckets = vec![(0u32, 0f32, 0f32, 0f32); LIGHTNESS_STEPS * AXIS_STEPS * AXIS_STEPS];
-    let step = (image.pixels.len() / 4000).max(1);
-    let step_of = |value: f32, steps: usize, low: f32, high: f32| {
-        let position = ((value - low) / (high - low)) * steps as f32;
-        position.floor().clamp(0.0, (steps - 1) as f32) as usize
-    };
-    for pixel in image.pixels.iter().step_by(step) {
-        let lab = Lab::from_srgb(*pixel);
-        if !(0.15..=0.93).contains(&lab.l) || lab.a.hypot(lab.b) < 0.04 {
-            continue;
-        }
-        let index = (step_of(lab.l, LIGHTNESS_STEPS, 0.15, 0.93) * AXIS_STEPS
-            + step_of(lab.a, AXIS_STEPS, -0.3, 0.3))
-            * AXIS_STEPS
-            + step_of(lab.b, AXIS_STEPS, -0.3, 0.3);
-        let bucket = &mut buckets[index];
-        bucket.0 += 1;
-        bucket.1 += lab.l;
-        bucket.2 += lab.a;
-        bucket.3 += lab.b;
-    }
-    let (count, l, a, b) = buckets.into_iter().max_by_key(|bucket| bucket.0)?;
-    if count < 20 {
-        return None;
-    }
-    let n = count as f32;
-    Some(
-        Lab {
-            l: l / n,
-            a: a / n,
-            b: b / n,
-        }
-        .to_srgb(),
-    )
 }
 
 /// The colour `t` of the way from `a` to `b`, channel by channel, alpha included.
