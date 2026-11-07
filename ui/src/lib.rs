@@ -2,7 +2,9 @@
 
 mod albums;
 mod artists;
+mod colour;
 mod covers;
+mod flow_background;
 mod fonts;
 mod format;
 mod icons;
@@ -10,6 +12,7 @@ mod media;
 mod movies;
 mod playback;
 mod playlists;
+mod progress_writer;
 mod queue;
 mod radio;
 mod recent;
@@ -17,6 +20,8 @@ mod search;
 mod settings_view;
 mod side;
 mod slider;
+#[cfg(target_os = "macos")]
+pub mod video_gpu;
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
@@ -99,6 +104,20 @@ struct App {
     /// The playback state last written to disk, and when the state was last checked.
     session_saved: Option<Session>,
     last_save: Instant,
+    /// Saves how far the playing file has been played, once a second.
+    progress: Option<progress_writer::ProgressWriter>,
+    /// The last position saved, so an unchanged position is not written again.
+    progress_sent: Option<(PathBuf, f64)>,
+    last_progress: Instant,
+    /// Whether the video window is open. A movie that starts opens it again.
+    #[cfg(target_os = "macos")]
+    video_window_open: bool,
+    /// Whether a video was showing last frame, to see when a new one starts.
+    #[cfg(target_os = "macos")]
+    video_was_showing: bool,
+    /// Whether the movie was playing last frame, to see when playback starts again.
+    #[cfg(target_os = "macos")]
+    video_was_playing: bool,
     status: String,
     /// Whether the sidebar is open. It collapses to a narrow rail when the window is narrow.
     sidebar_open: bool,
@@ -129,6 +148,13 @@ pub fn run(paths: Paths) -> Result<(), Box<dyn std::error::Error>> {
         "Player",
         options,
         Box::new(move |cc| {
+            if let Some(render_state) = cc.wgpu_render_state.as_ref() {
+                flow_background::install(render_state);
+            }
+            #[cfg(target_os = "macos")]
+            if let Some(render_state) = cc.wgpu_render_state.as_ref() {
+                video_gpu::install(render_state);
+            }
             let app = App::new(cc.egui_ctx.clone(), paths, settings, library);
             let app: Box<dyn eframe::App> = Box::new(app);
             Ok(app)
@@ -158,6 +184,7 @@ impl App {
     fn new(ctx: egui::Context, paths: Paths, settings: Settings, library: Library) -> Self {
         let mut playback = Playback::new();
         playback.set_library(paths.db.clone());
+        let progress = progress_writer::ProgressWriter::start(&paths.db);
         let movies = movies::MoviesView::new(paths.db.clone());
         // Artist photos are cached beside the library database.
         let photo_dir = paths
@@ -227,6 +254,15 @@ impl App {
             rescan_at: None,
             session_saved: None,
             last_save: Instant::now(),
+            progress,
+            progress_sent: None,
+            last_progress: Instant::now(),
+            #[cfg(target_os = "macos")]
+            video_window_open: false,
+            #[cfg(target_os = "macos")]
+            video_was_showing: false,
+            #[cfg(target_os = "macos")]
+            video_was_playing: false,
             status: String::new(),
             sidebar_open: true,
             narrow: false,
@@ -268,11 +304,14 @@ impl App {
         if items.is_empty() {
             return;
         }
-        // If the saved current track is gone, start from the first one at the beginning.
-        let position = if index.is_some() {
-            session.position_secs
-        } else {
-            0.0
+        // If the saved current track is gone, start from the first one at the beginning. The saved
+        // progress is newer than the session's position, so it wins when there is one.
+        let position = match index.and_then(|i| items.get(i)) {
+            Some(current) => match self.library.progress(&current.path) {
+                Ok(Some(saved)) => saved.position_secs,
+                _ => session.position_secs,
+            },
+            None => 0.0,
         };
         self.playback.restore(
             items,
@@ -342,6 +381,28 @@ impl App {
     }
 
     /// Save the playback state if it has changed since the last save.
+    /// Save how far the current file has been played, if that has moved since the last save.
+    fn save_progress(&mut self) {
+        let Some(writer) = self.progress.as_ref() else {
+            return;
+        };
+        let Some((path, position, duration)) = self.playback.progress_snapshot() else {
+            return;
+        };
+        if let Some((sent_path, sent_position)) = &self.progress_sent
+            && *sent_path == path
+            && (sent_position - position).abs() < 0.05
+        {
+            return;
+        }
+        writer.save(progress_writer::Save {
+            path: path.clone(),
+            position_secs: position,
+            duration_secs: duration,
+        });
+        self.progress_sent = Some((path, position));
+    }
+
     fn save_session(&mut self) {
         let session = self.playback.session();
         if self.session_saved.as_ref() == Some(&session) {
@@ -501,6 +562,49 @@ impl App {
     }
 }
 
+impl App {
+    /// Show a movie's picture in its own window. The window opens when a movie starts or playback
+    /// starts again. Closing it pauses the movie and saves where it is, so playing again resumes there.
+    #[cfg(target_os = "macos")]
+    fn show_video_window(&mut self, ctx: &egui::Context) {
+        let showing = self.playback.video_showing();
+        let playing = self.playback.is_playing();
+        if (showing && !self.video_was_showing) || (playing && !self.video_was_playing) {
+            self.video_window_open = true;
+        }
+        self.video_was_showing = showing;
+        self.video_was_playing = playing;
+        if !showing || !self.video_window_open {
+            return;
+        }
+        let mut closed = false;
+        ctx.show_viewport_immediate(
+            egui::ViewportId::from_hash_of("player-video"),
+            egui::ViewportBuilder::default()
+                .with_title("Video")
+                .with_inner_size([960.0, 540.0]),
+            |ui, _class| {
+                if ui.ctx().input(|input| input.viewport().close_requested()) {
+                    self.video_window_open = false;
+                    closed = true;
+                }
+                egui::Panel::bottom("video_controls").show(ui, |ui| {
+                    self.playback.show_video_controls(ui);
+                });
+                egui::CentralPanel::default()
+                    .frame(egui::Frame::new().fill(egui::Color32::BLACK))
+                    .show(ui, |ui| self.playback.show_video(ui));
+            },
+        );
+        if closed {
+            // Closing the window stops the movie and frees its decoders and sound output. Where it
+            // was is kept, so playing it again resumes from there.
+            self.playback.close_video();
+            self.save_session();
+        }
+    }
+}
+
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.poll_scan(ui.ctx());
@@ -519,6 +623,10 @@ impl eframe::App for App {
         if self.last_save.elapsed() >= Duration::from_secs(2) {
             self.last_save = Instant::now();
             self.save_session();
+        }
+        if self.last_progress.elapsed() >= Duration::from_secs(1) {
+            self.last_progress = Instant::now();
+            self.save_progress();
         }
         if let Some(media) = self.media.as_mut() {
             media.handle_events(&mut self.playback);
@@ -696,6 +804,14 @@ impl eframe::App for App {
         let mut opened_album = None;
         let mut radio_action = None;
         let mut play = None;
+        let mut movie_play = None;
+        let movie_progress = if self.tab == Tab::Movies {
+            self.movies
+                .open_movie_path()
+                .and_then(|path| self.library.progress(&path).ok().flatten())
+        } else {
+            None
+        };
         // The Radio page pads its own content, so its scrollbar can reach the window edge.
         // The album page scrolls with the window's right edge, so it keeps its own padding.
         let full_width = self.tab == Tab::Radio
@@ -704,18 +820,21 @@ impl eframe::App for App {
             || (self.tab == Tab::Playlists && !self.playlists.showing_detail())
             || (self.tab == Tab::Albums && self.albums.showing_detail())
             || (self.tab == Tab::Movies && self.movies.showing_page());
+        #[cfg(target_os = "macos")]
+        self.show_video_window(&ui.ctx().clone());
         let main_frame = if full_width {
             egui::Frame::central_panel(ui.style()).inner_margin(egui::Margin::same(0))
         } else {
             egui::Frame::central_panel(ui.style()).inner_margin(egui::Margin::symmetric(32, 32))
         };
+        // A movie with cover art is drawn on the cover's dominant colour.
+        let main_frame = match (self.tab, self.movies.page_background()) {
+            (Tab::Movies, Some(colour)) => main_frame.fill(colour),
+            _ => main_frame,
+        };
         egui::CentralPanel::default()
             .frame(main_frame)
             .show(ui, |ui| match self.tab {
-                // A video plays in the movie pane, in place of the movie list or page.
-                _ if self.tab == Tab::Movies && self.playback.video_showing() => {
-                    self.playback.show_video(ui);
-                }
                 Tab::Albums => {
                     play = self.albums.show(
                         ui,
@@ -763,10 +882,12 @@ impl eframe::App for App {
                     }
                 }
                 Tab::Movies => {
-                    if let Some(request) =
-                        self.movies.show(ui, self.settings.tmdb_api_key.as_deref())
-                    {
-                        play = Some(request);
+                    if let Some(request) = self.movies.show(
+                        ui,
+                        self.settings.tmdb_api_key.as_deref(),
+                        movie_progress.clone(),
+                    ) {
+                        movie_play = Some(request);
                     }
                 }
                 Tab::Settings => {
@@ -822,6 +943,10 @@ impl eframe::App for App {
         }
         if let Some(request) = play {
             self.playback.play_queue(request.tracks, request.index);
+        }
+        if let Some((request, start_secs)) = movie_play {
+            self.playback
+                .play_from(request.tracks, request.index, start_secs);
         }
         for request in queue_requests {
             match request {

@@ -61,13 +61,11 @@ pub struct Playback {
     player: Option<RodioPlayer>,
     /// The video player: the decoders on macOS, libmpv elsewhere. Created the first time a video plays.
     video: Option<VideoPlayer>,
-    /// The frame the video texture shows, and how many frames had been shown when it was last set.
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-    video_texture: Option<egui::TextureHandle>,
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-    video_texture_shown: u64,
     /// Whether the loaded track plays through `video` instead of `player`.
     video_loaded: bool,
+    /// Where a movie was when its window closed: its path and the position, in seconds. Playing it
+    /// again starts from there.
+    video_resume: Option<(PathBuf, f64)>,
     queue: Vec<Arc<MediaItem>>,
     /// The queue in its natural order. Shuffle-off puts the upcoming tracks back in it.
     original: Vec<Arc<MediaItem>>,
@@ -144,9 +142,8 @@ impl Playback {
         Self {
             player,
             video: None,
-            video_texture: None,
-            video_texture_shown: 0,
             video_loaded: false,
+            video_resume: None,
             queue: Vec::new(),
             original: Vec::new(),
             index: 0,
@@ -199,8 +196,23 @@ impl Playback {
         self.active().map_or(PlayerState::Idle, |p| p.state())
     }
 
+    /// The current file, how far it has been played, and its length, for saving its progress. `None`
+    /// for radio, and while nothing is loaded.
+    pub fn progress_snapshot(&self) -> Option<(PathBuf, f64, Option<f64>)> {
+        if self.radio.is_some() {
+            return None;
+        }
+        let item = self.current()?;
+        let position = self.position()?.as_secs_f64();
+        let duration = self.duration().map(|d| d.as_secs_f64());
+        Some((item.path.clone(), position, duration))
+    }
+
     pub fn position(&self) -> Option<Duration> {
-        self.active().and_then(|p| p.position())
+        // A movie that is not loaded shows where it will start, from its saved position.
+        self.active()
+            .and_then(|p| p.position())
+            .or_else(|| self.resume_secs().map(Duration::from_secs_f64))
     }
 
     /// Total length: from the decoder if known, otherwise from the library.
@@ -376,6 +388,16 @@ impl Playback {
 
     /// Replace the queue with `tracks` and start playing at `index`. With shuffle on, the
     /// tracks after `index` are shuffled.
+    /// Play a movie from `start_secs` into it. Zero starts it from the beginning, and clears any
+    /// earlier saved position of the same file.
+    pub fn play_from(&mut self, tracks: Vec<MediaItem>, index: usize, start_secs: f64) {
+        self.video_resume = match tracks.get(index) {
+            Some(item) if start_secs > 0.0 => Some((item.path.clone(), start_secs)),
+            _ => None,
+        };
+        self.play_queue(tracks, index);
+    }
+
     pub fn play_queue(&mut self, tracks: Vec<MediaItem>, index: usize) {
         self.clear_radio();
         let items: Vec<Arc<MediaItem>> = tracks.into_iter().map(Arc::new).collect();
@@ -497,7 +519,9 @@ impl Playback {
         Session {
             queue: self.queue.iter().map(|item| item.path.clone()).collect(),
             index: self.index,
-            position_secs: self.position().map_or(0.0, |p| p.as_secs_f64()),
+            position_secs: self
+                .position()
+                .map_or_else(|| self.resume_secs().unwrap_or(0.0), |p| p.as_secs_f64()),
             shuffle: self.shuffle,
             repeat: self.repeat,
         }
@@ -589,6 +613,11 @@ impl Playback {
             && let Some(video) = self.video.as_mut()
         {
             video.poll();
+            if self.error.is_none()
+                && let Some(reason) = video.failure()
+            {
+                self.error = Some(format!("Could not play the video: {reason}"));
+            }
         }
         self.sync_gapless();
         self.poll_radio();
@@ -889,6 +918,13 @@ impl Playback {
             return;
         }
         let target = Duration::from_secs_f64(secs.max(0.0));
+        // A movie that is not loaded starts from here when it is played.
+        if !self.video_loaded
+            && let Some(item) = self.current()
+            && item.kind == MediaKind::Video
+        {
+            self.video_resume = Some((item.path.clone(), secs.max(0.0)));
+        }
         self.with_player(|p| p.seek(target));
         self.seek_secs = secs;
     }
@@ -921,6 +957,27 @@ impl Playback {
     }
 
     /// Stop the video if one was playing, so the audio output can take over.
+    /// The saved position of the current item, when it is the movie that was closed.
+    fn resume_secs(&self) -> Option<f64> {
+        let item = self.current()?;
+        match &self.video_resume {
+            Some((path, secs)) if *path == item.path => Some(*secs),
+            _ => None,
+        }
+    }
+
+    /// Stop the movie and release its decoders and sound output. Its position is kept, so playing
+    /// it again resumes from there.
+    pub fn close_video(&mut self) {
+        if self.video_loaded
+            && let Some(item) = self.current()
+            && let Some(position) = self.position()
+        {
+            self.video_resume = Some((item.path.clone(), position.as_secs_f64()));
+        }
+        self.leave_video();
+    }
+
     fn leave_video(&mut self) {
         if !self.video_loaded {
             return;
@@ -956,12 +1013,16 @@ impl Playback {
                 }
             }
         }
+        let start = match self.video_resume.take() {
+            Some((path, secs)) if path == item.path => secs,
+            _ => 0.0,
+        };
         self.video_loaded = true;
         let Some(video) = self.video.as_mut() else {
             return;
         };
         let loaded = video
-            .load(&item.path)
+            .load_at(&item.path, start)
             .and_then(|_| video.set_speed(self.speed))
             .and_then(|_| if autoplay { video.play() } else { Ok(()) });
         self.error = match loaded {
@@ -1035,35 +1096,63 @@ impl Playback {
         }
     }
 
-    /// Draw the video's picture, fitted to the pane. The texture is only rebuilt when the picture
-    /// has changed.
+    /// Controls for the video window, in its bottom strip: play or pause, a seek slider with the
+    /// elapsed and total times, and the volume. A seek is made when the slider is let go.
+    #[cfg(target_os = "macos")]
+    pub fn show_video_controls(&mut self, ui: &mut egui::Ui) {
+        let total = self.duration().map_or(0.0, |d| d.as_secs_f64());
+        let position = self.position().map_or(0.0, |p| p.as_secs_f64());
+        let playing = self.is_playing();
+        ui.horizontal(|ui| {
+            if ui.button(if playing { "Pause" } else { "Play" }).clicked() {
+                self.toggle();
+            }
+            let mut secs = position.min(total);
+            let slider = ui.add_enabled(
+                total > 0.0,
+                egui::Slider::new(&mut secs, 0.0..=total.max(1.0)).show_value(false),
+            );
+            if slider.drag_stopped() || slider.clicked() {
+                self.seek(secs);
+            }
+            ui.label(format!(
+                "{} / {}",
+                crate::format::clock(position),
+                crate::format::clock(total)
+            ));
+            let mut volume = f64::from(self.volume);
+            if ui
+                .add(egui::Slider::new(&mut volume, 0.0..=1.0).show_value(false))
+                .changed()
+            {
+                self.set_volume(volume as f32);
+            }
+        });
+    }
+
+    /// Draw the video's picture, fitted to the pane. The frame's planes are converted to RGB on the
+    /// GPU, as part of the window's frame, so nothing is converted on the CPU here.
     #[cfg(target_os = "macos")]
     pub fn show_video(&mut self, ui: &mut egui::Ui) {
         let shown = self.video.as_ref().map_or(0, VideoPlayer::shown);
-        if shown != self.video_texture_shown {
-            if let Some(image) = self.video.as_ref().and_then(VideoPlayer::image) {
-                let color = egui::ColorImage::from_rgba_unmultiplied(
-                    [image.width as usize, image.height as usize],
-                    &image.pixels,
-                );
-                match &mut self.video_texture {
-                    Some(texture) => texture.set(color, egui::TextureOptions::LINEAR),
-                    None => {
-                        self.video_texture = Some(ui.ctx().load_texture(
-                            "video",
-                            color,
-                            egui::TextureOptions::LINEAR,
-                        ));
-                    }
-                }
-            }
-            self.video_texture_shown = shown;
-        }
+        let frame = self.video.as_ref().and_then(|video| video.image().cloned());
         let caption = self.video.as_ref().and_then(VideoPlayer::caption);
-        match &self.video_texture {
-            Some(texture) => {
+        match frame {
+            Some(frame) => {
+                let natural = egui::vec2(frame.width.max(1) as f32, frame.height.max(1) as f32);
+                let available = ui.available_size();
+                // Shrink to fit the pane and never enlarge, as the picture was when it was a texture.
+                let scale = (available.x / natural.x)
+                    .min(available.y / natural.y)
+                    .clamp(0.0, 1.0);
+                let size = natural * scale;
                 ui.centered_and_justified(|ui| {
-                    ui.add(egui::Image::new(texture).shrink_to_fit());
+                    let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+                    ui.painter()
+                        .add(eframe::egui_wgpu::Callback::new_paint_callback(
+                            rect,
+                            crate::video_gpu::VideoPaint { frame, shown },
+                        ));
                 });
             }
             None => {
@@ -1901,9 +1990,8 @@ mod tests {
         let mut p = Playback {
             player: None,
             video: None,
-            video_texture: None,
-            video_texture_shown: 0,
             video_loaded: false,
+            video_resume: None,
             queue: Vec::new(),
             original: Vec::new(),
             index: 0,

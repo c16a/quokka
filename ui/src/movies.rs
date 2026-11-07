@@ -8,9 +8,10 @@ use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::thread;
 
+use crate::colour::{self, Lab};
 use eframe::egui;
 use player_core::tmdb::{MovieInfo, Tmdb};
-use player_core::{Library, MatchOutcome, MediaItem};
+use player_core::{Library, MatchOutcome, MediaItem, Progress, finished};
 
 use crate::albums::{PlayRequest, TILE_COVER, TILE_GAP, TILE_TEXT, hover_scroll, tile_line};
 use crate::format;
@@ -67,6 +68,8 @@ pub struct MoviesView {
     notice: Option<String>,
     /// Covers for choice cards, by TMDb poster path.
     thumbs: HashMap<String, Thumb>,
+    /// The colour that covers most of each poster, by TMDb poster path.
+    accents: HashMap<String, egui::Color32>,
     thumb_tx: Sender<(String, Option<egui::ColorImage>)>,
     thumb_rx: Receiver<(String, Option<egui::ColorImage>)>,
 }
@@ -86,6 +89,7 @@ impl MoviesView {
             choices: None,
             notice: None,
             thumbs: HashMap::new(),
+            accents: HashMap::new(),
             thumb_tx,
             thumb_rx,
         }
@@ -94,6 +98,21 @@ impl MoviesView {
     /// Whether a movie's page is open, rather than the grid.
     pub fn showing_page(&self) -> bool {
         self.selected.is_some()
+    }
+
+    /// The colour the open movie's page is drawn on: the dominant colour of its cover, once known.
+    pub fn page_background(&self) -> Option<egui::Color32> {
+        let index = self.selected?;
+        let movie = self.movies.get(index)?;
+        let path = self.poster_path(movie.id)?;
+        self.accents.get(&path).copied()
+    }
+
+    /// The file of the movie whose page is open, if one is open.
+    pub fn open_movie_path(&self) -> Option<PathBuf> {
+        self.selected
+            .and_then(|index| self.movies.get(index))
+            .map(|movie| movie.path.clone())
     }
 
     pub fn reload(&mut self, library: &Library) {
@@ -112,7 +131,13 @@ impl MoviesView {
 
     /// Draw the grid, or the open movie's page. Returns a request when a movie is asked to play.
     /// `tmdb_key` is the user's TMDb key, if they have set one.
-    pub fn show(&mut self, ui: &mut egui::Ui, tmdb_key: Option<&str>) -> Option<PlayRequest> {
+    /// `progress` is the open movie's saved position, if the page is open.
+    pub fn show(
+        &mut self,
+        ui: &mut egui::Ui,
+        tmdb_key: Option<&str>,
+        progress: Option<Progress>,
+    ) -> Option<(PlayRequest, f64)> {
         self.poll_fetch();
         self.poll_refresh();
         self.start_refresh(ui.ctx(), tmdb_key);
@@ -137,7 +162,7 @@ impl MoviesView {
                         egui::Frame::new()
                             .inner_margin(egui::Margin::symmetric(32, 32))
                             .show(ui, |ui| {
-                                play = self.page(ui, index, tmdb_key);
+                                play = self.page(ui, index, tmdb_key, progress.clone());
                             });
                     });
                 // The file information panel overlays the right of the page, above its content.
@@ -233,12 +258,33 @@ impl MoviesView {
         ui: &mut egui::Ui,
         index: usize,
         tmdb_key: Option<&str>,
-    ) -> Option<PlayRequest> {
+        progress: Option<Progress>,
+    ) -> Option<(PlayRequest, f64)> {
         let movie = self.movies[index].clone();
         let title = self.shown_title(&movie);
         let poster_path = self.poster_path(movie.id);
         let info = self.details.get(&movie.id).cloned();
-        let p = MoviePalette::of(ui);
+        let accent = poster_path
+            .as_ref()
+            .and_then(|path| self.accents.get(path))
+            .copied();
+        let p = accent.map_or_else(|| MoviePalette::of(ui), MoviePalette::poster);
+        if let Some(colour) = accent {
+            // The background is drawn on the GPU, and asks for a redraw so the strands keep moving.
+            let area = ui.clip_rect();
+            let background = crate::flow_background::FlowBackground {
+                base: colour,
+                seed: (movie.id % 1000) as f32,
+                time: ui.input(|input| input.time) as f32,
+                aspect: area.width() / area.height().max(1.0),
+            };
+            ui.painter()
+                .add(eframe::egui_wgpu::Callback::new_paint_callback(
+                    area, background,
+                ));
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(33));
+        }
         let mut play = None;
 
         ui.horizontal(|ui| {
@@ -269,7 +315,7 @@ impl MoviesView {
                     egui::Label::new(
                         egui::RichText::new(title.clone())
                             .size(40.0)
-                            .strong()
+                            .family(crate::fonts::bold_family())
                             .color(p.text),
                     )
                     .wrap(),
@@ -287,12 +333,6 @@ impl MoviesView {
                         .size(13.0)
                         .color(p.weak),
                 );
-                ui.add_space(6.0);
-                ui.horizontal_wrapped(|ui| {
-                    for chip in file_chips(&movie) {
-                        pill(ui, &chip, &p);
-                    }
-                });
                 if movie.duration_ms.is_none() {
                     ui.label(
                         egui::RichText::new("Length unknown")
@@ -301,12 +341,41 @@ impl MoviesView {
                     );
                 }
                 ui.add_space(16.0);
+                // A movie with progress offers to resume it, or to start over. A movie that
+                // ended, or was only started, plays from the beginning.
+                let resume = progress.filter(|saved| {
+                    saved.position_secs >= 1.0
+                        && !finished(saved.position_secs, saved.duration_secs)
+                });
                 ui.horizontal(|ui| {
-                    if ui.add(play_button(&p)).clicked() {
-                        play = Some(PlayRequest {
-                            tracks: vec![movie.clone()],
-                            index: 0,
-                        });
+                    let from_start = || PlayRequest {
+                        tracks: vec![movie.clone()],
+                        index: 0,
+                    };
+                    match &resume {
+                        Some(saved) => {
+                            let label =
+                                format!("Resume at {}", crate::format::clock(saved.position_secs));
+                            if pill_button(ui, &label, true, Some(icons::PLAY), &p).clicked() {
+                                play = Some((from_start(), saved.position_secs));
+                            }
+                            if pill_button(
+                                ui,
+                                "Start over",
+                                false,
+                                Some(icons::CLOCK_COUNTER_CLOCKWISE),
+                                &p,
+                            )
+                            .clicked()
+                            {
+                                play = Some((from_start(), 0.0));
+                            }
+                        }
+                        None => {
+                            if pill_button(ui, "Play", true, Some(icons::PLAY), &p).clicked() {
+                                play = Some((from_start(), 0.0));
+                            }
+                        }
                     }
                     if info_button(ui, self.info_open, &p).clicked() {
                         self.info_open = !self.info_open;
@@ -316,13 +385,10 @@ impl MoviesView {
         });
         ui.add_space(28.0);
 
-        self.info_section(ui, &movie, tmdb_key);
+        self.info_section(ui, &movie, tmdb_key, &p);
         if let Some(info) = &info {
             self.details_sections(ui, info, &p);
         }
-        section_title(ui, "Details", &p);
-        ui.add_space(6.0);
-        file_details(ui, &movie, &p);
         ui.add_space(28.0);
         ui.horizontal(|ui| {
             if info.is_some() {
@@ -417,8 +483,13 @@ impl MoviesView {
 
     /// The lookup part of a movie's page: the candidates to pick from, a lookup to start, or what the
     /// last lookup said. Saved details are shown by the page itself.
-    fn info_section(&mut self, ui: &mut egui::Ui, movie: &MediaItem, tmdb_key: Option<&str>) {
-        let p = MoviePalette::of(ui);
+    fn info_section(
+        &mut self,
+        ui: &mut egui::Ui,
+        movie: &MediaItem,
+        tmdb_key: Option<&str>,
+        p: &MoviePalette,
+    ) {
         let choosing = self.choices.as_ref().is_some_and(|(id, _)| *id == movie.id);
         if choosing {
             self.choice_list(ui, movie.id);
@@ -433,7 +504,7 @@ impl MoviesView {
                     .color(p.weak),
             );
         } else if let Some(key) = tmdb_key {
-            if ui.add(outline_button("Find details on TMDb", &p)).clicked() {
+            if ui.add(outline_button("Find details on TMDb", p)).clicked() {
                 let job = find_job(movie.id, movie.path.clone(), key.to_owned(), false);
                 self.start(ui.ctx(), movie.id, job);
             }
@@ -692,11 +763,16 @@ impl MoviesView {
         let finished: Vec<_> = self.thumb_rx.try_iter().collect();
         for (path, image) in finished {
             let thumb = match image {
-                Some(image) => Thumb::Ready(ctx.load_texture(
-                    format!("tmdb-poster-{path}"),
-                    image,
-                    egui::TextureOptions::LINEAR,
-                )),
+                Some(image) => {
+                    if let Some(colour) = dominant_colour(&image) {
+                        self.accents.insert(path.clone(), colour);
+                    }
+                    Thumb::Ready(ctx.load_texture(
+                        format!("tmdb-poster-{path}"),
+                        image,
+                        egui::TextureOptions::LINEAR,
+                    ))
+                }
                 None => Thumb::Missing,
             };
             self.thumbs.insert(path, thumb);
@@ -876,6 +952,29 @@ impl MoviePalette {
     }
 }
 
+impl MoviePalette {
+    /// The palette for a movie with cover art. The page is the cover's dominant colour, and what is
+    /// drawn on it is the complement of that colour. Text meets the WCAG contrast ratio on the page,
+    /// and the primary buttons use the dominant colour as their text.
+    fn poster(dominant: egui::Color32) -> Self {
+        let hue = Lab::from_srgb(dominant).complement();
+        let text = colour::readable_on(dominant, hue, 4.5);
+        let button = colour::readable_on(dominant, hue, 4.5);
+        let weak = colour::readable_on(dominant, hue, 3.0);
+        Self {
+            text,
+            body: text,
+            weak,
+            fill: button,
+            on_fill: dominant,
+            chip: mix(dominant, text, 0.12),
+            placeholder: mix(dominant, text, 0.08),
+            outline: text,
+            panel: dominant,
+        }
+    }
+}
+
 /// The round back button at the top of the page.
 fn back_button(ui: &mut egui::Ui, p: &MoviePalette) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(36.0, 36.0), egui::Sense::click());
@@ -885,16 +984,127 @@ fn back_button(ui: &mut egui::Ui, p: &MoviePalette) -> egui::Response {
     response
 }
 
-fn play_button(p: &MoviePalette) -> egui::Button<'static> {
-    egui::Button::new(
-        egui::RichText::new("Play")
-            .size(14.0)
-            .strong()
-            .color(p.on_fill),
+/// A rounded button for the page's actions. A filled one is the primary action, and an outlined one
+/// is secondary. Its background fades to the hover colour over 200 ms on an ease-in curve.
+fn pill_button(
+    ui: &mut egui::Ui,
+    text: &str,
+    filled: bool,
+    icon: Option<&str>,
+    p: &MoviePalette,
+) -> egui::Response {
+    const SIDE_PADDING: f32 = 22.0;
+    let (font_size, min_height): (f32, f32) = if filled { (14.0, 40.0) } else { (13.0, 36.0) };
+    let text_color = if filled { p.on_fill } else { p.body };
+    let galley = ui.painter().layout_no_wrap(
+        text.to_owned(),
+        egui::FontId::proportional(font_size),
+        text_color,
+    );
+    // Play keeps the width it had before it became a pill.
+    let min_width = if filled { 96.0 } else { 0.0 };
+    // The icon, when there is one, sits before the label with a gap between them.
+    let icon_size = if filled { 18.0 } else { 17.0 };
+    let icon_width = if icon.is_some() { icon_size + 8.0 } else { 0.0 };
+    let content_width = icon_width + galley.size().x;
+    let size = egui::vec2(
+        (content_width + 2.0 * SIDE_PADDING).max(min_width),
+        min_height.max(galley.size().y),
+    );
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    let progress =
+        ui.ctx()
+            .animate_bool_with_time(response.id.with("hover"), response.hovered(), 0.2);
+    let eased = progress * progress;
+    let fill = if filled {
+        mix(p.fill, mix(p.fill, p.on_fill, 0.15), eased)
+    } else {
+        // The outline's tint keeps its colour and only fades in its alpha. Mixing from transparent
+        // would pass through black, because egui stores transparent colours premultiplied.
+        let tint = mix(p.panel, p.text, 0.08);
+        let alpha = (eased * 255.0).round() as u8;
+        egui::Color32::from_rgba_unmultiplied(tint.r(), tint.g(), tint.b(), alpha)
+    };
+    let painter = ui.painter();
+    painter.rect_filled(rect, 999.0, fill);
+    if !filled {
+        painter.rect_stroke(
+            rect,
+            999.0,
+            egui::Stroke::new(1.0, p.outline),
+            egui::StrokeKind::Inside,
+        );
+    }
+    let left = rect.center().x - content_width / 2.0;
+    if let Some(glyph) = icon {
+        icons::paint_filled(
+            painter,
+            egui::pos2(left + icon_size / 2.0, rect.center().y),
+            glyph,
+            icon_size,
+            text_color,
+        );
+    }
+    painter.galley(
+        egui::pos2(left + icon_width, rect.center().y - galley.size().y / 2.0),
+        galley,
+        text_color,
+    );
+    response
+}
+
+/// The colour that covers most of a poster, found in OKLab. Near-black, near-white and grey pixels
+/// are left out, so the art's colour shows rather than its background. `None` when no colour stands
+/// out.
+fn dominant_colour(image: &egui::ColorImage) -> Option<egui::Color32> {
+    const LIGHTNESS_STEPS: usize = 6;
+    const AXIS_STEPS: usize = 8;
+    // Per bucket: how many pixels, and the sums of their lightness, a and b.
+    let mut buckets = vec![(0u32, 0f32, 0f32, 0f32); LIGHTNESS_STEPS * AXIS_STEPS * AXIS_STEPS];
+    let step = (image.pixels.len() / 4000).max(1);
+    let step_of = |value: f32, steps: usize, low: f32, high: f32| {
+        let position = ((value - low) / (high - low)) * steps as f32;
+        position.floor().clamp(0.0, (steps - 1) as f32) as usize
+    };
+    for pixel in image.pixels.iter().step_by(step) {
+        let lab = Lab::from_srgb(*pixel);
+        if !(0.15..=0.93).contains(&lab.l) || lab.a.hypot(lab.b) < 0.04 {
+            continue;
+        }
+        let index = (step_of(lab.l, LIGHTNESS_STEPS, 0.15, 0.93) * AXIS_STEPS
+            + step_of(lab.a, AXIS_STEPS, -0.3, 0.3))
+            * AXIS_STEPS
+            + step_of(lab.b, AXIS_STEPS, -0.3, 0.3);
+        let bucket = &mut buckets[index];
+        bucket.0 += 1;
+        bucket.1 += lab.l;
+        bucket.2 += lab.a;
+        bucket.3 += lab.b;
+    }
+    let (count, l, a, b) = buckets.into_iter().max_by_key(|bucket| bucket.0)?;
+    if count < 20 {
+        return None;
+    }
+    let n = count as f32;
+    Some(
+        Lab {
+            l: l / n,
+            a: a / n,
+            b: b / n,
+        }
+        .to_srgb(),
     )
-    .fill(p.fill)
-    .corner_radius(999.0)
-    .min_size(egui::vec2(96.0, 40.0))
+}
+
+/// The colour `t` of the way from `a` to `b`, channel by channel, alpha included.
+fn mix(a: egui::Color32, b: egui::Color32, t: f32) -> egui::Color32 {
+    let channel = |x: u8, y: u8| (f32::from(x) + (f32::from(y) - f32::from(x)) * t).round() as u8;
+    egui::Color32::from_rgba_unmultiplied(
+        channel(a.r(), b.r()),
+        channel(a.g(), b.g()),
+        channel(a.b(), b.b()),
+        channel(a.a(), b.a()),
+    )
 }
 
 fn outline_button(text: &str, p: &MoviePalette) -> egui::Button<'static> {
@@ -920,26 +1130,11 @@ fn ghost_button(text: &str, p: &MoviePalette) -> egui::Button<'static> {
     .corner_radius(999.0)
 }
 
-/// A small rounded label, such as a codec or a size.
-fn pill(ui: &mut egui::Ui, text: &str, p: &MoviePalette) {
-    egui::Frame::new()
-        .fill(p.chip)
-        .corner_radius(999.0)
-        .inner_margin(egui::Margin::symmetric(10, 4))
-        .show(ui, |ui| {
-            ui.label(
-                egui::RichText::new(text.to_owned())
-                    .size(12.0)
-                    .color(p.body),
-            );
-        });
-}
-
 fn section_title(ui: &mut egui::Ui, text: &str, p: &MoviePalette) {
     ui.label(
         egui::RichText::new(text.to_owned())
             .size(16.0)
-            .strong()
+            .family(crate::fonts::bold_family())
             .color(p.text),
     );
     ui.add_space(4.0);
@@ -957,40 +1152,6 @@ fn meta_line(movie: &MediaItem, info: Option<&MovieInfo>) -> String {
         genres,
         minutes.map(|m| format!("{m} min")),
     ])
-}
-
-/// The codec, resolution, bit depth and size, as the page's chips.
-fn file_chips(movie: &MediaItem) -> Vec<String> {
-    [
-        movie.video_codec.clone(),
-        resolution_label(movie),
-        movie.video_bit_depth.map(|bits| format!("{bits}-bit")),
-        Some(format::size(movie.size)),
-    ]
-    .into_iter()
-    .flatten()
-    .collect()
-}
-
-/// The file facts, in two columns, with a line under each row.
-fn file_details(ui: &mut egui::Ui, movie: &MediaItem, p: &MoviePalette) {
-    let rows = details(movie);
-    let half = rows.len().div_ceil(2);
-    let (left, right) = rows.split_at(half);
-    ui.columns(2, |cols| {
-        for (column, items) in [(0usize, left), (1, right)] {
-            for (label, value) in items {
-                let col = &mut cols[column];
-                col.horizontal(|ui| {
-                    ui.label(egui::RichText::new(*label).size(14.0).color(p.weak));
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(egui::RichText::new(value.clone()).size(14.0).color(p.body));
-                    });
-                });
-                col.separator();
-            }
-        }
-    });
 }
 
 /// The largest centred square of a picture, as texture coordinates.
@@ -1116,33 +1277,6 @@ fn tile_details(movie: &MediaItem) -> String {
         quality_label(movie.height),
         Some(format::size(movie.size)),
     ])
-}
-
-/// Each of the facts the movie page lists, in order. A fact the file does not give reads "Unknown".
-fn details(movie: &MediaItem) -> Vec<(&'static str, String)> {
-    let known = |value: Option<String>| value.unwrap_or_else(|| "Unknown".into());
-    vec![
-        ("Container", container_label(movie)),
-        ("Video", known(movie.video_codec.clone())),
-        ("Resolution", known(resolution_label(movie))),
-        (
-            "Bit depth",
-            known(movie.video_bit_depth.map(|bits| format!("{bits}-bit"))),
-        ),
-        (
-            "Length",
-            known(movie.duration_ms.map(format::long_duration)),
-        ),
-        ("File size", format::size(movie.size)),
-        (
-            "Location",
-            movie
-                .path
-                .parent()
-                .map(|dir| dir.display().to_string())
-                .unwrap_or_default(),
-        ),
-    ]
 }
 
 /// The file's container, by its extension. A raw OBU stream is named as one, since it holds no

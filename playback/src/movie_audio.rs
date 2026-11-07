@@ -2,14 +2,14 @@
 //! played through the output device. The samples the device has pulled give the playback clock, so
 //! the video can follow the sound.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender};
 use std::thread;
 use std::time::Duration;
 
-use player_core::video::read_audio_samples;
+use player_core::video::{AudioTrack, read_audio_samples};
 use rodio::{ChannelCount, MixerDeviceSink, Player, SampleRate, Source};
 
 use crate::PlaybackError;
@@ -49,74 +49,12 @@ impl MovieAudio {
         Self::open_at(path, 0.0)
     }
 
-    /// As `open`, but starting at `start` seconds. The decoder starts at the frame before `start`,
-    /// and the samples up to `start` are dropped, so the sound begins exactly there.
+    /// As `open`, but starting at `start` seconds. See [`AudioSource::open_at`].
     pub fn open_at(path: &Path, start: f64) -> Result<Option<Self>, PlaybackError> {
-        let Some(track) =
-            read_audio_samples(path).map_err(|error| PlaybackError::Open(error.to_string()))?
-        else {
-            return Ok(None);
-        };
-        let target = start * track.timescale as f64;
-        let first = track
-            .samples
-            .iter()
-            .rposition(|sample| (sample.presentation_time as f64) <= target)
-            .unwrap_or(0);
-        let frame_start = track.samples.get(first).map_or(0.0, |sample| {
-            sample.presentation_time as f64 / track.timescale as f64
-        });
-        // From the start of the file, the decoder's priming is dropped as well.
-        let priming = if first == 0 {
-            track.priming_frames as f64
-        } else {
-            0.0
-        };
-        let skip_frames =
-            (priming + (start - frame_start).max(0.0) * f64::from(track.sample_rate)) as usize;
-        let skip = skip_frames * track.channels as usize;
-        let stream = AudioStream {
-            codec: track.codec,
-            sample_rate: track.sample_rate,
-            channels: track.channels,
-            config: track.config.clone(),
-        };
-        let (channels, sample_rate) = (stream.channels, stream.sample_rate);
-        let (sender, messages) = mpsc::sync_channel(CHUNKS_IN_FLIGHT);
-        let path = path.to_path_buf();
-        thread::spawn(move || decode(&path, track, stream, sender, first, skip));
-
-        match messages.recv() {
-            Ok(Message::Ready) => {}
-            Ok(Message::Failed(reason)) => return Err(PlaybackError::Backend(reason)),
-            _ => return Err(PlaybackError::Backend("the audio decoder stopped".into())),
+        match AudioSource::read(path)? {
+            Some(source) => source.open_at(start).map(Some),
+            None => Ok(None),
         }
-
-        let sink = open_output(Some(sample_rate))
-            .map_err(|error| PlaybackError::Backend(error.to_string()))?;
-        let pulled = Arc::new(AtomicU64::new(0));
-        let ended = Arc::new(AtomicBool::new(false));
-        let source = ChunkSource {
-            messages,
-            current: Vec::new(),
-            position: 0,
-            channels: nonzero_channels(channels)?,
-            sample_rate: nonzero_rate(sample_rate)?,
-            pulled: Arc::clone(&pulled),
-            ended_flag: Arc::clone(&ended),
-            ended: false,
-        };
-        let player = Player::connect_new(sink.mixer());
-        player.pause();
-        player.append(source);
-        Ok(Some(MovieAudio {
-            _sink: sink,
-            player,
-            pulled,
-            ended,
-            channels,
-            sample_rate,
-        }))
     }
 
     /// Where playback is, in seconds, as the device has heard it so far.
@@ -144,6 +82,92 @@ impl MovieAudio {
     }
 }
 
+/// A movie's soundtrack, read once. Opening it at a position from here does not read the file's
+/// tables again, which is most of what a seek used to cost.
+pub struct AudioSource {
+    path: PathBuf,
+    track: Arc<AudioTrack>,
+}
+
+impl AudioSource {
+    /// Read the first audio track of `path`. `None` when the file has no audio this reads.
+    pub fn read(path: &Path) -> Result<Option<Self>, PlaybackError> {
+        let track =
+            read_audio_samples(path).map_err(|error| PlaybackError::Open(error.to_string()))?;
+        Ok(track.map(|track| AudioSource {
+            path: path.to_path_buf(),
+            track: Arc::new(track),
+        }))
+    }
+
+    /// Start the soundtrack at `start` seconds. The decoder starts at the frame before `start`, and
+    /// the samples up to `start` are dropped, so the sound begins exactly there. Paused.
+    pub fn open_at(&self, start: f64) -> Result<MovieAudio, PlaybackError> {
+        let track = &self.track;
+        let target = start * track.timescale as f64;
+        let first = track
+            .samples
+            .iter()
+            .rposition(|sample| (sample.presentation_time as f64) <= target)
+            .unwrap_or(0);
+        let frame_start = track.samples.get(first).map_or(0.0, |sample| {
+            sample.presentation_time as f64 / track.timescale as f64
+        });
+        // From the start of the file, the decoder's priming is dropped as well.
+        let priming = if first == 0 {
+            track.priming_frames as f64
+        } else {
+            0.0
+        };
+        let skip_frames =
+            (priming + (start - frame_start).max(0.0) * f64::from(track.sample_rate)) as usize;
+        let skip = skip_frames * track.channels as usize;
+        let stream = AudioStream {
+            codec: track.codec,
+            sample_rate: track.sample_rate,
+            channels: track.channels,
+            config: track.config.clone(),
+        };
+        let (channels, sample_rate) = (stream.channels, stream.sample_rate);
+        let (sender, messages) = mpsc::sync_channel(CHUNKS_IN_FLIGHT);
+        let path = self.path.clone();
+        let decoded = Arc::clone(track);
+        thread::spawn(move || decode(&path, decoded, stream, sender, first, skip));
+
+        match messages.recv() {
+            Ok(Message::Ready) => {}
+            Ok(Message::Failed(reason)) => return Err(PlaybackError::Backend(reason)),
+            _ => return Err(PlaybackError::Backend("the audio decoder stopped".into())),
+        }
+
+        let sink = open_output(Some(sample_rate))
+            .map_err(|error| PlaybackError::Backend(error.to_string()))?;
+        let pulled = Arc::new(AtomicU64::new(0));
+        let ended = Arc::new(AtomicBool::new(false));
+        let source = ChunkSource {
+            messages,
+            current: Vec::new(),
+            position: 0,
+            channels: nonzero_channels(channels)?,
+            sample_rate: nonzero_rate(sample_rate)?,
+            pulled: Arc::clone(&pulled),
+            ended_flag: Arc::clone(&ended),
+            ended: false,
+        };
+        let player = Player::connect_new(sink.mixer());
+        player.pause();
+        player.append(source);
+        Ok(MovieAudio {
+            _sink: sink,
+            player,
+            pulled,
+            ended,
+            channels,
+            sample_rate,
+        })
+    }
+}
+
 fn nonzero_channels(channels: u32) -> Result<ChannelCount, PlaybackError> {
     u16::try_from(channels)
         .ok()
@@ -160,7 +184,7 @@ fn nonzero_rate(rate: u32) -> Result<SampleRate, PlaybackError> {
 /// opened here, since decoders are not sent between threads.
 fn decode(
     path: &Path,
-    track: player_core::video::AudioTrack,
+    track: Arc<AudioTrack>,
     stream: AudioStream,
     sender: SyncSender<Message>,
     first: usize,

@@ -1,6 +1,7 @@
-//! Turning decoded pictures into RGBA pixels for display.
+//! Turning decoded pictures into pixels for display. A picture's samples are kept as they are, as
+//! Y'CbCr planes, so the display can convert them on the GPU. The conversion here is the reference
+//! that the GPU conversion is checked against.
 
-use std::borrow::Cow;
 use std::num::NonZeroUsize;
 use std::thread;
 
@@ -18,22 +19,22 @@ pub struct Rgba {
 
 /// How a picture's samples are laid out in memory.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Layout {
+pub struct Layout {
     /// Chroma planes are interleaved in one plane, rather than one plane each.
-    biplanar: bool,
+    pub biplanar: bool,
     /// Bits per sample: 8, 10 or 12.
-    bits: u8,
+    pub bits: u8,
     /// Samples above 8 bits sit in the high bits of their 16-bit words, not the low bits.
-    high_aligned: bool,
+    pub high_aligned: bool,
     /// Chroma is halved horizontally and vertically: 0 or 1 for each.
-    shift_x: u32,
-    shift_y: u32,
+    pub shift_x: u32,
+    pub shift_y: u32,
 }
 
 impl Layout {
     /// The layout a four-character code names. Planar codes come from the bundled decoders,
     /// biplanar ones from VideoToolbox.
-    fn of(code: &[u8; 4]) -> Option<Layout> {
+    pub fn of(code: &[u8; 4]) -> Option<Layout> {
         let (biplanar, bits, high_aligned, shift_x, shift_y) = match code {
             b"I420" => (false, 8, false, 1, 1),
             b"I422" => (false, 8, false, 1, 0),
@@ -62,46 +63,150 @@ impl Layout {
     }
 
     /// Bytes per sample in memory.
-    fn bytes(self) -> usize {
+    pub fn bytes(self) -> usize {
         if self.bits > 8 { 2 } else { 1 }
+    }
+
+    /// The width and height of each chroma plane, in samples.
+    pub fn chroma_size(self, width: usize, height: usize) -> (usize, usize) {
+        (
+            (width + self.shift_x as usize) >> self.shift_x,
+            (height + self.shift_y as usize) >> self.shift_y,
+        )
+    }
+
+    /// The bits to drop from a sample to get the 8-bit value the conversion works on.
+    pub fn sample_shift(self) -> u32 {
+        if self.bits == 8 {
+            0
+        } else if self.high_aligned {
+            16 - 8
+        } else {
+            u32::from(self.bits) - 8
+        }
+    }
+
+    /// The bytes a picture of this layout takes: the luma plane, then both chroma planes.
+    pub fn total_bytes(self, width: u32, height: u32) -> usize {
+        let (w, h) = (width as usize, height as usize);
+        let (cw, ch) = self.chroma_size(w, h);
+        (w * h + 2 * cw * ch) * self.bytes()
     }
 }
 
-/// The RGBA pixels of a picture, or `None` when its pixel format is not one this converts. The
-/// colour is what the stream states. Where it does not, the picture is taken as limited range, in
-/// BT.709 when it is high definition and BT.601 when it is not.
-pub fn to_rgba(picture: &Picture, colour: Colour) -> Option<Rgba> {
-    let layout = Layout::of(&picture.pixel_format)?;
-    let samples: Cow<[u8]> = match &picture.surface {
-        Surface::Cpu(bytes) => Cow::Borrowed(bytes),
-        #[cfg(target_os = "macos")]
-        Surface::Platform(buffer) => Cow::Owned(buffer.to_bytes()),
-    };
-    let matrix = colour.matrix.unwrap_or(if picture.height > 576 {
-        Matrix::Bt709
-    } else {
-        Matrix::Bt601
-    });
-    Some(convert(
-        picture.width,
-        picture.height,
-        layout,
-        &samples,
-        matrix,
-        colour.full_range.unwrap_or(false),
-    ))
+/// The numbers that turn Y'CbCr into RGB, for one matrix and range. Each sample is first scaled to
+/// 8 bits: luma by `luma_scale` after subtracting `luma_offset`, and chroma by `chroma_scale` after
+/// centring on 128. Each colour then adds its share of the samples, with green subtracting.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Coefficients {
+    pub luma_offset: f32,
+    pub luma_scale: f32,
+    pub chroma_scale: f32,
+    pub r_from_cr: f32,
+    pub g_from_cb: f32,
+    pub g_from_cr: f32,
+    pub b_from_cb: f32,
 }
 
-/// The luma weights of a matrix, `(Kr, Kb)`. The green weights follow from them.
-fn luma_weights(matrix: Matrix) -> (f32, f32) {
-    match matrix {
+/// The conversion numbers for a matrix and range.
+pub fn coefficients(matrix: Matrix, full_range: bool) -> Coefficients {
+    let (kr, kb) = match matrix {
         Matrix::Bt601 => (0.299, 0.114),
         Matrix::Bt709 => (0.2126, 0.0722),
         Matrix::Bt2020 => (0.2627, 0.0593),
+    };
+    let kg = 1.0 - kr - kb;
+    // Full range spans 0 to 255; limited range spans 16 to 235 for luma and 16 to 240 for chroma.
+    let (luma_offset, luma_scale, chroma_scale) = if full_range {
+        (0.0, 1.0 / 255.0, 1.0 / 255.0)
+    } else {
+        (16.0, 1.0 / 219.0, 1.0 / 224.0)
+    };
+    Coefficients {
+        luma_offset,
+        luma_scale,
+        chroma_scale,
+        r_from_cr: 2.0 * (1.0 - kr),
+        g_from_cb: 2.0 * kb * (1.0 - kb) / kg,
+        g_from_cr: 2.0 * kr * (1.0 - kr) / kg,
+        b_from_cb: 2.0 * (1.0 - kb),
     }
 }
 
-/// Convert Y'CbCr to RGB with the given matrix, and full or limited range.
+/// A picture's samples as Y'CbCr planes, with the colour the stream states.
+#[derive(Debug, Clone)]
+pub struct Yuv {
+    pub width: u32,
+    pub height: u32,
+    pub layout: Layout,
+    pub matrix: Matrix,
+    pub full_range: bool,
+    /// The planes one after another: luma, then the Cb and Cr planes or one interleaved CbCr plane.
+    /// Samples above 8 bits are 16-bit little-endian.
+    pub samples: Vec<u8>,
+}
+
+impl Yuv {
+    /// The picture's samples and colour. `None` when its pixel format is not one this handles, or
+    /// its samples are shorter than the format needs. Where the stream does not state the colour,
+    /// the picture is taken as limited range, in BT.709 when it is high definition and BT.601 when
+    /// it is not.
+    pub fn from_picture(picture: Picture, colour: Colour) -> Option<Yuv> {
+        let layout = Layout::of(&picture.pixel_format)?;
+        let samples = match picture.surface {
+            Surface::Cpu(bytes) => bytes,
+            #[cfg(target_os = "macos")]
+            Surface::Platform(buffer) => buffer.to_bytes(),
+        };
+        if samples.len() < layout.total_bytes(picture.width, picture.height) {
+            return None;
+        }
+        let matrix = colour.matrix.unwrap_or(if picture.height > 576 {
+            Matrix::Bt709
+        } else {
+            Matrix::Bt601
+        });
+        Some(Yuv {
+            width: picture.width,
+            height: picture.height,
+            layout,
+            matrix,
+            full_range: colour.full_range.unwrap_or(false),
+            samples,
+        })
+    }
+
+    /// The picture converted to RGBA on the CPU.
+    pub fn to_rgba(&self) -> Rgba {
+        convert(
+            self.width,
+            self.height,
+            self.layout,
+            &self.samples,
+            self.matrix,
+            self.full_range,
+        )
+    }
+}
+
+/// The RGBA pixels of a picture, converted on the CPU, or `None` as for [`Yuv::from_picture`].
+pub fn to_rgba(picture: &Picture, colour: Colour) -> Option<Rgba> {
+    let surface = match &picture.surface {
+        Surface::Cpu(bytes) => Surface::Cpu(bytes.clone()),
+        #[cfg(target_os = "macos")]
+        Surface::Platform(buffer) => Surface::Cpu(buffer.to_bytes()),
+    };
+    let copy = Picture {
+        width: picture.width,
+        height: picture.height,
+        presentation_time: picture.presentation_time,
+        pixel_format: picture.pixel_format,
+        surface,
+    };
+    Yuv::from_picture(copy, colour).map(|yuv| yuv.to_rgba())
+}
+
+/// Convert Y'CbCr samples to RGBA, with the given matrix and range.
 fn convert(
     width: u32,
     height: u32,
@@ -110,27 +215,20 @@ fn convert(
     matrix: Matrix,
     full_range: bool,
 ) -> Rgba {
-    let (kr, kb) = luma_weights(matrix);
-    let kg = 1.0 - kr - kb;
-    // How much each chroma sample adds to each colour (green subtracts).
-    let r_from_cr = 2.0 * (1.0 - kr);
-    let g_from_cb = 2.0 * kb * (1.0 - kb) / kg;
-    let g_from_cr = 2.0 * kr * (1.0 - kr) / kg;
-    let b_from_cb = 2.0 * (1.0 - kb);
-    // Full range spans 0 to 255; limited range spans 16 to 235 for luma and 16 to 240 for chroma.
-    let (luma_offset, luma_scale, chroma_scale) = if full_range {
-        (0.0, 1.0 / 255.0, 1.0 / 255.0)
-    } else {
-        (16.0, 1.0 / 219.0, 1.0 / 224.0)
-    };
+    let c = coefficients(matrix, full_range);
     let (w, h) = (width as usize, height as usize);
-    let (cw, ch) = (
-        (w + layout.shift_x as usize) >> layout.shift_x,
-        (h + layout.shift_y as usize) >> layout.shift_y,
-    );
+    if w == 0 || h == 0 {
+        return Rgba {
+            width,
+            height,
+            pixels: Vec::new(),
+        };
+    }
+    let (cw, ch) = layout.chroma_size(w, h);
     let bytes = layout.bytes();
     let luma_bytes = w * h * bytes;
     let chroma_bytes = cw * ch * bytes;
+    let shift = layout.sample_shift();
 
     // Reads one sample: the byte offset is where the sample starts, and the value is scaled to 8 bits.
     let read = |offset: usize| -> u32 {
@@ -141,22 +239,9 @@ fn convert(
             ])),
             _ => u32::from(samples.get(offset).copied().unwrap_or(0)),
         };
-        if layout.bits == 8 {
-            raw
-        } else if layout.high_aligned {
-            raw >> (16 - 8)
-        } else {
-            raw >> (layout.bits - 8)
-        }
+        raw >> shift
     };
 
-    if w == 0 || h == 0 {
-        return Rgba {
-            width,
-            height,
-            pixels: Vec::new(),
-        };
-    }
     // Converts one row into `out`, four bytes a pixel. Rows do not depend on each other.
     let convert_row = |y: usize, out: &mut [u8]| {
         for x in 0..w {
@@ -171,12 +256,12 @@ fn convert(
                     read(luma_bytes + chroma_bytes + chroma * bytes) as f32,
                 )
             };
-            let y_part = (luma - luma_offset) * luma_scale;
-            let cb = (cb - 128.0) * chroma_scale;
-            let cr = (cr - 128.0) * chroma_scale;
-            let r = 255.0 * (y_part + r_from_cr * cr);
-            let g = 255.0 * (y_part - g_from_cb * cb - g_from_cr * cr);
-            let b = 255.0 * (y_part + b_from_cb * cb);
+            let y_part = (luma - c.luma_offset) * c.luma_scale;
+            let cb = (cb - 128.0) * c.chroma_scale;
+            let cr = (cr - 128.0) * c.chroma_scale;
+            let r = 255.0 * (y_part + c.r_from_cr * cr);
+            let g = 255.0 * (y_part - c.g_from_cb * cb - c.g_from_cr * cr);
+            let b = 255.0 * (y_part + c.b_from_cb * cb);
             let at = x * 4;
             out[at] = clamp(r);
             out[at + 1] = clamp(g);
@@ -323,5 +408,12 @@ mod tests {
     #[test]
     fn unknown_formats_are_not_converted() {
         assert!(to_rgba(&picture(b"????", vec![0; 16]), Colour::default()).is_none());
+    }
+
+    #[test]
+    fn short_samples_are_refused() {
+        // A 2x2 4:2:0 picture needs 4 luma and 2 chroma bytes: 6 bytes, not 4.
+        let short = picture(b"I420", vec![0; 4]);
+        assert!(Yuv::from_picture(short, Colour::default()).is_none());
     }
 }

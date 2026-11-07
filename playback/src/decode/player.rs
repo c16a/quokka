@@ -4,13 +4,14 @@
 
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::thread;
 
 use player_core::video::{self, Chroma, Colour};
 
-use super::frames::{Rgba, to_rgba};
+use super::frames::Yuv;
 use super::{DecodeError, Packet, Picture, StreamConfig};
 
 /// Pictures held back while later ones decode, so that frames out of decode order come out in
@@ -24,7 +25,8 @@ const QUEUE_DEPTH: usize = 4;
 pub struct VideoFrame {
     /// When the frame is shown, in seconds from the start.
     pub time: f64,
-    pub image: Rgba,
+    /// The picture's Y'CbCr planes. They are converted to RGB by whoever displays them.
+    pub image: Yuv,
 }
 
 /// Why playback could not start.
@@ -55,37 +57,24 @@ pub struct FramePlayer {
     finished: bool,
 }
 
-impl FramePlayer {
-    /// Start reading and decoding the first video track of `path`. Returns once a decoder has
-    /// accepted the stream, or with the reason it did not.
-    pub fn open(path: &Path) -> Result<Self, FrameError> {
-        Self::open_at(path, 0.0)
-    }
+/// A video file's samples and format, read once. Opening it at a position from here does not read
+/// the file's tables again, which is most of what a seek used to cost.
+pub struct VideoSource {
+    path: PathBuf,
+    track: Arc<video::SampleTrack>,
+    bit_depth: u8,
+    chroma: Chroma,
+    colour: Colour,
+    duration: Option<std::time::Duration>,
+}
 
-    /// As `open`, but starting at the last keyframe at or before `start`, in seconds. Frames
-    /// before `start` still come out, so the last one at or before it is the one to show.
-    pub fn open_at(path: &Path, start: f64) -> Result<Self, FrameError> {
+impl VideoSource {
+    /// Read the first video track of `path`.
+    pub fn read(path: &Path) -> Result<Self, FrameError> {
         let track = player_core::video::read_samples(path)
             .map_err(|error| FrameError::Unreadable(error.to_string()))?
             .ok_or_else(|| FrameError::Unreadable("no video track in this file".into()))?;
         let format = video::inspect(path).unwrap_or_default();
-        let stream = StreamConfig {
-            codec: track.codec,
-            width: track.width,
-            height: track.height,
-            config: track.config.clone(),
-            timescale: track.timescale,
-            bit_depth: format.bit_depth.unwrap_or(8),
-            chroma: format.chroma.unwrap_or(Chroma::Yuv420),
-            colour: format.colour,
-        };
-        let frame_count = track.samples.len();
-        let target = start * track.timescale as f64;
-        let first = track
-            .samples
-            .iter()
-            .rposition(|sample| sample.sync && (sample.presentation_time as f64) <= target)
-            .unwrap_or(0);
         let duration = track.samples.last().and_then(|last| {
             let times: Vec<i64> = track
                 .samples
@@ -104,20 +93,69 @@ impl FramePlayer {
                 std::time::Duration::from_secs_f64(ticks as f64 / track.timescale as f64)
             })
         });
+        Ok(VideoSource {
+            path: path.to_path_buf(),
+            track: Arc::new(track),
+            bit_depth: format.bit_depth.unwrap_or(8),
+            chroma: format.chroma.unwrap_or(Chroma::Yuv420),
+            colour: format.colour,
+            duration,
+        })
+    }
+
+    /// The length of the video, when the file states its frames.
+    pub fn duration(&self) -> Option<std::time::Duration> {
+        self.duration
+    }
+
+    /// Start decoding at the last keyframe at or before `start`, in seconds.
+    pub fn open_at(&self, start: f64) -> Result<FramePlayer, FrameError> {
+        let track = Arc::clone(&self.track);
+        let stream = StreamConfig {
+            codec: track.codec,
+            width: track.width,
+            height: track.height,
+            config: track.config.clone(),
+            timescale: track.timescale,
+            bit_depth: self.bit_depth,
+            chroma: self.chroma,
+            colour: self.colour,
+        };
+        let frame_count = track.samples.len();
+        let target = start * track.timescale as f64;
+        let first = track
+            .samples
+            .iter()
+            .rposition(|sample| sample.sync && (sample.presentation_time as f64) <= target)
+            .unwrap_or(0);
         let (sender, messages) = mpsc::sync_channel(QUEUE_DEPTH);
-        let path = path.to_path_buf();
+        let path = self.path.clone();
         thread::spawn(move || run(&path, track, stream, sender, first));
 
         match messages.recv() {
             Ok(Message::Ready) => Ok(FramePlayer {
                 messages,
                 frame_count,
-                duration,
+                duration: self.duration,
                 finished: false,
             }),
             Ok(Message::Failed(reason)) => Err(FrameError::NoDecoder(reason)),
             _ => Err(FrameError::NoDecoder("the decoder stopped".into())),
         }
+    }
+}
+
+impl FramePlayer {
+    /// Start reading and decoding the first video track of `path`. Returns once a decoder has
+    /// accepted the stream, or with the reason it did not.
+    pub fn open(path: &Path) -> Result<Self, FrameError> {
+        Self::open_at(path, 0.0)
+    }
+
+    /// As `open`, but starting at the last keyframe at or before `start`, in seconds. Frames
+    /// before `start` still come out, so the last one at or before it is the one to show.
+    pub fn open_at(path: &Path, start: f64) -> Result<Self, FrameError> {
+        VideoSource::read(path)?.open_at(start)
     }
 
     /// The next frame if one is ready, without waiting. `Ok(None)` means none is ready yet, or the
@@ -158,7 +196,7 @@ impl FramePlayer {
 /// since decoders are not sent between threads.
 fn run(
     path: &Path,
-    track: video::SampleTrack,
+    track: Arc<video::SampleTrack>,
     stream: StreamConfig,
     sender: SyncSender<Message>,
     first: usize,
@@ -222,7 +260,7 @@ fn run(
 /// Convert one picture and send it. `false` means the window has gone and the worker should stop.
 fn emit(picture: Picture, timescale: f64, sender: &SyncSender<Message>, colour: Colour) -> bool {
     let time = picture.presentation_time as f64 / timescale;
-    let Some(image) = to_rgba(&picture, colour) else {
+    let Some(image) = Yuv::from_picture(picture, colour) else {
         return true;
     };
     sender

@@ -18,10 +18,11 @@ fn main() {
     loop {
         match frames.next_frame() {
             Ok(Some(frame)) => {
-                std::fs::write(output, &frame.image.pixels).expect("write");
+                let rgba = frame.image.to_rgba();
+                std::fs::write(output, &rgba.pixels).expect("write");
                 println!(
                     "first frame {}x{} written to {output}",
-                    frame.image.width, frame.image.height
+                    rgba.width, rgba.height
                 );
                 return;
             }

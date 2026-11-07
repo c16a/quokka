@@ -98,7 +98,7 @@ impl FrameView {
             }
             match self.next.take() {
                 Some(frame) if frame.time <= clock => {
-                    self.show(ctx, &frame.image);
+                    self.show(ctx, &frame.image.to_rgba());
                     self.shown += 1;
                 }
                 other => {

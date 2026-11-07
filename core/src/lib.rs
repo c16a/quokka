@@ -16,6 +16,7 @@ pub mod matching;
 mod metadata;
 mod movie_details;
 mod processing;
+mod progress;
 pub use movie_details::{CHOICE_LIMIT, MatchOutcome};
 mod playlist;
 mod radio;
@@ -42,6 +43,7 @@ pub use lyrics::{
     parse_lrc, sidecar_lyrics,
 };
 pub use playlist::PlaylistSummary;
+pub use progress::{FINISHED_WITHIN_SECS, Progress, finished};
 pub use radio::{Station, fetch_all_stations, parse_stations};
 pub use replaygain::{loudness_factor, replay_gain_factor, tag_gain};
 pub use scan::ScanStats;

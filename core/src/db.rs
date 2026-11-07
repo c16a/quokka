@@ -3,7 +3,7 @@ use rusqlite::Connection;
 use crate::Result;
 
 /// Bump when the schema changes and add a matching migration step below.
-const SCHEMA_VERSION: i64 = 17;
+const SCHEMA_VERSION: i64 = 18;
 
 /// Per-connection settings and schema migration.
 pub(crate) fn configure(conn: &Connection) -> Result<()> {
@@ -66,6 +66,9 @@ pub(crate) fn configure(conn: &Connection) -> Result<()> {
     }
     if version < 17 {
         conn.execute_batch(SCHEMA_V17)?;
+    }
+    if version < 18 {
+        conn.execute_batch(SCHEMA_V18)?;
     }
     if version != SCHEMA_VERSION {
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
@@ -293,6 +296,16 @@ ALTER TABLE media ADD COLUMN video_fps REAL;
 ALTER TABLE media ADD COLUMN video_fps_variable INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE media ADD COLUMN video_aspect REAL;
 UPDATE media SET processed = 0 WHERE kind = 'video';
+";
+
+/// How far each file was played, so that playing it again can resume from there.
+const SCHEMA_V18: &str = "
+CREATE TABLE progress (
+    path          TEXT PRIMARY KEY,
+    position_secs REAL NOT NULL,
+    duration_secs REAL,
+    updated       INTEGER NOT NULL
+);
 ";
 
 /// The tags each file had before the first edit made here, as JSON, until they are reverted.

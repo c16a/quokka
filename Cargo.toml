@@ -47,6 +47,11 @@ player-ui = { path = "ui" }
 [profile.dev.package."*"]
 opt-level = 2
 
+# The sample tables are read per frame, which is slow without optimisation. This crate is
+# optimised in debug builds, so opening a movie does not take seconds.
+[profile.dev.package.player-core]
+opt-level = 3
+
 # Performance-optimised release build (`just release`, `just cross`).
 # Slower to compile than the default, but faster at runtime and smaller.
 [profile.release]
