@@ -27,6 +27,11 @@ const MAX_RETRIES: usize = 100;
 type SettingsBuffer = [u64; 32];
 /// Room for a `Dav1dData`, which is about 100 bytes. Its first two fields are the pointer and size.
 type DataBuffer = [u64; 32];
+/// Where the timestamp sits in `Dav1dData`: the data props follow the buffer pointer, size and
+/// reference, and the timestamp is their first field.
+const DATA_PROPS_OFFSET: usize = 24;
+/// Where the timestamp sits in `Dav1dPicture`: the props follow the seven fields before them.
+const PICTURE_PROPS_OFFSET: usize = 72;
 /// Room for a `Dav1dPicture`, which is a few hundred bytes.
 type PictureBuffer = [u64; 64];
 
@@ -60,9 +65,6 @@ unsafe extern "C" {
 /// An AV1 decoding session.
 pub struct Av1 {
     context: Context,
-    /// The presentation times of the frames sent, in order. Pictures come out in presentation
-    /// order, so they take these in turn.
-    times: Vec<i64>,
     pictures: Vec<Picture>,
 }
 
@@ -96,7 +98,6 @@ impl Av1 {
         }
         let mut decoder = Av1 {
             context,
-            times: Vec::new(),
             pictures: Vec::new(),
         };
         // The configuration record is `av1C`: four header bytes, then the configuration OBUs.
@@ -107,25 +108,30 @@ impl Av1 {
                 presentation_time: 0,
                 sync: true,
             };
-            decoder.submit(&head.data)?;
-            decoder.times.clear();
+            decoder.submit(&head.data, 0)?;
         }
         Ok(decoder)
     }
 
-    /// Send one buffer of OBUs to rav1d, then collect the pictures it can output.
-    fn submit(&mut self, bytes: &[u8]) -> Result<(), DecodeError> {
+    /// Send one buffer of OBUs to rav1d, then collect the pictures it can output. The timestamp
+    /// travels with the data and comes back on the picture decoded from it.
+    fn submit(&mut self, bytes: &[u8], timestamp: i64) -> Result<(), DecodeError> {
         let mut data: DataBuffer = [0; 32];
         let data_ptr = data.as_mut_ptr().cast::<c_void>();
         // SAFETY: rav1d allocates `bytes.len()` bytes and records them in the data struct. We
-        // copy the packet into them, then hand the struct to `dav1d_send_data`, which takes
-        // ownership on success.
+        // copy the packet into them, set its timestamp, then hand the struct to
+        // `dav1d_send_data`, which takes ownership on success.
         unsafe {
             let buffer = dav1d_data_create(data_ptr, bytes.len());
             if buffer.is_null() {
                 return Err(failed("could not allocate the packet".into()));
             }
             ptr::copy_nonoverlapping(bytes.as_ptr(), buffer, bytes.len());
+            data.as_mut_ptr()
+                .cast::<u8>()
+                .add(DATA_PROPS_OFFSET)
+                .cast::<i64>()
+                .write(timestamp);
             for _ in 0..MAX_RETRIES {
                 let status = dav1d_send_data(self.context, data_ptr);
                 if status == 0 {
@@ -158,7 +164,15 @@ impl Av1 {
             }
             // SAFETY: the picture is valid until `dav1d_picture_unref`, which runs below.
             let head = unsafe { &*(picture as *const PictureHead) };
-            let converted = convert(head);
+            // SAFETY: the picture is valid until `dav1d_picture_unref`, and its props are inside it.
+            let timestamp = unsafe {
+                picture
+                    .cast::<u8>()
+                    .add(PICTURE_PROPS_OFFSET)
+                    .cast::<i64>()
+                    .read()
+            };
+            let converted = convert(head, timestamp);
             // SAFETY: we are done with the picture once its samples have been copied.
             unsafe { dav1d_picture_unref(picture) };
             self.pictures.push(converted);
@@ -167,7 +181,7 @@ impl Av1 {
 }
 
 /// Copy a picture's planes into tight rows, as the bundled decoders do.
-fn convert(head: &PictureHead) -> Picture {
+fn convert(head: &PictureHead, timestamp: i64) -> Picture {
     let width = head.width as usize;
     let height = head.height as usize;
     let bytes_per_sample = if head.bpc > 8 { 2 } else { 1 };
@@ -202,7 +216,7 @@ fn convert(head: &PictureHead) -> Picture {
     Picture {
         width: head.width as u32,
         height: head.height as u32,
-        presentation_time: 0,
+        presentation_time: timestamp,
         pixel_format: layout_code(x as u32, y as u32, head.bpc as u32),
         surface: Surface::Cpu(samples),
     }
@@ -221,8 +235,7 @@ impl VideoDecoder for Av1 {
     }
 
     fn decode(&mut self, packet: &Packet) -> Result<(), DecodeError> {
-        self.times.push(packet.presentation_time);
-        self.submit(&packet.data)
+        self.submit(&packet.data, packet.presentation_time)
     }
 
     fn finish(&mut self) -> Result<(), DecodeError> {
@@ -232,13 +245,7 @@ impl VideoDecoder for Av1 {
     }
 
     fn take_pictures(&mut self) -> Vec<Picture> {
-        let mut pictures = std::mem::take(&mut self.pictures);
-        let mut times = std::mem::take(&mut self.times);
-        times.sort_unstable();
-        for (picture, time) in pictures.iter_mut().zip(times) {
-            picture.presentation_time = time;
-        }
-        pictures
+        std::mem::take(&mut self.pictures)
     }
 }
 

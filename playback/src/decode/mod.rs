@@ -4,6 +4,8 @@
 //! does not handle.
 
 pub mod av1;
+pub mod frames;
+pub mod player;
 #[cfg(target_os = "macos")]
 pub mod videotoolbox;
 pub mod vp9;
