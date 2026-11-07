@@ -59,6 +59,9 @@ pub struct MoviesView {
     selected: Option<usize>,
     /// Whether the file information panel is open on the right of the page.
     info_open: bool,
+    /// Where the file information toggle was drawn, so a click on it does not count as a click
+    /// outside the panel.
+    info_button_rect: Option<egui::Rect>,
     /// Saved TMDb details by media id.
     details: HashMap<i64, MovieInfo>,
     /// The job in progress: the movie it is for, and where its result comes back.
@@ -87,6 +90,7 @@ impl MoviesView {
             movies: Vec::new(),
             selected: None,
             info_open: false,
+            info_button_rect: None,
             details: HashMap::new(),
             fetching: None,
             refreshing: None,
@@ -173,7 +177,7 @@ impl MoviesView {
                 // The file information panel overlays the right of the page, above its content.
                 if self.info_open {
                     let p = MoviePalette::of(ui);
-                    egui::Area::new(ui.scope_id().with("movie_file_info"))
+                    let panel = egui::Area::new(ui.scope_id().with("movie_file_info"))
                         .order(egui::Order::Foreground)
                         .fixed_pos(egui::pos2(
                             page_area.right() - INFO_PANEL_WIDTH,
@@ -187,8 +191,22 @@ impl MoviesView {
                                     ui.set_width(INFO_PANEL_WIDTH - 48.0);
                                     ui.set_height(page_area.height() - 52.0);
                                     self.info_panel(ui, index);
-                                });
+                                })
+                                .response
+                                .rect
                         });
+                    // A click anywhere else closes the panel. The toggle is excluded, since it
+                    // opens and closes the panel itself.
+                    let clicked_outside = ui.input(|i| {
+                        i.pointer.primary_clicked()
+                            && i.pointer.interact_pos().is_some_and(|pos| {
+                                !panel.inner.contains(pos)
+                                    && !self.info_button_rect.is_some_and(|r| r.contains(pos))
+                            })
+                    });
+                    if clicked_outside {
+                        self.info_open = false;
+                    }
                 }
                 play
             }
@@ -381,7 +399,9 @@ impl MoviesView {
                             }
                         }
                     }
-                    if info_button(ui, self.info_open, &p).clicked() {
+                    let toggle = info_button(ui, self.info_open, &p);
+                    self.info_button_rect = Some(toggle.rect);
+                    if toggle.clicked() {
                         self.info_open = !self.info_open;
                     }
                 });
