@@ -20,6 +20,7 @@ mod search;
 mod settings_view;
 mod side;
 mod slider;
+pub mod squircle;
 #[cfg(target_os = "macos")]
 pub mod video_gpu;
 
