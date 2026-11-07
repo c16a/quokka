@@ -1214,10 +1214,11 @@ impl Playback {
             Some(frame) => {
                 let natural = egui::vec2(frame.width.max(1) as f32, frame.height.max(1) as f32);
                 let available = ui.available_size();
-                // Shrink to fit the pane and never enlarge, as the picture was when it was a texture.
+                // Fit the picture to the pane, keeping its aspect ratio: smaller pictures grow to fill
+                // the pane (as in full screen), and larger ones shrink to fit it.
                 let scale = (available.x / natural.x)
                     .min(available.y / natural.y)
-                    .clamp(0.0, 1.0);
+                    .max(0.0);
                 let size = natural * scale;
                 ui.centered_and_justified(|ui| {
                     let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
