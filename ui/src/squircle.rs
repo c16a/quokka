@@ -296,6 +296,77 @@ mod tests {
     }
 
     #[test]
+    fn a_button_inside_a_row_is_only_as_tall_as_its_child() {
+        let ctx = egui::Context::default();
+        let padding = Padding::new(6.0, 4.0, 10.0, 8.0);
+        let mut child_height = 0.0;
+        let mut button_rect = egui::Rect::NOTHING;
+        let mut row_top = 0.0;
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            ui.add_space(40.0);
+            ui.horizontal(|ui| {
+                row_top = ui.cursor().top();
+                ui.label("before");
+                let inner = ui.add(egui::Label::new("Hello").extend());
+                child_height = inner.rect.height();
+                button_rect = ui
+                    .add(
+                        SquircleButton::new(egui::Label::new("Resume at 21:08").extend())
+                            .padding(padding),
+                    )
+                    .rect;
+            });
+        });
+        assert!(
+            button_rect.top() >= row_top - 1e-3,
+            "button starts at {} above its row at {}",
+            button_rect.top(),
+            row_top
+        );
+        assert!(
+            button_rect.height() < child_height + padding.vertical() + 40.0,
+            "button is {} tall",
+            button_rect.height()
+        );
+    }
+
+    #[test]
+    fn a_button_in_a_column_beside_a_poster_is_only_as_tall_as_its_child() {
+        let ctx = egui::Context::default();
+        let padding = Padding::new(6.0, 4.0, 10.0, 8.0);
+        let mut button_rect = egui::Rect::NOTHING;
+        let mut poster_rect = egui::Rect::NOTHING;
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            ui.horizontal(|ui| {
+                poster_rect = ui
+                    .allocate_exact_size(egui::vec2(160.0, 240.0), egui::Sense::hover())
+                    .0;
+                ui.vertical(|ui| {
+                    ui.label("MOVIE");
+                    ui.add_space(16.0);
+                    ui.horizontal(|ui| {
+                        button_rect = ui
+                            .add(
+                                SquircleButton::new(egui::Label::new("Resume at 21:08").extend())
+                                    .padding(padding),
+                            )
+                            .rect;
+                        ui.add(SquircleButton::new(egui::Label::new("Start over").extend()));
+                    });
+                });
+            });
+        });
+        assert!(
+            button_rect.top() > poster_rect.top() + 20.0,
+            "button rect {button_rect:?} starts above the column"
+        );
+        assert!(
+            button_rect.height() < 60.0,
+            "button rect {button_rect:?} is too tall"
+        );
+    }
+
+    #[test]
     fn the_button_is_its_child_plus_the_padding() {
         let ctx = egui::Context::default();
         let padding = Padding::new(6.0, 4.0, 10.0, 8.0);
