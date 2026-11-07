@@ -6,6 +6,7 @@ use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
 use super::Codec;
+use super::audio::{AudioCodec, AudioTrack, aac_format, ac3_from_dac3, descriptor, eac3_from_dec3};
 use super::bmff::{be, boxes, child, find_top, full_box};
 use super::mp4::{codec_of, handler, sample_entry, timescale};
 use crate::Result;
@@ -101,7 +102,7 @@ fn track(moov: &[u8]) -> Option<SampleTrack> {
 }
 
 /// The size of every sample: a fixed size, or one entry per sample in `stsz`.
-fn sample_sizes(stbl: &[u8]) -> Option<Vec<u32>> {
+pub(crate) fn sample_sizes(stbl: &[u8]) -> Option<Vec<u32>> {
     let (_, rest) = full_box(child(stbl, b"stsz")?)?;
     let fixed = be::<4>(rest, 0)?;
     let count = be::<4>(rest, 4)? as usize;
@@ -115,7 +116,7 @@ fn sample_sizes(stbl: &[u8]) -> Option<Vec<u32>> {
 
 /// The file offset of every sample, from the chunk offsets (`stco` or `co64`) and the
 /// sample-to-chunk runs (`stsc`).
-fn sample_offsets(stbl: &[u8], sizes: &[u32]) -> Option<Vec<u64>> {
+pub(crate) fn sample_offsets(stbl: &[u8], sizes: &[u32]) -> Option<Vec<u64>> {
     let chunks = chunk_offsets(stbl)?;
     let (_, rest) = full_box(child(stbl, b"stsc")?)?;
     let runs = be::<4>(rest, 0)? as usize;
@@ -164,7 +165,7 @@ fn chunk_offsets(stbl: &[u8]) -> Option<Vec<u64>> {
 }
 
 /// The decode time of every sample, from `stts`.
-fn decode_times(stbl: &[u8], count: usize) -> Option<Vec<i64>> {
+pub(crate) fn decode_times(stbl: &[u8], count: usize) -> Option<Vec<i64>> {
     let (_, rest) = full_box(child(stbl, b"stts")?)?;
     let runs = be::<4>(rest, 0)? as usize;
     let mut times = Vec::with_capacity(count);
@@ -218,4 +219,73 @@ fn sync_samples(stbl: &[u8]) -> Option<Vec<u32>> {
     (0..count)
         .map(|index| be::<4>(rest, 4 + 4 * index).map(|number| number as u32))
         .collect()
+}
+
+/// The first audio track of an MP4, Matroska or WebM file. `None` when there is none, or when its
+/// codec is not one this reads.
+pub fn read_audio_samples(path: &Path) -> Result<Option<AudioTrack>> {
+    let mut file = File::open(path)?;
+    let mut magic = [0u8; 4];
+    let is_ebml = file.read(&mut magic)? == 4 && magic == super::EBML_MAGIC;
+    file.seek(SeekFrom::Start(0))?;
+    if is_ebml {
+        return Ok(super::matroska::read_audio(&mut file)?);
+    }
+    let Some(moov) = find_top(&mut file, b"moov")? else {
+        return Ok(None);
+    };
+    Ok(audio_track(&moov))
+}
+
+fn audio_track(moov: &[u8]) -> Option<AudioTrack> {
+    let trak = boxes(moov)
+        .filter(|(kind, _)| kind == b"trak")
+        .map(|(_, body)| body)
+        .find(|trak| handler(trak) == Some(*b"soun"))?;
+    let mdia = child(trak, b"mdia")?;
+    let timescale = timescale(child(mdia, b"mdhd")?)?;
+    let stbl = child(child(mdia, b"minf")?, b"stbl")?;
+    let (kind, entry) = sample_entry(stbl)?;
+    // An audio sample entry: 28 bytes of fixed fields, then the codec's own boxes.
+    let children = entry.get(28..)?;
+    let (codec, config, sample_rate, channels) = match &kind {
+        b"mp4a" => {
+            let (_, esds) = full_box(child(children, b"esds")?)?;
+            let config = descriptor(esds, 0x05)?.to_vec();
+            let (rate, channels) = aac_format(&config)?;
+            (AudioCodec::Aac, config, rate, channels)
+        }
+        b"ac-3" => {
+            let record = child(children, b"dac3")?;
+            let (rate, channels) = ac3_from_dac3(record)?;
+            (AudioCodec::Ac3, record.to_vec(), rate, channels)
+        }
+        b"ec-3" => {
+            let record = child(children, b"dec3")?;
+            let (rate, channels) = eac3_from_dec3(record)?;
+            (AudioCodec::Eac3, record.to_vec(), rate, channels)
+        }
+        _ => return None,
+    };
+
+    let sizes = sample_sizes(stbl)?;
+    let offsets = sample_offsets(stbl, &sizes)?;
+    let times = decode_times(stbl, sizes.len())?;
+    let samples = (0..sizes.len())
+        .map(|index| Sample {
+            offset: offsets[index],
+            size: sizes[index],
+            decode_time: times[index],
+            presentation_time: times[index],
+            sync: true,
+        })
+        .collect();
+    Some(AudioTrack {
+        codec,
+        sample_rate,
+        channels,
+        config,
+        timescale,
+        samples,
+    })
 }

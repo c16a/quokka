@@ -3,6 +3,7 @@
 //! decodes it: the operating system's decoder first, then a bundled decoder for what the system
 //! does not handle.
 
+pub mod audio;
 pub mod av1;
 pub mod frames;
 pub mod player;

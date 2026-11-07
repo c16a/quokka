@@ -4,6 +4,7 @@
 
 use std::io::{self, Read, Seek, SeekFrom};
 
+use super::audio::{AudioCodec, AudioTrack, aac_format, ac3_from_frame, eac3_from_frame};
 use super::ebml::{elements, text, uint, vint};
 use super::samples::{Sample, SampleTrack};
 use super::{
@@ -37,6 +38,11 @@ const CHROMA_SUBSAMPLING_VERT: u64 = 0x55B4;
 
 /// The TrackType of a video track.
 const VIDEO_TRACK: u64 = 1;
+/// The TrackType of an audio track.
+const AUDIO_TRACK: u64 = 2;
+const AUDIO: u64 = 0xE1;
+const SAMPLING_FREQUENCY: u64 = 0xB5;
+const CHANNELS: u64 = 0x9F;
 
 /// The default timestamp scale: each timestamp tick is a millisecond.
 const DEFAULT_TIMESTAMP_SCALE: u64 = 1_000_000;
@@ -46,19 +52,21 @@ const MAX_BLOCKS: usize = 240;
 
 /// The fields of one track that the format needs.
 #[derive(Default)]
-struct Track {
-    number: u64,
-    kind: u64,
-    codec_id: String,
-    private: Vec<u8>,
-    default_duration: Option<u64>,
-    pixel_width: Option<u64>,
-    pixel_height: Option<u64>,
-    display_width: Option<u64>,
-    display_height: Option<u64>,
-    bits_per_channel: Option<u64>,
-    chroma_horizontal: Option<u64>,
-    chroma_vertical: Option<u64>,
+pub(crate) struct Track {
+    pub(crate) number: u64,
+    pub(crate) kind: u64,
+    pub(crate) codec_id: String,
+    pub(crate) private: Vec<u8>,
+    pub(crate) default_duration: Option<u64>,
+    pub(crate) pixel_width: Option<u64>,
+    pub(crate) pixel_height: Option<u64>,
+    pub(crate) display_width: Option<u64>,
+    pub(crate) display_height: Option<u64>,
+    pub(crate) bits_per_channel: Option<u64>,
+    pub(crate) chroma_horizontal: Option<u64>,
+    pub(crate) chroma_vertical: Option<u64>,
+    pub(crate) sampling_frequency: Option<f64>,
+    pub(crate) channels: Option<u64>,
 }
 
 /// The format of the first video track in a Matroska or WebM file, given its first bytes.
@@ -138,6 +146,15 @@ fn parse_track(body: &[u8]) -> Track {
             CODEC_PRIVATE => track.private = value.to_vec(),
             DEFAULT_DURATION => track.default_duration = Some(uint(value)),
             VIDEO => parse_video(value, &mut track),
+            AUDIO => {
+                for (audio_id, audio_value) in elements(value) {
+                    match audio_id {
+                        SAMPLING_FREQUENCY => track.sampling_frequency = Some(float(audio_value)),
+                        CHANNELS => track.channels = Some(uint(audio_value)),
+                        _ => {}
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -167,6 +184,15 @@ fn parse_video(body: &[u8], track: &mut Track) {
             }
             _ => {}
         }
+    }
+}
+
+/// A float element body: four bytes or eight, big-endian.
+fn float(body: &[u8]) -> f64 {
+    match body.len() {
+        4 => f64::from(f32::from_be_bytes([body[0], body[1], body[2], body[3]])),
+        8 => f64::from_be_bytes(body.try_into().unwrap_or([0; 8])),
+        _ => 0.0,
     }
 }
 
@@ -273,17 +299,21 @@ struct Header {
     size: Option<u64>,
 }
 
-/// The samples of the video track of a Matroska or WebM file. The file is read in one pass over
-/// its element headers. Clusters and block groups are entered rather than skipped, so only the
+/// The samples of the first track of `kind` (1 for video, 2 for audio) in a Matroska or WebM file,
+/// with the track they belong to and the time scale of their times. The file is read in one pass
+/// over its element headers: clusters and block groups are entered rather than skipped, so only the
 /// headers are read, plus the small `Info` and `Tracks` elements. Each block is one sample, and its
 /// bytes stay where they are in the file.
 ///
 /// Blocks carry only presentation times, so the decode time is set to the presentation time. That
 /// is correct for streams without reordered frames, which covers the VP9 and AV1 fixtures.
-pub(crate) fn read_samples<R: Read + Seek>(file: &mut R) -> io::Result<Option<SampleTrack>> {
+pub(crate) fn read_track<R: Read + Seek>(
+    file: &mut R,
+    kind: u64,
+) -> io::Result<Option<(Track, u64, Vec<Sample>)>> {
     let end = file.seek(SeekFrom::End(0))?;
     let mut scale = DEFAULT_TIMESTAMP_SCALE;
-    let mut video: Option<Track> = None;
+    let mut selected: Option<Track> = None;
     let mut cluster_time = 0i64;
     let mut samples = Vec::new();
     let mut position = 0u64;
@@ -310,16 +340,16 @@ pub(crate) fn read_samples<R: Read + Seek>(file: &mut R) -> io::Result<Option<Sa
             }
             TRACKS => {
                 let tracks = read_span(file, body, body_end)?;
-                video = elements(&tracks)
+                selected = elements(&tracks)
                     .filter(|(id, _)| *id == TRACK_ENTRY)
                     .map(|(_, entry)| parse_track(entry))
-                    .find(|track| track.kind == VIDEO_TRACK);
+                    .find(|track| track.kind == kind);
             }
             TIMESTAMP => {
                 cluster_time = uint(&read_span(file, body, body_end)?) as i64;
             }
             SIMPLE_BLOCK | BLOCK => {
-                if let Some(track) = &video {
+                if let Some(track) = &selected {
                     let head = read_span(file, body, (body + 12).min(body_end))?;
                     if let Some((number, used)) = vint(&head, false)
                         && number == track.number
@@ -348,7 +378,13 @@ pub(crate) fn read_samples<R: Read + Seek>(file: &mut R) -> io::Result<Option<Sa
         position = body_end;
     }
 
-    let Some(track) = video else {
+    let timescale = 1_000_000_000u64 / scale;
+    Ok(selected.map(|track| (track, timescale, samples)))
+}
+
+/// The samples of the video track of a Matroska or WebM file, as decoders need them.
+pub(crate) fn read_samples<R: Read + Seek>(file: &mut R) -> io::Result<Option<SampleTrack>> {
+    let Some((track, timescale, samples)) = read_track(file, VIDEO_TRACK)? else {
         return Ok(None);
     };
     let (Some(codec), Some(width), Some(height)) = (
@@ -358,11 +394,47 @@ pub(crate) fn read_samples<R: Read + Seek>(file: &mut R) -> io::Result<Option<Sa
     ) else {
         return Ok(None);
     };
-    let timescale = 1_000_000_000u64 / scale;
     Ok(Some(SampleTrack {
         codec,
         width: width as u32,
         height: height as u32,
+        config: track.private,
+        timescale,
+        samples,
+    }))
+}
+
+/// The first audio track of a Matroska or WebM file. The format comes from the track's own
+/// fields where it has them, and otherwise from the first frame.
+pub(crate) fn read_audio<R: Read + Seek>(file: &mut R) -> io::Result<Option<AudioTrack>> {
+    let Some((track, timescale, samples)) = read_track(file, AUDIO_TRACK)? else {
+        return Ok(None);
+    };
+    let codec = match track.codec_id.as_str() {
+        "A_AAC" => AudioCodec::Aac,
+        "A_AC3" => AudioCodec::Ac3,
+        "A_EAC3" => AudioCodec::Eac3,
+        _ => return Ok(None),
+    };
+    let Some(first) = samples.first().copied() else {
+        return Ok(None);
+    };
+    let mut head = vec![0u8; 16.min(first.size as usize)];
+    file.seek(SeekFrom::Start(first.offset))?;
+    file.read_exact(&mut head)?;
+    let format = match codec {
+        AudioCodec::Aac => aac_format(&track.private)
+            .or_else(|| Some((track.sampling_frequency? as u32, track.channels? as u32))),
+        AudioCodec::Ac3 => ac3_from_frame(&head),
+        AudioCodec::Eac3 => eac3_from_frame(&head),
+    };
+    let Some((sample_rate, channels)) = format else {
+        return Ok(None);
+    };
+    Ok(Some(AudioTrack {
+        codec,
+        sample_rate,
+        channels,
         config: track.private,
         timescale,
         samples,

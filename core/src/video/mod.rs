@@ -9,6 +9,7 @@
 //! colour depth and chroma subsampling. The container wins for the display aspect ratio and the
 //! frame rate, because those are what players show.
 
+mod audio;
 mod av1;
 mod bits;
 mod bmff;
@@ -21,7 +22,8 @@ mod raw;
 mod samples;
 mod vp9;
 
-pub use samples::{Sample, SampleTrack, read_samples};
+pub use audio::{AudioCodec, AudioTrack};
+pub use samples::{Sample, SampleTrack, read_audio_samples, read_samples};
 
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
