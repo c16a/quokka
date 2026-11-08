@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    # Quokka is macOS-only: the decoders, the GPU import and the media controls use macOS frameworks.
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      # rust-toolchain.toml pins the toolchain, so rustup installs exactly that version.
+      - name: Install just
+        run: brew install just
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting, clippy and tests
+        run: just check
+
+  # Runs alongside `check`: no `needs`, so the two jobs start together.
+  codeql:
+    name: CodeQL (rust)
+    runs-on: macos-26
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+
+      # Rust is extracted without a build step, so no build-mode is set. The extended query
+      # suite adds checks beyond the default security queries.
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: rust
+          queries: security-extended
+
+      - uses: github/codeql-action/analyze@v4
+        with:
+          category: /language:rust
