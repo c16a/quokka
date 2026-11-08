@@ -59,6 +59,9 @@ pub enum Codec {
     Av1,
     H264,
     Hevc,
+    /// Apple ProRes, an intermediate codec: all its flavours are one variant, and the sample entry
+    /// names the flavour.
+    ProRes,
     Vp9,
 }
 
@@ -69,6 +72,7 @@ impl Codec {
             Codec::Av1 => "AV1",
             Codec::H264 => "H.264",
             Codec::Hevc => "HEVC",
+            Codec::ProRes => "Apple ProRes",
             Codec::Vp9 => "VP9",
         }
     }
@@ -338,6 +342,7 @@ pub(crate) fn codec_headers(codec: Codec, config: &[u8]) -> Headers {
         Codec::Hevc => hevc::from_hvcc(config),
         Codec::Av1 => av1::from_av1c(config),
         Codec::Vp9 => vp9::from_vpcc(config),
+        Codec::ProRes => None,
     };
     parsed.unwrap_or_default()
 }

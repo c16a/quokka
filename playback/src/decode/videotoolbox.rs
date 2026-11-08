@@ -1,5 +1,5 @@
-//! VideoToolbox, Apple's operating-system decoder. It handles H.264 and HEVC on the Macs this runs
-//! on, and AV1 on Macs with hardware AV1 decoding. The decoder is the system's own. This file calls
+//! VideoToolbox, Apple's operating-system decoder. It handles H.264, HEVC and ProRes on the Macs this
+//! runs on, and AV1 on Macs with hardware AV1 decoding. The decoder is the system's own. This file calls
 //! it through the C interface of the system frameworks, so it needs no third-party code.
 
 use std::ffi::c_void;
@@ -21,6 +21,8 @@ const TIME_FLAG_VALID: u32 = 1;
 const CODEC_H264: u32 = u32::from_be_bytes(*b"avc1");
 const CODEC_HEVC: u32 = u32::from_be_bytes(*b"hvc1");
 const CODEC_AV1: u32 = u32::from_be_bytes(*b"av01");
+const CODEC_PRORES_422: u32 = u32::from_be_bytes(*b"apcn");
+const CODEC_PRORES_4444: u32 = u32::from_be_bytes(*b"ap4h");
 
 /// A Core Media time: a count of ticks, and how many ticks make a second.
 #[repr(C)]
@@ -307,6 +309,8 @@ impl VideoToolbox {
             // AV1 only on machines whose hardware decodes it. Elsewhere VideoToolbox would decode in
             // software, which the software decoder does already.
             Codec::Av1 if Self::hardware_supported(Codec::Av1) => (CODEC_AV1, "av1C"),
+            // ProRes has no configuration record, so its format description carries no extension.
+            Codec::ProRes => (prores_codec(stream.chroma), ""),
             other => {
                 return Err(refused(format!("{} is not decoded here", other.name())));
             }
@@ -377,6 +381,15 @@ impl VideoToolbox {
     }
 }
 
+/// The codec type of a ProRes stream: the 4444 flavour for 4:4:4, otherwise the 422 one. VideoToolbox reads
+/// the flavour from the bitstream, so this only has to name the family.
+fn prores_codec(chroma: Chroma) -> u32 {
+    match chroma {
+        Chroma::Yuv444 => CODEC_PRORES_4444,
+        _ => CODEC_PRORES_422,
+    }
+}
+
 /// The pixel format to ask VideoToolbox for. Its own format for 10-bit pictures is not laid out
 /// in memory the way the frameworks describe, so a linear format is requested and VideoToolbox
 /// converts into it. `None` keeps the default for 8-bit 4:2:0.
@@ -435,6 +448,23 @@ unsafe fn format_description(
 ) -> Result<Handle, DecodeError> {
     // SAFETY: each object is created here, used for the call, and released before returning.
     unsafe {
+        if record_key.is_empty() {
+            let mut format = ptr::null_mut();
+            let status = CMVideoFormatDescriptionCreate(
+                ptr::null(),
+                codec,
+                stream.width as i32,
+                stream.height as i32,
+                ptr::null_mut(),
+                &mut format,
+            );
+            if status != 0 || format.is_null() {
+                return Err(refused(format!(
+                    "CMVideoFormatDescriptionCreate returned {status}"
+                )));
+            }
+            return Ok(format);
+        }
         let record = CFDataCreate(
             ptr::null(),
             stream.config.as_ptr(),

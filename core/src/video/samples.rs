@@ -65,14 +65,16 @@ fn track(moov: &[u8]) -> Option<SampleTrack> {
     let stbl = child(child(mdia, b"minf")?, b"stbl")?;
     let (kind, entry) = sample_entry(stbl)?;
     let codec = codec_of(&kind)?;
-    let config_box: &[u8; 4] = match codec {
-        Codec::H264 => b"avcC",
-        Codec::Hevc => b"hvcC",
-        Codec::Vp9 => b"vpcC",
-        Codec::Av1 => b"av1C",
-    };
     let children = entry.get(78..)?;
-    let config = child(children, config_box)?.to_vec();
+    // ProRes has no configuration record; its sample entry is enough.
+    let config = match codec {
+        Codec::H264 => child(children, b"avcC")?,
+        Codec::Hevc => child(children, b"hvcC")?,
+        Codec::Vp9 => child(children, b"vpcC")?,
+        Codec::Av1 => child(children, b"av1C")?,
+        Codec::ProRes => &[],
+    }
+    .to_vec();
 
     let sizes = sample_sizes(stbl)?;
     let offsets = sample_offsets(stbl, &sizes)?;

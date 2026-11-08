@@ -5,8 +5,8 @@ use std::io::{Read, Seek};
 
 use super::bmff::{be, boxes, child, find_top, full_box};
 use super::{
-    Codec, Colour, Container, Found, FrameRate, Matrix, VideoFormat, assemble, codec_headers,
-    specified_code,
+    Chroma, Codec, Colour, Container, Found, FrameRate, Headers, Matrix, VideoFormat, assemble,
+    codec_headers, specified_code,
 };
 
 /// The format of the first video track in an MP4 or MOV file.
@@ -47,14 +47,19 @@ fn first_video(moov: &[u8]) -> Option<Found> {
         ..Found::default()
     };
     if let Some(codec) = codec {
-        let config = match codec {
-            Codec::H264 => b"avcC",
-            Codec::Hevc => b"hvcC",
-            Codec::Av1 => b"av1C",
-            Codec::Vp9 => b"vpcC",
-        };
-        if let Some(record) = child(children, config) {
-            found.headers = codec_headers(codec, record);
+        if codec == Codec::ProRes {
+            found.headers = prores_headers(&kind);
+        } else {
+            let config = match codec {
+                Codec::H264 => b"avcC",
+                Codec::Hevc => b"hvcC",
+                Codec::Av1 => b"av1C",
+                Codec::Vp9 => b"vpcC",
+                Codec::ProRes => unreachable!("handled above"),
+            };
+            if let Some(record) = child(children, config) {
+                found.headers = codec_headers(codec, record);
+            }
         }
     }
     found.display_aspect = display_aspect(trak);
@@ -64,6 +69,20 @@ fn first_video(moov: &[u8]) -> Option<Found> {
     }
     found.frame_rate = frame_rate(moov, stbl, timescale, track_id(trak));
     Some(found)
+}
+
+/// ProRes has no configuration record. Its sample entry names the flavour, which gives the chroma
+/// subsampling. The flavours here are 10-bit; the decoder reads the real depth from the stream.
+fn prores_headers(kind: &[u8; 4]) -> Headers {
+    let chroma = match kind {
+        b"ap4h" | b"ap4x" => Chroma::Yuv444,
+        _ => Chroma::Yuv422,
+    };
+    Headers {
+        bit_depth: Some(10),
+        chroma: Some(chroma),
+        ..Headers::default()
+    }
 }
 
 /// The handler type of a track's media, such as `vide`.
@@ -93,6 +112,7 @@ pub(crate) fn codec_of(kind: &[u8; 4]) -> Option<Codec> {
         b"hvc1" | b"hev1" => Some(Codec::Hevc),
         b"av01" => Some(Codec::Av1),
         b"vp09" => Some(Codec::Vp9),
+        b"apch" | b"apcn" | b"apcs" | b"apco" | b"ap4h" | b"ap4x" => Some(Codec::ProRes),
         _ => None,
     }
 }
