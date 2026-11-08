@@ -40,6 +40,35 @@ jobs:
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: just release
 
+  # Linux: the same steps as `check`, on Ubuntu. It runs alongside `check`, with no `needs`.
+  check-linux:
+    name: Check (Linux)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      # libmpv is the playback backend, ALSA is the audio output, and the rest are the windowing and D-Bus headers.
+      - name: Install just and the system libraries
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y just libmpv-dev libasound2-dev libclang-dev libdbus-1-dev libssl-dev libwayland-dev libxkbcommon-dev libx11-dev libxcursor-dev libxi-dev libxrandr-dev libgl-dev libegl-dev
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting, clippy and tests
+        run: just check
+
+      # Pull requests: a debug build of the whole workspace.
+      - name: Build the workspace
+        if: github.event_name == 'pull_request'
+        run: just build
+
+      # After a merge to main: a release build.
+      - name: Release build
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: just release
+
   # Runs alongside `check`: no `needs`, so the two jobs start together.
   codeql:
     name: CodeQL (rust)
