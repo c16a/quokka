@@ -1,5 +1,6 @@
 //! Recently added and recently played albums, each as a row of album tiles.
 
+use crate::strings;
 use eframe::egui;
 use quokka_core::{AlbumSummary, Library, Recent};
 
@@ -35,18 +36,18 @@ impl RecentView {
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                crate::fonts::page_title(ui, "Recent");
+                crate::fonts::page_title(ui, strings::RECENT);
                 ui.add_space(12.0);
                 let rows = [
                     (
-                        "Recently added",
+                        strings::RECENTLY_ADDED,
                         &self.added,
-                        "Albums you add to the library appear here.",
+                        strings::ALBUMS_YOU_ADD_TO_THE_LIBRARY,
                     ),
                     (
-                        "Recently played",
+                        strings::RECENTLY_PLAYED,
                         &self.played,
-                        "Albums you play appear here.",
+                        strings::ALBUMS_YOU_PLAY_APPEAR_HERE,
                     ),
                 ];
                 for (title, list, empty) in rows {

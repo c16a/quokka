@@ -1,3 +1,4 @@
+use crate::strings;
 use quokka_core::MediaItem;
 
 /// Display title: the tag title, or the file name without extension.
@@ -16,9 +17,12 @@ pub fn title(item: &MediaItem) -> String {
 pub fn long_duration(ms: i64) -> String {
     let minutes = ms.max(0) / 60_000;
     if minutes >= 60 {
-        format!("{} h {} min", minutes / 60, minutes % 60)
+        strings::fill(
+            strings::DURATION_HOURS_MINUTES,
+            &[&(minutes / 60).to_string(), &(minutes % 60).to_string()],
+        )
     } else {
-        format!("{minutes} min")
+        strings::fill(strings::DURATION_MINUTES, &[&minutes.to_string()])
     }
 }
 
@@ -84,8 +88,8 @@ pub fn kbps(value: i64) -> String {
 /// Channel layout as a word where there is one, otherwise a count.
 pub fn channels(count: i64) -> String {
     match count {
-        1 => "Mono".into(),
-        2 => "Stereo".into(),
+        1 => strings::MONO.into(),
+        2 => strings::STEREO.into(),
         n => format!("{n} ch"),
     }
 }

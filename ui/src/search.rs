@@ -1,3 +1,4 @@
+use crate::strings;
 use eframe::egui;
 use quokka_core::{AlbumSummary, Library, MediaItem, PlaylistSummary, SongQuery, Station};
 
@@ -58,7 +59,7 @@ impl SearchView {
         let ctx = ui.ctx().clone();
         let mut outcome = SearchOutcome::default();
 
-        crate::fonts::page_title(ui, "Search");
+        crate::fonts::page_title(ui, strings::SEARCH);
         ui.add_space(8.0);
         egui::Frame::new()
             .fill(search_fill(ui))
@@ -70,7 +71,7 @@ impl SearchView {
                     search_icon(ui);
                     ui.add_space(6.0);
                     let field = crate::squircle::SquircleTextField::singleline(&mut self.query)
-                        .hint_text("Search albums, songs, playlists and stations")
+                        .hint_text(strings::SEARCH_ALBUMS_SONGS_PLAYLISTS_AND_STATIONS)
                         .desired_width(f32::INFINITY)
                         .show(ui);
                     if std::mem::take(&mut self.focus_pending) {
@@ -86,7 +87,7 @@ impl SearchView {
             self.searched = query.clone();
         }
         if query.is_empty() {
-            ui.weak("Search for an album, a song, a playlist or a station. Filters: artist:, album:, genre:, year:, format:flac.");
+            ui.weak(strings::SEARCH_FOR_AN_ALBUM_A_SONG);
             return outcome;
         }
         if self.station_hits.is_empty()
@@ -94,7 +95,10 @@ impl SearchView {
             && self.album_hits.is_empty()
             && self.songs.is_empty()
         {
-            ui.weak(format!("No results for \"{query}\"."));
+            ui.weak(strings::fill(
+                strings::NO_RESULTS_FOR,
+                &[&query.to_string()],
+            ));
             return outcome;
         }
 
@@ -102,7 +106,7 @@ impl SearchView {
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 if !self.playlist_hits.is_empty() {
-                    ui.heading("Playlists");
+                    ui.heading(strings::PLAYLISTS);
                     ui.add_space(8.0);
                     // Cards in a grid, as on the Playlists screen.
                     let columns = (((ui.available_width() + CARD_GAP) / (CARD_WIDTH + CARD_GAP))
@@ -128,7 +132,7 @@ impl SearchView {
                 }
 
                 if !self.station_hits.is_empty() {
-                    ui.heading("Stations");
+                    ui.heading(strings::STATIONS);
                     ui.add_space(8.0);
                     let tuned = library.tuned_stations().unwrap_or_default();
                     if let Some(action) = radio::station_cards(ui, &self.station_hits, &tuned) {
@@ -138,7 +142,7 @@ impl SearchView {
                 }
 
                 if !self.album_hits.is_empty() {
-                    ui.heading("Albums");
+                    ui.heading(strings::ALBUMS);
                     ui.add_space(8.0);
                     ui.horizontal_wrapped(|ui| {
                         ui.spacing_mut().item_spacing = egui::vec2(TILE_GAP, TILE_GAP);
@@ -154,7 +158,7 @@ impl SearchView {
                 }
 
                 if !self.songs.is_empty() {
-                    ui.heading("Songs");
+                    ui.heading(strings::SONGS);
                     ui.add_space(4.0);
                     for (n, song) in self.songs.iter().enumerate() {
                         // Reserved now, filled in once we know whether the row is hovered.

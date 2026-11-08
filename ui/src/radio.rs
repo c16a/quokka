@@ -1,6 +1,7 @@
 //! Internet radio: the station now on air, the stations the user has tuned in to, and a search
 //! of the station index.
 
+use crate::strings;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::icons;
@@ -100,14 +101,13 @@ impl RadioView {
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
                             ui.vertical(|ui| {
-                                crate::fonts::page_title(ui, "Radio");
+                                crate::fonts::page_title(ui, strings::RADIO);
                                 let status = if self.count == 0 {
-                                    "No stations yet.".to_owned()
+                                    strings::NO_STATIONS_YET.to_owned()
                                 } else {
-                                    format!(
-                                        "{} stations in the directory · synced {}",
-                                        self.count,
-                                        age(self.last_sync)
+                                    strings::fill(
+                                        strings::STATIONS_IN_DIRECTORY,
+                                        &[&self.count.to_string(), age(self.last_sync).as_str()],
                                     )
                                 };
                                 ui.weak(status);
@@ -116,13 +116,13 @@ impl RadioView {
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {
                                     ui.add_enabled_ui(!syncing, |ui| {
-                                        if pill(ui, "Sync now").clicked() {
+                                        if pill(ui, strings::SYNC_NOW).clicked() {
                                             action = Some(RadioAction::Sync);
                                         }
                                     });
                                     if syncing {
                                         ui.spinner();
-                                        ui.weak("Syncing…");
+                                        ui.weak(strings::SYNCING);
                                     }
                                 },
                             );
@@ -137,12 +137,15 @@ impl RadioView {
                         }
 
                         ui.horizontal(|ui| {
-                            ui.label(crate::fonts::bold("Your stations"));
-                            ui.weak(format!("{} tuned in", self.tuned.len()));
+                            ui.label(crate::fonts::bold(strings::YOUR_STATIONS));
+                            ui.weak(strings::fill(
+                                strings::TUNED_IN,
+                                &[&self.tuned.len().to_string()],
+                            ));
                         });
                         ui.add_space(8.0);
                         if self.tuned.is_empty() {
-                            ui.weak("Find a station below and tune in. It will appear here.");
+                            ui.weak(strings::FIND_A_STATION_BELOW_AND_TUNE);
                         }
                         let playing = now_playing.map(|s| s.uuid.as_str());
                         for row in self.tuned.chunks(CARDS_PER_ROW) {
@@ -158,7 +161,7 @@ impl RadioView {
                         }
 
                         ui.add_space(22.0);
-                        ui.label(crate::fonts::bold("Find stations"));
+                        ui.label(crate::fonts::bold(strings::FIND_STATIONS));
                         ui.add_space(8.0);
                         if search_field(ui, &mut self.query) {
                             self.refresh(library);
@@ -172,9 +175,9 @@ impl RadioView {
                         let visible = self.visible();
                         if visible.is_empty() {
                             if self.count == 0 {
-                                ui.weak("Sync the station list to search it.");
+                                ui.weak(strings::SYNC_THE_STATION_LIST_TO_SEARCH);
                             } else {
-                                ui.weak("No stations match.");
+                                ui.weak(strings::NO_STATIONS_MATCH);
                             }
                         }
                         if !visible.is_empty()
@@ -220,40 +223,44 @@ impl RadioView {
                 state.corner_radius = egui::CornerRadius::same(255);
             }
             egui::ComboBox::from_id_salt("radio_country")
-                .selected_text(country.clone().unwrap_or_else(|| "Country: any".into()))
+                .selected_text(
+                    country
+                        .clone()
+                        .unwrap_or_else(|| strings::COUNTRY_ANY.into()),
+                )
                 .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut country, None, "Any country");
+                    ui.selectable_value(&mut country, None, strings::ANY_COUNTRY);
                     for name in &countries {
                         ui.selectable_value(&mut country, Some((*name).to_owned()), *name);
                     }
                 });
             egui::ComboBox::from_id_salt("radio_codec")
-                .selected_text(codec.clone().unwrap_or_else(|| "Codec: any".into()))
+                .selected_text(codec.clone().unwrap_or_else(|| strings::CODEC_ANY.into()))
                 .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut codec, None, "Any codec");
+                    ui.selectable_value(&mut codec, None, strings::ANY_CODEC);
                     for name in &codecs {
                         ui.selectable_value(&mut codec, Some((*name).to_owned()), *name);
                     }
                 });
             let bitrate_label = if min_bitrate == 0 {
-                "Bitrate: any".to_owned()
+                strings::BITRATE_ANY.to_owned()
             } else {
-                format!("Bitrate: {min_bitrate}+ kbps")
+                strings::fill(strings::BITRATE_AT_LEAST, &[&min_bitrate.to_string()])
             };
             egui::ComboBox::from_id_salt("radio_bitrate")
                 .selected_text(bitrate_label)
                 .show_ui(ui, |ui| {
                     for (value, label) in [
-                        (0, "Any bitrate"),
-                        (64, "64+ kbps"),
-                        (128, "128+ kbps"),
-                        (256, "256+ kbps"),
+                        (0, strings::ANY_BITRATE),
+                        (64, strings::TEXT_64_KBPS),
+                        (128, strings::TEXT_128_KBPS),
+                        (256, strings::TEXT_256_KBPS),
                     ] {
                         ui.selectable_value(&mut min_bitrate, value, label);
                     }
                 });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.weak("Most popular first");
+                ui.weak(strings::MOST_POPULAR_FIRST);
             });
         });
         self.country = country;
@@ -316,9 +323,9 @@ fn on_air(ui: &mut egui::Ui, station: &Station, paused: bool) -> Option<RadioAct
                 ui.add_space(6.0);
                 ui.vertical(|ui| {
                     let (label, colour) = if paused {
-                        ("PAUSED", ui.visuals().weak_text_color())
+                        (strings::PAUSED_2, ui.visuals().weak_text_color())
                     } else {
-                        ("LIVE NOW", egui::Color32::from_rgb(110, 231, 183))
+                        (strings::LIVE_NOW, egui::Color32::from_rgb(110, 231, 183))
                     };
                     ui.colored_label(
                         colour,
@@ -331,7 +338,11 @@ fn on_air(ui: &mut egui::Ui, station: &Station, paused: bool) -> Option<RadioAct
                 });
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let icon = if paused { Icon::Play } else { Icon::Pause };
-                    let tip = if paused { "Play" } else { "Pause" };
+                    let tip = if paused {
+                        strings::PLAY
+                    } else {
+                        strings::PAUSE
+                    };
                     if round_button(ui, icon, 44.0).on_hover_text(tip).clicked() {
                         action = Some(RadioAction::TogglePlayback);
                     }
@@ -377,7 +388,7 @@ fn station_card(ui: &mut egui::Ui, station: &Station, on_air: bool) -> Option<Ra
                 });
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if round_button(ui, Icon::Play, 32.0)
-                        .on_hover_text("Play")
+                        .on_hover_text(strings::PLAY)
                         .clicked()
                     {
                         action = Some(RadioAction::Play(station.clone()));
@@ -387,7 +398,7 @@ fn station_card(ui: &mut egui::Ui, station: &Station, on_air: bool) -> Option<Ra
         })
         .response;
     response.context_menu(|ui| {
-        if squircle::text_button(ui, "Tune out").clicked() {
+        if squircle::text_button(ui, strings::TUNE_OUT).clicked() {
             action = Some(RadioAction::TuneOut(station.uuid.clone()));
             ui.close();
         }
@@ -421,7 +432,7 @@ fn search_field(ui: &mut egui::Ui, query: &mut String) -> bool {
                 );
                 ui.add_space(6.0);
                 let field = crate::squircle::SquircleTextField::singleline(query)
-                    .hint_text("Search by name, country, language or genre")
+                    .hint_text(strings::SEARCH_BY_NAME_COUNTRY_LANGUAGE_OR)
                     .desired_width(f32::INFINITY)
                     .show(ui);
                 changed = field.changed();
@@ -484,7 +495,7 @@ fn station_details(station: &Station) -> String {
         parts.push(format!("{} kbps", station.bitrate));
     }
     if parts.is_empty() {
-        "Internet radio".into()
+        strings::INTERNET_RADIO.into()
     } else {
         parts.join(" · ")
     }
@@ -545,7 +556,7 @@ fn level_meter(ui: &mut egui::Ui, live: bool) {
 /// How long ago the index was synced, in words.
 fn age(last: Option<i64>) -> String {
     let Some(last) = last else {
-        return "never".into();
+        return strings::NEVER.into();
     };
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -553,10 +564,10 @@ fn age(last: Option<i64>) -> String {
         .unwrap_or(last);
     let minutes = (now - last).max(0) / 60;
     match minutes {
-        0..=1 => "just now".into(),
-        2..=59 => format!("{minutes} minutes ago"),
-        60..=1439 => format!("{} hours ago", minutes / 60),
-        _ => format!("{} days ago", minutes / 1440),
+        0..=1 => strings::JUST_NOW.into(),
+        2..=59 => strings::fill(strings::MINUTES_AGO, &[&minutes.to_string()]),
+        60..=1439 => strings::fill(strings::HOURS_AGO, &[&(minutes / 60).to_string()]),
+        _ => strings::fill(strings::DAYS_AGO, &[&(minutes / 1440).to_string()]),
     }
 }
 
@@ -636,7 +647,7 @@ fn result_card(ui: &mut egui::Ui, station: &Station, tuned: bool) -> Option<Radi
                             );
                             let mut details = card_details(station);
                             if tuned {
-                                details.push_str("  ·  Tuned in");
+                                details.push_str(strings::TUNED_IN_SUFFIX);
                             }
                             ui.add(
                                 egui::Label::new(egui::RichText::new(details).weak()).truncate(),
@@ -688,7 +699,7 @@ fn card_details(station: &Station) -> String {
         parts.push(format!("{} kbps", station.bitrate));
     }
     if parts.is_empty() {
-        "Internet radio".into()
+        strings::INTERNET_RADIO.into()
     } else {
         parts.join("  ·  ")
     }

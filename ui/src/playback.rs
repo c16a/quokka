@@ -1,3 +1,4 @@
+use crate::strings;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
@@ -54,7 +55,7 @@ fn new_video() -> Result<VideoPlayer, String> {
 /// A video player for this platform: the decoders on macOS, libmpv elsewhere.
 #[cfg(not(target_os = "macos"))]
 fn new_video() -> Result<VideoPlayer, String> {
-    VideoPlayer::new().map_err(|e| format!("Video needs libmpv: {e}"))
+    VideoPlayer::new().map_err(|e| strings::fill(strings::VIDEO_NEEDS_LIBMPV, &[&e.to_string()]))
 }
 
 pub struct Playback {
@@ -138,7 +139,13 @@ impl Playback {
     pub fn new() -> Self {
         let (player, error) = match RodioPlayer::new() {
             Ok(player) => (Some(player), None),
-            Err(e) => (None, Some(format!("No audio output: {e}"))),
+            Err(e) => (
+                None,
+                Some(strings::fill(
+                    strings::NO_AUDIO_OUTPUT_ERROR,
+                    &[&e.to_string()],
+                )),
+            ),
         };
         Self {
             player,
@@ -308,21 +315,24 @@ impl Playback {
                 let outcome = match self.player.as_mut() {
                     Some(player) => player.load_stream(source).and_then(|_| player.play()),
                     None => Err(quokka_playback::PlaybackError::Backend(
-                        "no audio output device available".into(),
+                        strings::NO_AUDIO_OUTPUT_DEVICE_AVAILABLE.into(),
                     )),
                 };
                 self.error = outcome
                     .err()
-                    .map(|e| format!("Could not play the station: {e}"));
+                    .map(|e| strings::fill(strings::COULD_NOT_PLAY_STATION, &[&e.to_string()]));
             }
             Ok(Err(e)) => {
                 self.radio_paused = true;
-                self.error = Some(format!("Could not connect to the station: {e}"));
+                self.error = Some(strings::fill(
+                    strings::COULD_NOT_CONNECT_STATION_ERROR,
+                    &[&e.to_string()],
+                ));
             }
             Err(TryRecvError::Empty) => self.radio_loading = Some(rx),
             Err(TryRecvError::Disconnected) => {
                 self.radio_paused = true;
-                self.error = Some("Could not connect to the station.".into());
+                self.error = Some(strings::COULD_NOT_CONNECT_TO_THE_STATION.into());
             }
         }
     }
@@ -335,8 +345,7 @@ impl Playback {
         self.radio_reconnects += 1;
         if self.radio_reconnects > RADIO_RECONNECTS {
             self.radio_paused = true;
-            self.error =
-                Some("The station keeps dropping the connection. Press play to try again.".into());
+            self.error = Some(strings::THE_STATION_KEEPS_DROPPING_THE_CONNECTION.into());
             return;
         }
         self.connect_radio();
@@ -356,7 +365,11 @@ impl Playback {
                 ui.vertical_centered(|ui| {
                     centred_row(ui, &mut self.row_widths[0], |ui| {
                         let icon = if playing { Icon::Pause } else { Icon::Play };
-                        let tip = if playing { "Pause" } else { "Play" };
+                        let tip = if playing {
+                            strings::PAUSE
+                        } else {
+                            strings::PLAY
+                        };
                         if transport_button(ui, icon, 36.0)
                             .on_hover_text(tip)
                             .clicked()
@@ -367,11 +380,11 @@ impl Playback {
                         ui.vertical(|ui| {
                             ui.label(crate::fonts::bold(&station.name));
                             let status = if connecting {
-                                "Connecting…"
+                                strings::CONNECTING
                             } else if self.radio_paused {
-                                "Paused"
+                                strings::PAUSED
                             } else {
-                                "Live"
+                                strings::LIVE
                             };
                             ui.weak(status);
                         });
@@ -565,7 +578,10 @@ impl Playback {
                 self.error = None;
             }
             Err(e) => {
-                self.error = Some(format!("Could not switch output: {e}"));
+                self.error = Some(strings::fill(
+                    strings::COULD_NOT_SWITCH_OUTPUT,
+                    &[&e.to_string()],
+                ));
                 return;
             }
         }
@@ -617,7 +633,7 @@ impl Playback {
             if self.error.is_none()
                 && let Some(reason) = video.failure()
             {
-                self.error = Some(format!("Could not play the video: {reason}"));
+                self.error = Some(strings::fill(strings::COULD_NOT_PLAY_VIDEO, &[reason]));
             }
         }
         self.sync_gapless();
@@ -636,7 +652,10 @@ impl Playback {
             _ => self.next(),
         }
         if let Some(message) = stopped_early {
-            self.error = Some(format!("Playback stopped early: {message}"));
+            self.error = Some(strings::fill(
+                strings::PLAYBACK_STOPPED_EARLY,
+                &[&message.to_string()],
+            ));
         }
     }
 
@@ -1033,7 +1052,10 @@ impl Playback {
             .and_then(|_| if autoplay { video.play() } else { Ok(()) });
         self.error = match loaded {
             Ok(()) => None,
-            Err(e) => Some(format!("Could not play {}: {e}", format::title(item))),
+            Err(e) => Some(strings::fill(
+                strings::COULD_NOT_PLAY_ITEM,
+                &[format::title(item).as_str(), &e.to_string()],
+            )),
         };
         let path = item.path.clone();
         self.gain = self.track_gain(&path);
@@ -1064,13 +1086,16 @@ impl Playback {
             self.apply_volume();
         }
         let Some(player) = self.player.as_mut() else {
-            self.error = Some("No audio output device available".into());
+            self.error = Some(strings::NO_AUDIO_OUTPUT_DEVICE_AVAILABLE_2.into());
             return;
         };
         let loaded = player.load(&item.path);
         self.error = match loaded.and_then(|_| if autoplay { player.play() } else { Ok(()) }) {
             Ok(()) => None,
-            Err(e) => Some(format!("Could not play {}: {e}", format::title(&item))),
+            Err(e) => Some(strings::fill(
+                strings::COULD_NOT_PLAY_ITEM,
+                &[format::title(&item).as_str(), &e.to_string()],
+            )),
         };
         let path = item.path.clone();
         self.gain = self.track_gain(&path);
@@ -1128,7 +1153,7 @@ impl Playback {
 
         ui.horizontal(|ui| {
             if transport_button(ui, Icon::Previous, 36.0)
-                .on_hover_text("Back 10 seconds (Left arrow)")
+                .on_hover_text(strings::BACK_10_SECONDS_LEFT_ARROW)
                 .clicked()
             {
                 self.seek_relative(-10.0);
@@ -1149,9 +1174,9 @@ impl Playback {
             icons::paint(painter, rect.center(), glyph, 20.0, egui::Color32::BLACK);
             if response
                 .on_hover_text(if playing {
-                    "Pause (Space)"
+                    strings::PAUSE_SPACE
                 } else {
-                    "Play (Space)"
+                    strings::PLAY_SPACE
                 })
                 .clicked()
             {
@@ -1159,7 +1184,7 @@ impl Playback {
             }
 
             if transport_button(ui, Icon::Next, 36.0)
-                .on_hover_text("Forward 10 seconds (Right arrow)")
+                .on_hover_text(strings::FORWARD_10_SECONDS_RIGHT_ARROW)
                 .clicked()
             {
                 self.seek_relative(10.0);
@@ -1177,9 +1202,9 @@ impl Playback {
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let label = if fullscreen {
-                    "Exit full screen (Escape)"
+                    strings::EXIT_FULL_SCREEN_ESCAPE
                 } else {
-                    "Full screen (F)"
+                    strings::FULL_SCREEN_F
                 };
                 if fullscreen_button(ui, fullscreen)
                     .on_hover_text(label)
@@ -1192,7 +1217,11 @@ impl Playback {
                     self.set_volume(level as f32);
                 }
                 if speaker_button(ui, self.muted)
-                    .on_hover_text(if self.muted { "Unmute" } else { "Mute" })
+                    .on_hover_text(if self.muted {
+                        strings::UNMUTE
+                    } else {
+                        strings::MUTE
+                    })
                     .clicked()
                 {
                     self.toggle_mute();
@@ -1235,7 +1264,7 @@ impl Playback {
                 });
             }
             None => {
-                ui.label("Loading video…");
+                ui.label(strings::LOADING_VIDEO);
             }
         }
         if let Some(text) = caption {
@@ -1308,21 +1337,21 @@ impl Playback {
                         |ui| {
                             ui.spacing_mut().item_spacing.x = 8.0;
                             if mode_button(ui, ModeIcon::Shuffle, self.shuffle)
-                                .on_hover_text("Shuffle")
+                                .on_hover_text(strings::SHUFFLE)
                                 .clicked()
                             {
                                 command = Some(Command::ToggleShuffle);
                             }
                             if transport_button(ui, Icon::Previous, 32.0)
-                                .on_hover_text("Previous track")
+                                .on_hover_text(strings::PREVIOUS_TRACK)
                                 .clicked()
                             {
                                 command = Some(Command::Previous);
                             }
                             let (icon, tip) = if state == PlayerState::Playing {
-                                (Icon::Pause, "Pause")
+                                (Icon::Pause, strings::PAUSE)
                             } else {
-                                (Icon::Play, "Play")
+                                (Icon::Play, strings::PLAY)
                             };
                             if transport_button(ui, icon, 36.0)
                                 .on_hover_text(tip)
@@ -1331,7 +1360,7 @@ impl Playback {
                                 command = Some(Command::Toggle);
                             }
                             if transport_button(ui, Icon::Next, 32.0)
-                                .on_hover_text("Next track")
+                                .on_hover_text(strings::NEXT_TRACK)
                                 .clicked()
                             {
                                 command = Some(Command::Next);
@@ -1341,7 +1370,7 @@ impl Playback {
                                 ModeIcon::Repeat(self.repeat),
                                 self.repeat != Repeat::Off,
                             )
-                            .on_hover_text("Repeat")
+                            .on_hover_text(strings::REPEAT)
                             .clicked()
                             {
                                 command = Some(Command::CycleRepeat);
@@ -1355,107 +1384,108 @@ impl Playback {
                     let column = (ui.available_width() - self.right_width - 8.0).max(120.0);
                     ui.vertical(|ui| {
                         ui.set_width(column);
-                            // Title and artist, centred vertically on the 48px row height. They fill the column.
-                            let title_h =
-                                ui.fonts_mut(|f| f.row_height(&egui::FontId::proportional(14.0)));
-                            let artist_h =
-                                ui.fonts_mut(|f| f.row_height(&egui::FontId::proportional(12.0)));
-                            let block = title_h + artist_h + ui.spacing().item_spacing.y;
-                            let top = ((48.0 - block) / 2.0).max(0.0);
-                            ui.allocate_ui_with_layout(
-                                egui::vec2(column, 48.0),
-                                egui::Layout::top_down(egui::Align::Min),
-                                |ui| {
-                                    ui.add_space(top);
-                                    ui.vertical(|ui| match &current {
-                                        Some(item) => {
-                                            ui.add(
-                                                egui::Label::new(
-                                                    crate::fonts::bold(format::title(item))
-                                                        .size(14.0)
-                                                        .color(track_text),
+                        // Title and artist, centred vertically on the 48px row height. They fill the column.
+                        let title_h =
+                            ui.fonts_mut(|f| f.row_height(&egui::FontId::proportional(14.0)));
+                        let artist_h =
+                            ui.fonts_mut(|f| f.row_height(&egui::FontId::proportional(12.0)));
+                        let block = title_h + artist_h + ui.spacing().item_spacing.y;
+                        let top = ((48.0 - block) / 2.0).max(0.0);
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(column, 48.0),
+                            egui::Layout::top_down(egui::Align::Min),
+                            |ui| {
+                                ui.add_space(top);
+                                ui.vertical(|ui| match &current {
+                                    Some(item) => {
+                                        ui.add(
+                                            egui::Label::new(
+                                                crate::fonts::bold(format::title(item))
+                                                    .size(14.0)
+                                                    .color(track_text),
+                                            )
+                                            .truncate(),
+                                        );
+                                        let artist = item
+                                            .artist
+                                            .as_deref()
+                                            .or(item.album_artist.as_deref())
+                                            .unwrap_or_default();
+                                        // Artist, then " - " and the album name. The artist is plain text. The
+                                        // album is a link to its album page, fully black while hovered.
+                                        let album = item.album.as_deref().filter(|a| !a.is_empty());
+                                        let font = egui::FontId::proportional(12.0);
+                                        let album_width = album.map_or(0.0, |album| {
+                                            ui.painter()
+                                                .layout_no_wrap(
+                                                    format!(" - {album}"),
+                                                    font.clone(),
+                                                    track_dim,
                                                 )
-                                                .truncate(),
-                                            );
-                                            let artist = item
-                                                .artist
-                                                .as_deref()
-                                                .or(item.album_artist.as_deref())
-                                                .unwrap_or_default();
-                                            // Artist, then " - " and the album name. The artist is plain text. The
-                                            // album is a link to its album page, fully black while hovered.
-                                            let album = item.album.as_deref().filter(|a| !a.is_empty());
-                                            let font = egui::FontId::proportional(12.0);
-                                            let album_width = album.map_or(0.0, |album| {
-                                                ui.painter()
-                                                    .layout_no_wrap(
-                                                        format!(" - {album}"),
-                                                        font.clone(),
-                                                        track_dim,
-                                                    )
-                                                    .size()
-                                                    .x
-                                            });
-                                            let artist_width =
-                                                (ui.available_width() - album_width).max(0.0);
-                                            ui.horizontal(|ui| {
-                                                ui.spacing_mut().item_spacing.x = 0.0;
-                                                ui.scope(|ui| {
-                                                    ui.set_max_width(artist_width);
-                                                    ui.add(
-                                                        egui::Label::new(
-                                                            egui::RichText::new(artist)
-                                                                .size(12.0)
-                                                                .color(track_dim),
-                                                        )
-                                                        .truncate(),
-                                                    );
-                                                });
-                                                if let Some(album) = album {
-                                                    ui.label(
-                                                        egui::RichText::new(" - ")
+                                                .size()
+                                                .x
+                                        });
+                                        let artist_width =
+                                            (ui.available_width() - album_width).max(0.0);
+                                        ui.horizontal(|ui| {
+                                            ui.spacing_mut().item_spacing.x = 0.0;
+                                            ui.scope(|ui| {
+                                                ui.set_max_width(artist_width);
+                                                ui.add(
+                                                    egui::Label::new(
+                                                        egui::RichText::new(artist)
                                                             .size(12.0)
                                                             .color(track_dim),
-                                                    );
-                                                    // The album name is cut short at the row's edge, then painted
-                                                    // in its hover colour once the pointer's position is known.
-                                                    let mut job = egui::text::LayoutJob::simple_singleline(
+                                                    )
+                                                    .truncate(),
+                                                );
+                                            });
+                                            if let Some(album) = album {
+                                                ui.label(
+                                                    egui::RichText::new(" - ")
+                                                        .size(12.0)
+                                                        .color(track_dim),
+                                                );
+                                                // The album name is cut short at the row's edge, then painted
+                                                // in its hover colour once the pointer's position is known.
+                                                let mut job =
+                                                    egui::text::LayoutJob::simple_singleline(
                                                         album.to_owned(),
                                                         font,
                                                         track_dim,
                                                     );
-                                                    job.wrap.max_width = ui.available_width().max(0.0);
-                                                    job.wrap.max_rows = 1;
-                                                    job.wrap.break_anywhere = true;
-                                                    job.wrap.overflow_character = Some('\u{2026}');
-                                                    let galley = ui.painter().layout_job(job);
-                                                    let (rect, link) = ui.allocate_exact_size(
-                                                        galley.size(),
-                                                        egui::Sense::click(),
-                                                    );
-                                                    let link = link.on_hover_cursor(
-                                                        egui::CursorIcon::PointingHand,
-                                                    );
-                                                    let colour = if link.hovered() {
-                                                        track_text
-                                                    } else {
-                                                        track_dim
-                                                    };
-                                                    ui.painter().galley_with_override_text_color(
-                                                        rect.min, galley, colour,
-                                                    );
-                                                    if link.clicked() {
-                                                        self.album_request = Some(album.to_owned());
-                                                    }
+                                                job.wrap.max_width = ui.available_width().max(0.0);
+                                                job.wrap.max_rows = 1;
+                                                job.wrap.break_anywhere = true;
+                                                job.wrap.overflow_character = Some('\u{2026}');
+                                                let galley = ui.painter().layout_job(job);
+                                                let (rect, link) = ui.allocate_exact_size(
+                                                    galley.size(),
+                                                    egui::Sense::click(),
+                                                );
+                                                let link = link.on_hover_cursor(
+                                                    egui::CursorIcon::PointingHand,
+                                                );
+                                                let colour = if link.hovered() {
+                                                    track_text
+                                                } else {
+                                                    track_dim
+                                                };
+                                                ui.painter().galley_with_override_text_color(
+                                                    rect.min, galley, colour,
+                                                );
+                                                if link.clicked() {
+                                                    self.album_request = Some(album.to_owned());
                                                 }
-                                            });
-                                        }
-                                        None => {
-                                            ui.weak("Nothing playing");
-                                        }
-                                    });
-                                },
-                            );
+                                            }
+                                        });
+                                    }
+                                    None => {
+                                        ui.weak(strings::NOTHING_PLAYING);
+                                    }
+                                });
+                            },
+                        );
 
                         ui.add_space(2.0);
                         // The seek bar spans the column: from the cover's left edge to the title's right
@@ -1467,9 +1497,9 @@ impl Playback {
                         // and each label's line of text is centred on the rail.
                         let font = egui::TextStyle::Small.resolve(ui.style());
                         let weak = ui.visuals().weak_text_color();
-                        let start = ui
-                            .painter()
-                            .layout_no_wrap(format::clock(secs), font.clone(), weak);
+                        let start =
+                            ui.painter()
+                                .layout_no_wrap(format::clock(secs), font.clone(), weak);
                         let end = ui
                             .painter()
                             .layout_no_wrap(format::clock(total), font, weak);
@@ -1521,13 +1551,18 @@ impl Playback {
                                 command = Some(Command::SetVolume(self.volume));
                             }
                             if speaker_button(ui, self.muted)
-                                .on_hover_text(if self.muted { "Unmute" } else { "Mute" })
+                                .on_hover_text(if self.muted {
+                                    strings::UNMUTE
+                                } else {
+                                    strings::MUTE
+                                })
                                 .clicked()
                             {
                                 command = Some(Command::ToggleMute);
                             }
                             // Output: a button that opens a list of audio outputs.
-                            let output = output_button(ui, self.output_menu).on_hover_text("Output");
+                            let output =
+                                output_button(ui, self.output_menu).on_hover_text(strings::OUTPUT);
                             if output.clicked() {
                                 self.output_menu = !self.output_menu;
                                 // Refresh the device list whenever the list opens.
@@ -1545,11 +1580,11 @@ impl Playback {
                                     .show(ui.ctx(), |ui| {
                                         egui::Frame::popup(ui.style()).show(ui, |ui| {
                                             ui.set_width(240.0);
-                                            ui.weak("Output");
+                                            ui.weak(strings::OUTPUT);
                                             if ui
                                                 .selectable_label(
                                                     self.output.is_none(),
-                                                    "System default",
+                                                    strings::SYSTEM_DEFAULT,
                                                 )
                                                 .clicked()
                                             {
@@ -1573,18 +1608,19 @@ impl Playback {
                                 }
                                 // A click anywhere else closes the list.
                                 let pressed = ui.input(|i| i.pointer.any_pressed());
-                                if pressed && !area.response.contains_pointer() && !output.hovered() {
+                                if pressed && !area.response.contains_pointer() && !output.hovered()
+                                {
                                     self.output_menu = false;
                                 }
                             }
                             if panel_button(ui, Panel::Queue, self.panel == Panel::Queue)
-                                .on_hover_text("Up next")
+                                .on_hover_text(strings::UP_NEXT)
                                 .clicked()
                             {
                                 command = Some(Command::TogglePanel(Panel::Queue));
                             }
                             if panel_button(ui, Panel::Lyrics, self.panel == Panel::Lyrics)
-                                .on_hover_text("Lyrics")
+                                .on_hover_text(strings::LYRICS)
                                 .clicked()
                             {
                                 command = Some(Command::TogglePanel(Panel::Lyrics));
@@ -1592,21 +1628,21 @@ impl Playback {
                             // Playback speed: each click steps to the next preset.
                             let speed_label = speed_text(self.speed);
                             if speed_button(ui, &speed_label)
-                                .on_hover_text("Playback speed. Click to change. Speeds other than 1× also change the pitch.")
+                                .on_hover_text(strings::PLAYBACK_SPEED_CLICK_TO_CHANGE_SPEEDS)
                                 .clicked()
                             {
                                 self.speed_change = Some(next_speed(self.speed));
                             }
                             let info = panel_button(ui, Panel::Info, self.panel == Panel::Info)
-                                .on_hover_text("Track info");
+                                .on_hover_text(strings::TRACK_INFO);
                             left_edge = info.rect.left();
                             if info.clicked() {
                                 command = Some(Command::TogglePanel(Panel::Info));
                             }
-                        right_used = ui.max_rect().right() - left_edge;
+                            right_used = ui.max_rect().right() - left_edge;
                         },
-                );
-                self.right_width = right_used;
+                    );
+                    self.right_width = right_used;
                 });
                 if let Some(error) = self.error.as_deref() {
                     ui.add_space(6.0);
@@ -1782,16 +1818,16 @@ fn show_compact(
 
             if ui
                 .put(next, |ui: &mut egui::Ui| {
-                    transport_button(ui, Icon::Next, 32.0).on_hover_text("Next track")
+                    transport_button(ui, Icon::Next, 32.0).on_hover_text(strings::NEXT_TRACK)
                 })
                 .clicked()
             {
                 command = Some(Command::Next);
             }
             let (icon, tip) = if state == PlayerState::Playing {
-                (Icon::Pause, "Pause")
+                (Icon::Pause, strings::PAUSE)
             } else {
-                (Icon::Play, "Play")
+                (Icon::Play, strings::PLAY)
             };
             if ui
                 .put(play, |ui: &mut egui::Ui| {
@@ -1832,7 +1868,7 @@ fn show_compact(
                             );
                         }
                         None => {
-                            ui.weak("Nothing playing");
+                            ui.weak(strings::NOTHING_PLAYING);
                         }
                     }
                 })

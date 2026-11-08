@@ -1,6 +1,7 @@
 //! The queue panel: the tracks that play after the current one. Rows can be dragged to reorder
 //! and removed. These changes only touch the queue, never the files on disk.
 
+use crate::strings;
 use eframe::egui;
 use quokka_core::{MediaItem, PlaylistSummary};
 
@@ -41,18 +42,17 @@ pub fn show(ui: &mut egui::Ui, view: &mut QueueView, playback: &mut Playback) {
     ui.horizontal(|ui| {
         ui.add_space(14.0);
         ui.vertical(|ui| {
-            ui.heading("Up Next");
+            ui.heading(strings::UP_NEXT_2);
             ui.weak(match end - first {
-                0 => "Nothing queued".to_owned(),
-                1 => "1 track".to_owned(),
-                n => format!("{n} tracks"),
+                0 => strings::NOTHING_QUEUED.to_owned(),
+                n => strings::tracks(n),
             });
         });
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
             ui.add_space(14.0);
             let clear = ui
                 .add_enabled_ui(first < end, |ui| {
-                    let label = egui::RichText::new("Clear").color(danger);
+                    let label = egui::RichText::new(strings::CLEAR).color(danger);
                     SquircleButton::new(egui::Label::new(label).extend())
                         .padding(squircle::TEXT_PADDING)
                         .fill(egui::Color32::TRANSPARENT)
@@ -70,7 +70,7 @@ pub fn show(ui: &mut egui::Ui, view: &mut QueueView, playback: &mut Playback) {
         view.dragging = None;
         ui.horizontal(|ui| {
             ui.add_space(14.0);
-            ui.weak("Tracks you queue will appear here.");
+            ui.weak(strings::TRACKS_YOU_QUEUE_WILL_APPEAR_HERE);
         });
         return;
     }
@@ -249,17 +249,17 @@ pub fn track_menu(
     ui.set_min_width(180.0);
     ui.spacing_mut().item_spacing.y = 4.0;
     ui.spacing_mut().button_padding = egui::vec2(14.0, 6.0);
-    if menu_row(ui, "Play next") {
+    if menu_row(ui, strings::PLAY_NEXT) {
         queue.push(MenuRequest::PlayNext(track.clone()));
         ui.close();
     }
-    if menu_row(ui, "Add to queue") {
+    if menu_row(ui, strings::ADD_TO_QUEUE) {
         queue.push(MenuRequest::AddToQueue(track.clone()));
         ui.close();
     }
-    ui.menu_button("Add to playlist", |ui| {
+    ui.menu_button(strings::ADD_TO_PLAYLIST, |ui| {
         if playlists.is_empty() {
-            ui.weak("No playlists yet");
+            ui.weak(strings::NO_PLAYLISTS_YET);
         }
         for playlist in playlists {
             if squircle::text_button(ui, playlist.name.as_str()).clicked() {
@@ -271,7 +271,7 @@ pub fn track_menu(
             }
         }
     });
-    if menu_row(ui, "Track info") {
+    if menu_row(ui, strings::TRACK_INFO) {
         queue.push(MenuRequest::ShowInfo(track.clone()));
         ui.close();
     }

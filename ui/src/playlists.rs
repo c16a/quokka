@@ -1,6 +1,7 @@
 //! Playlists: the list of playlists, and one playlist's tracks with play, shuffle, rename,
 //! reorder (drag the grip) and remove.
 
+use crate::strings;
 use std::collections::HashMap;
 
 use eframe::egui;
@@ -106,7 +107,7 @@ impl PlaylistsView {
 
     /// The list of playlists, with a field to create one.
     fn list(&mut self, ui: &mut egui::Ui, library: &Library) {
-        crate::fonts::page_title(ui, "Playlists");
+        crate::fonts::page_title(ui, strings::PLAYLISTS);
         ui.add_space(8.0);
         ui.horizontal(|ui| {
             // The same filled field as the search box, with a plus in place of the magnifier.
@@ -127,7 +128,7 @@ impl PlaylistsView {
                         );
                         ui.add_space(6.0);
                         crate::squircle::SquircleTextField::singleline(&mut self.new_name)
-                            .hint_text("New playlist name")
+                            .hint_text(strings::NEW_PLAYLIST_NAME)
                             .desired_width(200.0)
                             .show(ui)
                     })
@@ -138,7 +139,7 @@ impl PlaylistsView {
             let height = framed.response.rect.height();
             let create = ui
                 .add_enabled_ui(!self.new_name.trim().is_empty(), |ui| {
-                    let label = egui::RichText::new("Create").color(egui::Color32::WHITE);
+                    let label = egui::RichText::new(strings::CREATE).color(egui::Color32::WHITE);
                     let vertical = ((height - 18.0) / 2.0).max(0.0);
                     SquircleButton::new(egui::Label::new(label).extend())
                         .padding(Padding::symmetric(18.0, vertical))
@@ -161,7 +162,7 @@ impl PlaylistsView {
         ui.add_space(12.0);
 
         if self.playlists.is_empty() {
-            ui.weak("No playlists yet. Add tracks from an album or the search results.");
+            ui.weak(strings::NO_PLAYLISTS_YET_ADD_TRACKS_FROM);
             return;
         }
         let mut delete = None;
@@ -183,11 +184,11 @@ impl PlaylistsView {
                             self.selected = Some(playlist.id);
                         }
                         response.context_menu(|ui| {
-                            if squircle::text_button(ui, "Rename").clicked() {
+                            if squircle::text_button(ui, strings::RENAME).clicked() {
                                 rename = Some((playlist.id, playlist.name.clone()));
                                 ui.close();
                             }
-                            if squircle::text_button(ui, "Delete playlist").clicked() {
+                            if squircle::text_button(ui, strings::DELETE_PLAYLIST).clicked() {
                                 delete = Some(playlist.id);
                                 ui.close();
                             }
@@ -236,7 +237,7 @@ impl PlaylistsView {
             .unwrap_or_default();
 
         if back_icon_button(ui)
-            .on_hover_text("All playlists")
+            .on_hover_text(strings::ALL_PLAYLISTS)
             .clicked()
         {
             back = true;
@@ -255,15 +256,15 @@ impl PlaylistsView {
                 }
                 let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                 let escape = ui.input(|i| i.key_pressed(egui::Key::Escape));
-                if squircle::text_button(ui, "Save").clicked() || enter {
+                if squircle::text_button(ui, strings::SAVE).clicked() || enter {
                     finish_rename = Some(true);
-                } else if squircle::text_button(ui, "Cancel").clicked() || escape {
+                } else if squircle::text_button(ui, strings::CANCEL).clicked() || escape {
                     finish_rename = Some(false);
                 }
             }),
             None => ui.horizontal(|ui| {
                 crate::fonts::page_title(ui, &name);
-                if ui.small_button("Rename").clicked() {
+                if ui.small_button(strings::RENAME).clicked() {
                     start_rename = true;
                 }
             }),
@@ -284,11 +285,11 @@ impl PlaylistsView {
             }
         }
 
-        ui.weak(format!("{} tracks", self.tracks.len()));
+        ui.weak(strings::tracks(self.tracks.len()));
         ui.add_space(8.0);
         ui.horizontal(|ui| {
             if play_icon_button(ui)
-                .on_hover_text("Play playlist")
+                .on_hover_text(strings::PLAY_PLAYLIST)
                 .clicked()
             {
                 play = Some(PlayRequest {
@@ -298,7 +299,7 @@ impl PlaylistsView {
             }
             ui.add_space(8.0);
             if shuffle_icon_button(ui)
-                .on_hover_text("Shuffle playlist")
+                .on_hover_text(strings::SHUFFLE_PLAYLIST)
                 .clicked()
             {
                 play = Some(PlayRequest {
@@ -607,7 +608,7 @@ pub(crate) fn playlist_card(ui: &mut egui::Ui, playlist: &PlaylistSummary) -> eg
                                     .truncate(),
                             );
                             ui.add(egui::Label::new(
-                                egui::RichText::new(format!("{} tracks", playlist.track_count))
+                                egui::RichText::new(strings::tracks(playlist.track_count as usize))
                                     .weak(),
                             ));
                         },

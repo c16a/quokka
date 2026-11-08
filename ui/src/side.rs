@@ -1,5 +1,6 @@
 //! The lyrics and track info panels, beside the main view.
 
+use crate::strings;
 use std::path::Path;
 use std::process::Command;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
@@ -136,7 +137,7 @@ impl SidePanels {
             }
             Err(TryRecvError::Empty) => self.results = Some(rx),
             Err(TryRecvError::Disconnected) => {
-                self.lookup = Lookup::Failed("the lookup stopped unexpectedly".into());
+                self.lookup = Lookup::Failed(strings::THE_LOOKUP_STOPPED_UNEXPECTEDLY.into());
             }
         }
     }
@@ -191,10 +192,10 @@ impl SidePanels {
         online: bool,
     ) -> LyricsOutcome {
         let mut outcome = LyricsOutcome::default();
-        heading(ui, "Lyrics");
+        heading(ui, strings::LYRICS);
         let Some(item) = item else {
             indented(ui, |ui| {
-                ui.weak("Nothing playing.");
+                ui.weak(strings::NOTHING_PLAYING_2);
             });
             return outcome;
         };
@@ -209,47 +210,50 @@ impl SidePanels {
             .inner_margin(egui::Margin::symmetric(0, 10))
             .show(ui, |ui| {
                 egui::ScrollArea::vertical()
-            .auto_shrink([false, false])
-            .show(ui, |ui| match &current {
-                Some(Lyrics::Synced(lines)) => {
-                    outcome.seek = self.synced(ui, lines, position);
-                }
-                Some(Lyrics::Plain(text)) => indented(ui, |ui| {
-                    ui.label(text);
-                    if !online && !has_sidecar {
-                        ui.add_space(12.0);
-                        offer(ui, &mut outcome);
-                    }
-                }),
-                None => indented(ui, |ui| {
-                    if !online {
-                        ui.label("This track has no lyrics in its tags or a .lrc file beside it.");
-                        ui.add_space(4.0);
-                        offer(ui, &mut outcome);
-                    } else {
-                        match &lookup {
-                            Lookup::Idle | Lookup::Pending => {
-                                ui.horizontal(|ui| {
-                                    ui.spinner();
-                                    ui.weak("Looking up lyrics on lrclib.net…");
-                                });
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| match &current {
+                        Some(Lyrics::Synced(lines)) => {
+                            outcome.seek = self.synced(ui, lines, position);
+                        }
+                        Some(Lyrics::Plain(text)) => indented(ui, |ui| {
+                            ui.label(text);
+                            if !online && !has_sidecar {
+                                ui.add_space(12.0);
+                                offer(ui, &mut outcome);
                             }
-                            Lookup::Done => {
-                                ui.weak("No lyrics were found on lrclib.net for this track.");
-                            }
-                            Lookup::Failed(e) => {
-                                ui.colored_label(
-                                    ui.visuals().error_fg_color,
-                                    format!("Couldn't reach lrclib.net: {e}"),
-                                );
-                                if squircle::text_button(ui, "Try again").clicked() {
-                                    self.lookup = Lookup::Idle;
+                        }),
+                        None => indented(ui, |ui| {
+                            if !online {
+                                ui.label(strings::THIS_TRACK_HAS_NO_LYRICS_IN);
+                                ui.add_space(4.0);
+                                offer(ui, &mut outcome);
+                            } else {
+                                match &lookup {
+                                    Lookup::Idle | Lookup::Pending => {
+                                        ui.horizontal(|ui| {
+                                            ui.spinner();
+                                            ui.weak(strings::LOOKING_UP_LYRICS_ON_LRCLIB_NET);
+                                        });
+                                    }
+                                    Lookup::Done => {
+                                        ui.weak(strings::NO_LYRICS_WERE_FOUND_ON_LRCLIB);
+                                    }
+                                    Lookup::Failed(e) => {
+                                        ui.colored_label(
+                                            ui.visuals().error_fg_color,
+                                            strings::fill(
+                                                strings::COULDNT_REACH_LRCLIB,
+                                                &[&e.to_string()],
+                                            ),
+                                        );
+                                        if squircle::text_button(ui, strings::TRY_AGAIN).clicked() {
+                                            self.lookup = Lookup::Idle;
+                                        }
+                                    }
                                 }
                             }
-                        }
-                    }
-                }),
-            });
+                        }),
+                    });
             });
         outcome
     }
@@ -305,10 +309,10 @@ impl SidePanels {
     }
 
     pub fn info(&mut self, ui: &mut egui::Ui, library: &Library, item: Option<&MediaItem>) {
-        heading(ui, "Track info");
+        heading(ui, strings::TRACK_INFO);
         let Some(item) = item else {
             indented(ui, |ui| {
-                ui.weak("Nothing playing.");
+                ui.weak(strings::NOTHING_PLAYING_2);
             });
             return;
         };
@@ -336,44 +340,44 @@ impl SidePanels {
                         .num_columns(2)
                         .spacing([12.0, 6.0])
                         .show(ui, |ui| {
-                            row(ui, "Title", &format::title(item));
+                            row(ui, strings::TITLE, &format::title(item));
                             row(
                                 ui,
-                                "Artist",
+                                strings::ARTIST,
                                 item.artist
                                     .as_deref()
                                     .or(item.album_artist.as_deref())
                                     .unwrap_or("—"),
                             );
-                            row(ui, "Album", item.album.as_deref().unwrap_or("—"));
-                            row(ui, "Codec", item.codec.as_deref().unwrap_or("—"));
-                            row(ui, "Duration", &format::duration(item.duration_ms));
-                            row(ui, "Size", &format::size(item.size));
+                            row(ui, strings::ALBUM_2, item.album.as_deref().unwrap_or("—"));
+                            row(ui, strings::CODEC, item.codec.as_deref().unwrap_or("—"));
+                            row(ui, strings::DURATION, &format::duration(item.duration_ms));
+                            row(ui, strings::SIZE, &format::size(item.size));
                             if let Some(kbps) = item.bitrate_kbps {
-                                row(ui, "Bitrate", &format::kbps(kbps));
+                                row(ui, strings::BITRATE, &format::kbps(kbps));
                             }
                             if let Some(sample) =
                                 format::sample_format(item.bit_depth, item.sample_rate)
                             {
-                                row(ui, "Format", &sample);
+                                row(ui, strings::FORMAT, &sample);
                             }
                             if let Some(channels) = item.channels {
-                                row(ui, "Channels", &format::channels(channels));
+                                row(ui, strings::CHANNELS, &format::channels(channels));
                             }
                             if let Some(details) = details {
-                                row(ui, "Pictures", &details.pictures.to_string());
+                                row(ui, strings::PICTURES, &details.pictures.to_string());
                             }
-                            row(ui, "File", &item.path.display().to_string());
+                            row(ui, strings::FILE, &item.path.display().to_string());
                         });
                     ui.add_space(10.0);
-                    if squircle::text_button(ui, "Reveal in Finder").clicked() {
+                    if squircle::text_button(ui, strings::REVEAL_IN_FINDER).clicked() {
                         reveal(&item.path);
                     }
                 });
                 if let Some(details) = details {
                     ui.add_space(16.0);
                     indented(ui, |ui| {
-                        ui.label(crate::fonts::bold("Tags"));
+                        ui.label(crate::fonts::bold(strings::TAGS));
                         ui.add_space(4.0);
                         egui::Grid::new("track_tags")
                             .num_columns(2)
@@ -399,7 +403,9 @@ impl SidePanels {
                             .any(|(line, draft)| line.editable && &line.value != draft);
                         ui.horizontal(|ui| {
                             if ui
-                                .add_enabled_ui(dirty, |ui| squircle::text_button(ui, "Save"))
+                                .add_enabled_ui(dirty, |ui| {
+                                    squircle::text_button(ui, strings::SAVE)
+                                })
                                 .inner
                                 .clicked()
                             {
@@ -407,12 +413,10 @@ impl SidePanels {
                             }
                             if ui
                                 .add_enabled_ui(can_revert, |ui| {
-                                    squircle::text_button(ui, "Revert")
+                                    squircle::text_button(ui, strings::REVERT)
                                 })
                                 .inner
-                                .on_hover_text(
-                                    "Put back the tags the file had before it was first edited",
-                                )
+                                .on_hover_text(strings::PUT_BACK_THE_TAGS_THE_FILE)
                                 .clicked()
                             {
                                 action = Some(TagAction::Revert);
@@ -503,8 +507,8 @@ fn store(library: &Library, id: i64, text: Option<&str>) {
 
 /// The prompt that asks for permission before lyrics are looked up online.
 fn offer(ui: &mut egui::Ui, outcome: &mut LyricsOutcome) {
-    ui.label("Look up synced lyrics on lrclib.net? The title, artist, album and length of each track you open are sent there.");
-    if squircle::text_button(ui, "Turn on lyrics lookup").clicked() {
+    ui.label(strings::LOOK_UP_SYNCED_LYRICS_ON_LRCLIB_2);
+    if squircle::text_button(ui, strings::TURN_ON_LYRICS_LOOKUP).clicked() {
         outcome.enable = true;
     }
 }

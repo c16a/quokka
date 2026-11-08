@@ -4,6 +4,7 @@
 //! An artist's tile shows a photo from Wikidata when there is one, in a circle, and otherwise the
 //! cover of their first album. Photos are fetched on a background thread.
 
+use crate::strings;
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -67,7 +68,7 @@ impl ArtistsView {
         library: &Library,
     ) -> Option<usize> {
         if self.artists.is_empty() {
-            ui.label("No artists yet. Choose your library folder in Settings.");
+            ui.label(strings::NO_ARTISTS_YET_CHOOSE_YOUR_LIBRARY);
             return None;
         }
         match self.selected {
@@ -83,7 +84,7 @@ impl ArtistsView {
 
     /// Every artist, as a tile showing their photo, or the cover of their first album.
     fn grid(&mut self, ui: &mut egui::Ui, albums: &mut AlbumsView, library: &Library) {
-        crate::fonts::page_title(ui, "Artists");
+        crate::fonts::page_title(ui, strings::ARTISTS);
         ui.add_space(12.0);
         let ctx = ui.ctx().clone();
         self.photos.poll(&ctx);
@@ -110,7 +111,10 @@ impl ArtistsView {
                 .collect();
             if !credits.is_empty() {
                 ui.add_space(16.0);
-                ui.small(format!("Photos: {}", credits.join("  ·  ")));
+                ui.small(strings::fill(
+                    strings::PHOTOS_CREDITS,
+                    &[credits.join("  ·  ").as_str()],
+                ));
             }
         }
         if chosen.is_some() {
@@ -128,13 +132,16 @@ impl ArtistsView {
     ) -> Option<usize> {
         let ctx = ui.ctx().clone();
         let (name, album_ids) = self.artists[i].clone();
-        if back_icon_button(ui).on_hover_text("All artists").clicked() {
+        if back_icon_button(ui)
+            .on_hover_text(strings::ALL_ARTISTS)
+            .clicked()
+        {
             self.selected = None;
             return None;
         }
         ui.add_space(12.0);
         crate::fonts::page_title(ui, &name);
-        ui.weak(format!("{} albums", album_ids.len()));
+        ui.weak(strings::albums(album_ids.len()));
         ui.add_space(12.0);
 
         let mut opened = None;
@@ -299,11 +306,7 @@ fn artist_tile(
         egui::FontId::proportional(14.0),
         ui.visuals().text_color(),
     );
-    let albums = if album_count == 1 {
-        "1 album".to_owned()
-    } else {
-        format!("{album_count} albums")
-    };
+    let albums = strings::albums(album_count);
     painter.text(
         egui::pos2(centre_x, text_top + 20.0),
         egui::Align2::CENTER_TOP,

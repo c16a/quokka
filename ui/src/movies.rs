@@ -3,6 +3,7 @@
 //! description and cast come from TMDb, using the key the user set in Settings. When a file name
 //! matches weakly, the page offers the candidates to pick from, each with its cover.
 
+use crate::strings;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
@@ -218,12 +219,12 @@ impl MoviesView {
     }
 
     fn grid(&mut self, ui: &mut egui::Ui) {
-        crate::fonts::page_title(ui, "Movies");
+        crate::fonts::page_title(ui, strings::MOVIES);
         if self.movies.is_empty() {
-            ui.label("No movies yet. Choose your library folder in Settings.");
+            ui.label(strings::NO_MOVIES_YET_CHOOSE_YOUR_LIBRARY);
             return;
         }
-        ui.label(format!("{} movies", self.movies.len()));
+        ui.label(strings::movies(self.movies.len()));
         ui.add_space(8.0);
         let mut opened = None;
         egui::ScrollArea::vertical()
@@ -314,7 +315,11 @@ impl MoviesView {
             if back_button(ui, &p).clicked() {
                 self.selected = None;
             }
-            ui.label(egui::RichText::new("Movies").size(13.0).color(p.weak));
+            ui.label(
+                egui::RichText::new(strings::MOVIES)
+                    .size(13.0)
+                    .color(p.weak),
+            );
         });
         ui.add_space(28.0);
 
@@ -328,7 +333,7 @@ impl MoviesView {
             ui.add_space(32.0);
             ui.vertical(|ui| {
                 ui.label(
-                    egui::RichText::new("MOVIE")
+                    egui::RichText::new(strings::MOVIE)
                         .size(11.0)
                         .strong()
                         .color(p.weak),
@@ -357,7 +362,7 @@ impl MoviesView {
                 );
                 if movie.duration_ms.is_none() {
                     ui.label(
-                        egui::RichText::new("Length unknown")
+                        egui::RichText::new(strings::LENGTH_UNKNOWN)
                             .size(12.0)
                             .color(p.weak),
                     );
@@ -376,14 +381,16 @@ impl MoviesView {
                     };
                     match &resume {
                         Some(saved) => {
-                            let label =
-                                format!("Resume at {}", crate::format::clock(saved.position_secs));
+                            let label = strings::fill(
+                                strings::RESUME_AT,
+                                &[&crate::format::clock(saved.position_secs)],
+                            );
                             if pill_button(ui, &label, true, Some(icons::PLAY), &p).clicked() {
                                 play = Some((from_start(), saved.position_secs));
                             }
                             if pill_button(
                                 ui,
-                                "Start over",
+                                strings::START_OVER,
                                 false,
                                 Some(icons::CLOCK_COUNTER_CLOCKWISE),
                                 &p,
@@ -394,7 +401,8 @@ impl MoviesView {
                             }
                         }
                         None => {
-                            if pill_button(ui, "Play", true, Some(icons::PLAY), &p).clicked() {
+                            if pill_button(ui, strings::PLAY, true, Some(icons::PLAY), &p).clicked()
+                            {
                                 play = Some((from_start(), 0.0));
                             }
                         }
@@ -417,12 +425,12 @@ impl MoviesView {
         ui.horizontal(|ui| {
             if info.is_some() {
                 if let Some(key) = tmdb_key
-                    && outline_button(ui, "Wrong movie? Choose another", &p).clicked()
+                    && outline_button(ui, strings::WRONG_MOVIE_CHOOSE_ANOTHER, &p).clicked()
                 {
                     let job = find_job(movie.id, movie.path.clone(), key.to_owned(), true);
                     self.start(ui.ctx(), movie.id, job);
                 }
-                if ghost_button(ui, "Remove details", &p).clicked() {
+                if ghost_button(ui, strings::REMOVE_DETAILS, &p).clicked() {
                     self.details.remove(&movie.id);
                     let media_id = movie.id;
                     let job: Job = Box::new(move |library| {
@@ -443,7 +451,7 @@ impl MoviesView {
         let p = MoviePalette::of(ui);
         ui.horizontal(|ui| {
             ui.label(
-                egui::RichText::new("File information")
+                egui::RichText::new(strings::FILE_INFORMATION)
                     .size(16.0)
                     .strong()
                     .color(p.text),
@@ -464,7 +472,7 @@ impl MoviesView {
         });
         ui.add_space(18.0);
         ui.label(
-            egui::RichText::new("SOURCE")
+            egui::RichText::new(strings::SOURCE)
                 .size(11.0)
                 .strong()
                 .color(p.weak),
@@ -521,12 +529,12 @@ impl MoviesView {
             }
         } else if self.fetching_id() == Some(movie.id) {
             ui.label(
-                egui::RichText::new("Finding details…")
+                egui::RichText::new(strings::FINDING_DETAILS)
                     .size(13.0)
                     .color(p.weak),
             );
         } else if let Some(key) = tmdb_key {
-            if outline_button(ui, "Find details on TMDb", p).clicked() {
+            if outline_button(ui, strings::FIND_DETAILS_ON_TMDB, p).clicked() {
                 let job = find_job(movie.id, movie.path.clone(), key.to_owned(), false);
                 self.start(ui.ctx(), movie.id, job);
             }
@@ -535,11 +543,9 @@ impl MoviesView {
             }
         } else {
             ui.label(
-                egui::RichText::new(
-                    "Add your TMDb API key in Settings to see the description and cast.",
-                )
-                .size(13.0)
-                .color(p.weak),
+                egui::RichText::new(strings::ADD_YOUR_TMDB_API_KEY_IN)
+                    .size(13.0)
+                    .color(p.weak),
             );
         }
         ui.add_space(16.0);
@@ -548,7 +554,7 @@ impl MoviesView {
     /// The synopsis, the cast, and the crew, from the saved TMDb details.
     fn details_sections(&mut self, ui: &mut egui::Ui, info: &MovieInfo, p: &MoviePalette) {
         if let Some(overview) = &info.overview {
-            section_title(ui, "Synopsis", p);
+            section_title(ui, strings::SYNOPSIS, p);
             ui.add_space(4.0);
             ui.scope(|ui| {
                 ui.set_max_width(760.0);
@@ -559,7 +565,7 @@ impl MoviesView {
             ui.add_space(24.0);
         }
         if !info.cast.is_empty() {
-            section_title(ui, "Cast", p);
+            section_title(ui, strings::CAST, p);
             ui.add_space(8.0);
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing = egui::vec2(TILE_GAP, TILE_GAP);
@@ -577,15 +583,23 @@ impl MoviesView {
         }
         let mut crew: Vec<(&str, &str, Option<&str>)> = Vec::new();
         for name in &info.directors {
-            crew.push((name, "Director", info.photos.get(name).map(String::as_str)));
+            crew.push((
+                name,
+                strings::DIRECTOR,
+                info.photos.get(name).map(String::as_str),
+            ));
         }
         for name in &info.writers {
             if !info.directors.contains(name) {
-                crew.push((name, "Writer", info.photos.get(name).map(String::as_str)));
+                crew.push((
+                    name,
+                    strings::WRITER,
+                    info.photos.get(name).map(String::as_str),
+                ));
             }
         }
         if !crew.is_empty() {
-            section_title(ui, "Crew", p);
+            section_title(ui, strings::CREW, p);
             ui.add_space(8.0);
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing = egui::vec2(TILE_GAP, TILE_GAP);
@@ -650,8 +664,8 @@ impl MoviesView {
 
     /// The candidates for a weak match: a card per candidate, and a way to pick none of them.
     fn choice_list(&mut self, ui: &mut egui::Ui, media_id: i64) {
-        ui.strong("Which movie is this?");
-        ui.weak("Pick the one your file is. Nothing is saved until you pick.");
+        ui.strong(strings::WHICH_MOVIE_IS_THIS);
+        ui.weak(strings::PICK_THE_ONE_YOUR_FILE_IS);
         ui.add_space(8.0);
         let candidates = self
             .choices
@@ -675,9 +689,9 @@ impl MoviesView {
             self.start(ui.ctx(), media_id, job);
         }
         ui.add_space(6.0);
-        if squircle::text_button(ui, "None of these").clicked() {
+        if squircle::text_button(ui, strings::NONE_OF_THESE).clicked() {
             self.choices = None;
-            self.notice = Some("Left unmatched.".to_owned());
+            self.notice = Some(strings::LEFT_UNMATCHED.to_owned());
         }
     }
 
@@ -703,7 +717,7 @@ impl MoviesView {
                     ui.add(egui::Label::new(shorten(overview, SYNOPSIS_CHARS)).wrap());
                 }
                 ui.add_space(4.0);
-                if squircle::text_button(ui, "This one").clicked() {
+                if squircle::text_button(ui, strings::THIS_ONE).clicked() {
                     picked = true;
                 }
             });
@@ -921,7 +935,9 @@ impl MoviesView {
         let result = match rx.try_recv() {
             Ok(result) => result,
             Err(TryRecvError::Empty) => return,
-            Err(TryRecvError::Disconnected) => Err("the lookup stopped unexpectedly".to_owned()),
+            Err(TryRecvError::Disconnected) => {
+                Err(strings::THE_LOOKUP_STOPPED_UNEXPECTEDLY.to_owned())
+            }
         };
         let media_id = *media_id;
         self.fetching = None;
@@ -936,10 +952,13 @@ impl MoviesView {
                 self.notice = None;
             }
             Ok(MatchOutcome::Nothing) => {
-                self.notice = Some("No TMDb details for this movie.".to_owned());
+                self.notice = Some(strings::NO_TMDB_DETAILS_FOR_THIS_MOVIE.to_owned());
             }
             Err(e) => {
-                self.notice = Some(format!("Could not fetch details: {e}"));
+                self.notice = Some(strings::fill(
+                    strings::COULD_NOT_FETCH_DETAILS,
+                    &[&e.to_string()],
+                ));
             }
         }
     }
@@ -1127,7 +1146,7 @@ fn meta_line(movie: &MediaItem, info: Option<&MovieInfo>) -> String {
     join(&[
         year.map(|y| y.to_string()),
         genres,
-        minutes.map(|m| format!("{m} min")),
+        minutes.map(|m| strings::fill(strings::DURATION_MINUTES, &[&m.to_string()])),
     ])
 }
 
@@ -1175,20 +1194,20 @@ fn tile_text(
 }
 
 /// The facts about a file that the information panel lists. A fact the file does not give reads
-/// "Unknown", and the frame rate is not kept in the index at all.
+/// strings::UNKNOWN, and the frame rate is not kept in the index at all.
 /// A frame rate as people write it: `23.976`, `25`, `29.97`. A variable one says so.
 fn frame_rate_label(fps: f64, variable: bool) -> String {
     let text = format!("{fps:.3}");
     let text = text.trim_end_matches('0').trim_end_matches('.');
     if variable {
-        format!("{text} fps average, variable")
+        strings::fill(strings::FPS_AVERAGE_VARIABLE, &[text])
     } else {
         format!("{text} fps")
     }
 }
 
 fn file_info_rows(movie: &MediaItem) -> Vec<(&'static str, String)> {
-    let known = |value: Option<String>| value.unwrap_or_else(|| "Unknown".into());
+    let known = |value: Option<String>| value.unwrap_or_else(|| strings::UNKNOWN.into());
     // The stored ratio when the file states one, else the picture's own shape.
     let aspect = movie.video_aspect.or(match (movie.width, movie.height) {
         (Some(w), Some(h)) if h > 0 => Some(w as f64 / h as f64),
@@ -1196,25 +1215,30 @@ fn file_info_rows(movie: &MediaItem) -> Vec<(&'static str, String)> {
     });
     let aspect = aspect.map(|ratio| format!("{ratio:.2}:1"));
     vec![
-        ("Container", container_label(movie)),
-        ("Codec", known(movie.video_codec.clone())),
+        (strings::CONTAINER, container_label(movie)),
+        (strings::CODEC, known(movie.video_codec.clone())),
         (
-            "Colour depth",
+            strings::COLOUR_DEPTH,
             known(movie.video_bit_depth.map(|bits| format!("{bits}-bit"))),
         ),
-        ("Chroma subsampling", known(movie.video_chroma.clone())),
         (
-            "Dynamic range",
-            known(
-                movie
-                    .hdr
-                    .map(|hdr| if hdr { "HDR".into() } else { "SDR".into() }),
-            ),
+            strings::CHROMA_SUBSAMPLING,
+            known(movie.video_chroma.clone()),
         ),
-        ("Resolution", known(resolution_label(movie))),
-        ("Aspect ratio", known(aspect)),
         (
-            "Frame rate",
+            strings::DYNAMIC_RANGE,
+            known(movie.hdr.map(|hdr| {
+                if hdr {
+                    strings::HDR.into()
+                } else {
+                    strings::SDR.into()
+                }
+            })),
+        ),
+        (strings::RESOLUTION, known(resolution_label(movie))),
+        (strings::ASPECT_RATIO, known(aspect)),
+        (
+            strings::FRAME_RATE,
             known(
                 movie
                     .video_fps
@@ -1222,14 +1246,14 @@ fn file_info_rows(movie: &MediaItem) -> Vec<(&'static str, String)> {
             ),
         ),
         (
-            "Length",
+            strings::LENGTH,
             known(
                 movie
                     .duration_ms
                     .map(|ms| format::clock(ms as f64 / 1000.0)),
             ),
         ),
-        ("File size", format::size(movie.size)),
+        (strings::FILE_SIZE, format::size(movie.size)),
     ]
 }
 
@@ -1274,15 +1298,15 @@ fn container_label(movie: &MediaItem) -> String {
         .unwrap_or("")
         .to_ascii_lowercase();
     match ext.as_str() {
-        "mp4" => "MP4".into(),
-        "m4v" => "M4V".into(),
-        "mkv" => "Matroska (MKV)".into(),
-        "webm" => "WebM".into(),
-        "mov" => "QuickTime (MOV)".into(),
-        "avi" => "AVI".into(),
-        "ts" | "m2ts" | "mts" => "MPEG transport stream".into(),
-        "mpg" | "mpeg" => "MPEG program stream".into(),
-        "obu" => "Raw AV1 stream (OBU)".into(),
+        "mp4" => strings::MP4.into(),
+        "m4v" => strings::M4V.into(),
+        "mkv" => strings::MATROSKA_MKV.into(),
+        "webm" => strings::WEBM.into(),
+        "mov" => strings::QUICKTIME_MOV.into(),
+        "avi" => strings::AVI.into(),
+        "ts" | "m2ts" | "mts" => strings::MPEG_TRANSPORT_STREAM.into(),
+        "mpg" | "mpeg" => strings::MPEG_PROGRAM_STREAM.into(),
+        "obu" => strings::RAW_AV1_STREAM_OBU.into(),
         other => other.to_ascii_uppercase(),
     }
 }
