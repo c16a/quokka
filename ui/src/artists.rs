@@ -90,19 +90,43 @@ impl ArtistsView {
         self.photos.poll(&ctx);
         let mut chosen = None;
         {
-            ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing = egui::vec2(TILE_GAP, TILE_GAP);
-                for (n, (name, album_ids)) in self.artists.iter().enumerate() {
-                    let cover = match self.photos.get(&ctx, name) {
-                        PhotoState::Photo(photo) => Some(photo),
-                        PhotoState::Loading => None,
-                        PhotoState::Missing => albums.cover(&ctx, library, album_ids[0]),
-                    };
-                    if artist_tile(ui, cover.as_ref(), name, album_ids.len()).clicked() {
-                        chosen = Some(n);
-                    }
+            let width = ui.available_width();
+            let columns = ((width + TILE_GAP) / (TILE_COVER + TILE_GAP))
+                .floor()
+                .max(1.0) as usize;
+            let count = self.artists.len();
+            let artists = &self.artists;
+            let photos = &mut self.photos;
+            for row in 0..count.div_ceil(columns) {
+                // A row off screen is only reserved, so the grid keeps its height and no photo is
+                // requested for its artists.
+                let rect = egui::Rect::from_min_size(
+                    ui.cursor().min,
+                    egui::vec2(width, TILE_COVER + TILE_TEXT),
+                );
+                if !ui.is_rect_visible(rect) {
+                    ui.allocate_exact_size(rect.size(), egui::Sense::hover());
+                    ui.add_space(TILE_GAP);
+                    continue;
                 }
-            });
+                let start = row * columns;
+                let end = (start + columns).min(count);
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = TILE_GAP;
+                    for (k, (name, album_ids)) in artists[start..end].iter().enumerate() {
+                        let n = start + k;
+                        let cover = match photos.get(&ctx, name) {
+                            PhotoState::Photo(photo) => Some(photo),
+                            PhotoState::Loading => None,
+                            PhotoState::Missing => albums.cover(&ctx, library, album_ids[0]),
+                        };
+                        if artist_tile(ui, cover.as_ref(), name, album_ids.len()).clicked() {
+                            chosen = Some(n);
+                        }
+                    }
+                });
+                ui.add_space(TILE_GAP);
+            }
             let credits: Vec<&str> = self
                 .artists
                 .iter()

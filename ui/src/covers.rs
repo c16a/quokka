@@ -129,17 +129,18 @@ pub(crate) fn evict<K: Eq + Hash + Clone, V>(
     cap: usize,
     is_loaded: impl Fn(&V) -> bool,
 ) {
-    while entries.len() > cap {
-        let oldest = entries
-            .iter()
-            .filter(|(_, (_, value))| is_loaded(value))
-            .min_by_key(|(_, (used, _))| *used)
-            .map(|(key, _)| key.clone());
-        match oldest {
-            Some(key) => {
-                entries.remove(&key);
-            }
-            None => break,
-        }
+    if entries.len() <= cap {
+        return;
+    }
+    // Sorting the loaded entries once keeps eviction to one pass, rather than a scan per entry removed.
+    let mut loaded: Vec<(u64, K)> = entries
+        .iter()
+        .filter(|(_, (_, value))| is_loaded(value))
+        .map(|(key, (used, _))| (*used, key.clone()))
+        .collect();
+    loaded.sort_unstable_by_key(|(used, _)| *used);
+    let excess = entries.len() - cap;
+    for (_, key) in loaded.into_iter().take(excess) {
+        entries.remove(&key);
     }
 }

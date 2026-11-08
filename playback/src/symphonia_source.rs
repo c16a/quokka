@@ -36,8 +36,11 @@ use symphonia::core::units::Time;
 /// Shared slot holding the error that stopped a track early, if there was one.
 pub type ErrorSlot = Arc<Mutex<Option<String>>>;
 
-/// Decoded chunks the thread may run ahead of playback (about 1.5 s of 96 kHz stereo).
+/// Fewest decoded chunks the thread may queue. Used when the codec does not state its packet
+/// size, and as the floor otherwise.
 const BUFFER_CHUNKS: usize = 32;
+/// How far ahead of playback the decoder thread tries to stay.
+const BUFFER_SECONDS: u64 = 2;
 /// How long the thread waits before retrying when the buffer is full.
 const RETRY: Duration = Duration::from_millis(2);
 /// How often an idle thread (end of file reached) checks for a seek or for shutdown.
@@ -70,6 +73,8 @@ enum Message {
 pub struct SymphoniaSource {
     commands: Sender<Command>,
     messages: Receiver<Message>,
+    /// Emptied buffers, handed back to the decoder thread for reuse.
+    recycled: Sender<Vec<f32>>,
     sample_rate: SampleRate,
     channels: ChannelCount,
     duration: Option<Duration>,
@@ -95,6 +100,8 @@ struct Worker {
     skip_samples: usize,
     generation: u64,
     error: ErrorSlot,
+    /// Emptied buffers returned by the source, reused for decoding.
+    recycled: Receiver<Vec<f32>>,
 }
 
 /// One step of decoding: a chunk of samples, or the end of the stream.
@@ -174,7 +181,9 @@ impl SymphoniaSource {
             .map_err(|e| e.to_string())?;
 
         let (command_tx, command_rx) = mpsc::channel();
-        let (message_tx, message_rx) = mpsc::sync_channel(BUFFER_CHUNKS);
+        let (message_tx, message_rx) =
+            mpsc::sync_channel(buffer_chunks(&params, sample_rate.get(), channels.get()));
+        let (recycled_tx, recycled_rx) = mpsc::channel();
         // The system decoder does not trim the encoder's delay; symphonia's own decoder does.
         let skip_samples = if system.is_some() {
             delay.map_or(priming, u64::from) as usize * usize::from(channels.get())
@@ -190,6 +199,7 @@ impl SymphoniaSource {
             skip_samples,
             generation: 0,
             error,
+            recycled: recycled_rx,
         };
         thread::Builder::new()
             .name("decoder".into())
@@ -199,6 +209,7 @@ impl SymphoniaSource {
         Ok(Self {
             commands: command_tx,
             messages: message_rx,
+            recycled: recycled_tx,
             sample_rate,
             channels,
             duration,
@@ -308,7 +319,13 @@ impl Worker {
             }
             match self.decoder.decode(&packet) {
                 Ok(decoded) => {
-                    let mut samples = Vec::new();
+                    let mut samples = match self.recycled.try_recv() {
+                        Ok(mut buffer) => {
+                            buffer.clear();
+                            buffer
+                        }
+                        Err(_) => Vec::new(),
+                    };
                     decoded.copy_to_vec_interleaved(&mut samples);
                     if let Some(chunk) = self.after_seek(samples) {
                         return chunk;
@@ -377,7 +394,8 @@ impl Iterator for SymphoniaSource {
                     generation,
                     samples,
                 }) if generation == self.generation => {
-                    self.samples = samples;
+                    let spent = std::mem::replace(&mut self.samples, samples);
+                    self.recycle(spent);
                     self.cursor = 0;
                 }
                 Ok(Message::End { generation }) if generation == self.generation => {
@@ -393,10 +411,29 @@ impl Iterator for SymphoniaSource {
 }
 
 impl SymphoniaSource {
+    /// Hand a spent buffer back to the decoder thread. The send never blocks the audio thread,
+    /// and a failed send only means the thread has already exited.
+    fn recycle(&self, buffer: Vec<f32>) {
+        let _ = self.recycled.send(buffer);
+    }
+
     /// The decoder that makes this source's samples: `"AudioToolbox"`, or `"symphonia"`.
     pub fn decoder_name(&self) -> &'static str {
         self.decoder_name
     }
+}
+
+/// How many decoded chunks the thread may queue. A chunk is one packet, so the count is taken
+/// from the largest packet the codec allows, which gives about `BUFFER_SECONDS` of audio. Smaller
+/// packets hold less time, so `BUFFER_CHUNKS` is the floor.
+fn buffer_chunks(params: &AudioCodecParameters, sample_rate: u32, channels: u16) -> usize {
+    let Some(frames) = params.max_frames_per_packet.filter(|&frames| frames > 0) else {
+        return BUFFER_CHUNKS;
+    };
+    let budget = u64::from(sample_rate) * u64::from(channels) * BUFFER_SECONDS;
+    let chunk = frames * u64::from(channels);
+    let chunks = usize::try_from(budget.div_ceil(chunk)).unwrap_or(usize::MAX);
+    chunks.max(BUFFER_CHUNKS)
 }
 
 /// The operating system's decoder for a music track, when it takes the codec. Symphonia decodes
@@ -466,7 +503,8 @@ impl Source for SymphoniaSource {
             })
             .map_err(|_| not_supported())?;
         // The decoder thread applies the seek; anything already buffered is now stale.
-        self.samples.clear();
+        let spent = std::mem::take(&mut self.samples);
+        self.recycle(spent);
         self.cursor = 0;
         self.finished = false;
         Ok(())

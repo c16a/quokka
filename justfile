@@ -65,6 +65,14 @@ match-titles db titles:
 match-tmdb db:
     cargo run -p quokka-core --example match_tmdb -- {{db}}
 
+# Fill a database with synthetic albums and movies, for timing: `just fixture bench.db 2000 10 500`.
+fixture db albums tracks movies:
+    cargo run -q -p quokka-core --example library_fixture -- {{db}} {{albums}} {{tracks}} {{movies}}
+
+# Time the library queries the UI runs most, on an optimised build: `just bench-queries bench.db`.
+bench-queries db:
+    cargo run -q --release -p quokka-core --example bench_queries -- {{db}}
+
 # Remove build artefacts.
 clean:
     cargo clean

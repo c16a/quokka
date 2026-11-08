@@ -431,7 +431,7 @@ impl AlbumsView {
             // The page's clip area is where the background is drawn, so it is only drawn and animated
             // while that area is on screen.
             let area = ui.clip_rect();
-            if ui.is_rect_visible(area) {
+            if ui.is_rect_visible(area) && ui.ctx().content_rect().intersects(area) {
                 let background = crate::mesh_background::MeshBackground {
                     base: colour,
                     seed: (i % 1000) as f32,
