@@ -3,6 +3,7 @@
 //! scaled to its place, bilinearly filtered as before. The CPU no longer computes every pixel, and
 //! the upload is 1.5 bytes a pixel rather than 4.
 
+#[cfg(target_os = "macos")]
 use std::collections::VecDeque;
 use std::pin::pin;
 use std::sync::Arc;
@@ -23,6 +24,7 @@ const PARAMS_BYTES: u64 = 64;
 
 /// Planes of earlier frames kept alive after they are replaced. The GPU may still be reading them
 /// when the next frame arrives, and a hardware buffer must not be reused until it has finished.
+#[cfg(target_os = "macos")]
 const RETIRED_PLANES: usize = 4;
 
 /// The GPU state for video: the two pipelines, and the textures for the frame on screen.
@@ -376,6 +378,7 @@ impl VideoGpu {
         }
     }
 
+    #[cfg(target_os = "macos")]
     fn bind_group(
         &self,
         device: &wgpu::Device,

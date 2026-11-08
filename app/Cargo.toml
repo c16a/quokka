@@ -14,3 +14,9 @@ path = "src/main.rs"
 directories.workspace = true
 quokka-core.workspace = true
 quokka-ui.workspace = true
+
+[features]
+# The default build links FFmpeg in statically. Use --no-default-features to link a system FFmpeg 8.1
+# instead; docs/relinking.md has the steps.
+default = ["static-ffmpeg"]
+static-ffmpeg = ["quokka-ui/static-ffmpeg"]

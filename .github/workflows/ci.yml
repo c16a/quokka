@@ -14,16 +14,30 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # One run per platform: the same steps on macOS and on Ubuntu. fail-fast is off, so a failure on
+  # one platform does not cancel the other.
   check:
-    # Quokka is macOS-only: the decoders, the GPU import and the media controls use macOS frameworks.
-    runs-on: macos-26
+    name: Check (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-26, ubuntu-26.04, ubuntu-26.04-arm]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
 
       # rust-toolchain.toml pins the toolchain, so rustup installs exactly that version.
-      - name: Install just
+      - name: Install just (macOS)
+        if: runner.os == 'macOS'
         run: brew install just
+
+      # FFmpeg is built from source by the build, so it needs nasm for the x86 assembly, plus ALSA for audio and the windowing and D-Bus headers.
+      - name: Install just and the system libraries (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y just nasm libasound2-dev libclang-dev libdbus-1-dev libssl-dev libwayland-dev libxkbcommon-dev libx11-dev libxcursor-dev libxi-dev libxrandr-dev libgl-dev libegl-dev
 
       - uses: Swatinem/rust-cache@v2
 
@@ -40,10 +54,21 @@ jobs:
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: just release
 
-  # Runs alongside `check`: no `needs`, so the two jobs start together.
+  # Runs alongside `check`: no `needs`, so the jobs start together. Each platform reports under its
+  # own category, so the results stay apart.
   codeql:
-    name: CodeQL (rust)
-    runs-on: macos-26
+    name: CodeQL (rust, ${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-26
+            category: /language:rust
+          - os: ubuntu-26.04
+            category: /language:rust/linux
+          - os: ubuntu-26.04-arm
+            category: /language:rust/linux-arm
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     permissions:
       contents: read
@@ -61,4 +86,4 @@ jobs:
 
       - uses: github/codeql-action/analyze@v4
         with:
-          category: /language:rust
+          category: ${{ matrix.category }}

@@ -11,4 +11,13 @@ Phosphor icons (Phosphor.ttf, Phosphor-Fill.ttf)
   Licensed under the MIT License.
   See ui/assets/fonts/Phosphor-LICENSE.txt.
 
-Rust dependencies are listed in Cargo.lock, and each carries its own licence.
+FFmpeg (libavcodec, libavformat, libavutil)
+  Copyright (c) the FFmpeg developers. https://ffmpeg.org
+  Licensed under the GNU Lesser General Public License, version 2.1 or later.
+  Licence text: LICENSES/LGPL-2.1.txt
+  Source: https://github.com/FFmpeg/FFmpeg at commit a35157abb96167fd7308edc92b55408d5bb084b0
+  The release binary contains FFmpeg 8.1 and is built without any GPL or non-free parts.
+  To use a different FFmpeg 8.1 build, see docs/relinking.md.
+
+Rust dependencies are listed in THIRD-PARTY-LICENSES.html, generated from Cargo.lock with
+cargo-about. Each carries its own licence.

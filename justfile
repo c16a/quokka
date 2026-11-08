@@ -1,40 +1,34 @@
 # Default: run the full local check.
 default: check
 
-# Fail early, with the install command, when libmpv is missing. The player links against it.
-# Install it with `brew install mpv`. The linker search path for Homebrew is in .cargo/config.toml.
-libmpv-check:
-    @if [ "$(uname)" = "Darwin" ]; then exit 0; fi; pkg-config --exists mpv || { echo "libmpv not found. Install it with: brew install mpv"; exit 1; }
-
 # Build the whole workspace.
-build: libmpv-check
+build:
     cargo build --workspace
 
 # Build optimised.
-release: libmpv-check
+release:
     cargo build --workspace --release
 
-# Run all tests.
-test: libmpv-check
-    cargo test --workspace
+# Build optimised, linking against a system FFmpeg 8.1 instead of building it in. See docs/relinking.md.
+release-system:
+    cargo build -p quokka-app --release --no-default-features
 
-# Play real video through libmpv: `just test-video ~/Movies/clip.mkv`. Runs the checks that need a
-# file, which are skipped by `just test`. Use an AV1 file to exercise the new backend.
-test-video path: libmpv-check
-    QUOKKA_TEST_VIDEO={{path}} cargo test -p quokka-playback --test mpv_player
+# Run all tests.
+test:
+    cargo test --workspace
 
 # Format the code in place.
 fmt:
     cargo fmt --all
 
 # Verify formatting, lints (warnings are errors) and tests. Used before commits and in CI.
-check: libmpv-check
+check:
     cargo fmt --all -- --check
     cargo clippy --workspace --all-targets -- -D warnings
     cargo test --workspace
 
 # Launch the desktop app.
-run: libmpv-check
+run:
     cargo run -p quokka-app
 
 # Build the app icon, packaging/AppIcon.icns, from packaging/icon/quokka.svg. Needs ImageMagick
