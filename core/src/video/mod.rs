@@ -242,6 +242,9 @@ pub struct VideoFormat {
     pub variable_frame_rate: bool,
     /// How the colours are encoded.
     pub colour: Colour,
+    /// Whether the frames are interlaced: fields or a mix, as the codec's sequence header says. `None`
+    /// when the stream does not say.
+    pub interlaced: Option<bool>,
 }
 
 /// Read the format of the video in `path`. Files that are not video, or that use a format this
@@ -280,6 +283,9 @@ pub(crate) struct Headers {
     pub colour: Colour,
     /// Time scale and ticks per frame: the frame rate is `scale / ticks`.
     pub timing: Option<(u64, u64)>,
+    /// Whether the frames are interlaced: fields or a mix, as the codec's sequence header says. `None`
+    /// when the stream does not say.
+    pub interlaced: Option<bool>,
 }
 
 /// The video signal fields of a VUI, which H.264 and HEVC lay out the same way: the range and the
@@ -383,6 +389,8 @@ pub(crate) fn assemble(found: Found) -> VideoFormat {
         frame_rate,
         variable_frame_rate,
         colour: headers.colour.or(found.colour),
+        // Only the codec's headers say whether frames are interlaced; no container reader does.
+        interlaced: headers.interlaced,
     }
 }
 

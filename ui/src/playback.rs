@@ -1112,6 +1112,14 @@ impl Playback {
             self.audio_track = 0;
         }
         if item.kind == MediaKind::Video {
+            // An interlaced stream is deinterlaced from the start; the D key still overrides it.
+            #[cfg(target_os = "macos")]
+            {
+                self.deinterlace = quokka_core::video::inspect(&item.path)
+                    .ok()
+                    .and_then(|format| format.interlaced)
+                    .unwrap_or(false);
+            }
             self.start_video(&item, autoplay);
             return;
         }

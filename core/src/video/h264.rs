@@ -127,6 +127,8 @@ pub(crate) fn from_sps(nal: &[u8]) -> Option<Headers> {
         height: u32::try_from(height).ok(),
         bit_depth: Some(bit_depth),
         chroma: Some(chroma),
+        // Without frame_mbs_only_flag every picture is a frame, so the stream is progressive.
+        interlaced: Some(!frame_mbs_only),
         ..Headers::default()
     };
     if bits.flag()? {
@@ -203,5 +205,18 @@ mod tests {
         assert_eq!(headers.height, Some(16));
         assert_eq!(headers.bit_depth, Some(8));
         assert_eq!(headers.chroma, Some(Chroma::Yuv420));
+        assert_eq!(headers.interlaced, Some(false));
+    }
+
+    #[test]
+    fn a_field_coded_sps_is_interlaced() {
+        // As the test above, but frame_mbs_only_flag is 0 and the frame is two macroblock rows
+        // high: the bits after the height are 0 (frame_mbs_only), 0 (mb_adaptive_frame_field),
+        // 1 (direct 8x8), 0 (no crop), 0 (no vui). The picture is 16x32.
+        let nal = [0x67, 66, 0, 30, 0b1111_1011, 0b0010_0000];
+        let headers = from_sps(&nal).expect("parses");
+        assert_eq!(headers.width, Some(16));
+        assert_eq!(headers.height, Some(32));
+        assert_eq!(headers.interlaced, Some(true));
     }
 }

@@ -258,8 +258,11 @@ fn read_vui(bits: &mut Bits, headers: &mut Headers) {
         let _ = bits.ue();
         let _ = bits.ue();
     }
-    // neutral_chroma_indication_flag, field_seq_flag, frame_field_info_present_flag.
-    let _ = bits.skip(3);
+    // neutral_chroma_indication_flag, then field_seq_flag, then frame_field_info_present_flag.
+    // A VUI that ends before field_seq_flag leaves the stream's interlacing unstated.
+    let _ = bits.skip(1);
+    headers.interlaced = bits.flag();
+    let _ = bits.skip(1);
     // default_display_window_flag: four Exp-Golomb offsets.
     if bits.flag().unwrap_or(false) {
         for _ in 0..4 {
@@ -294,5 +297,18 @@ mod tests {
         assert_eq!(headers.bit_depth, Some(10));
         assert_eq!(headers.chroma, Some(Chroma::Yuv420));
         assert_eq!(headers.width, None);
+    }
+
+    #[test]
+    fn vui_field_seq_flag_says_whether_the_stream_is_interlaced() {
+        // Five flags come before field_seq_flag and are all clear, so it is the sixth bit. The
+        // bits after it are clear too: frame_field_info, default display window, and timing.
+        let mut headers = Headers::default();
+        read_vui(&mut Bits::new(&[0x04, 0x00]), &mut headers);
+        assert_eq!(headers.interlaced, Some(true));
+
+        let mut headers = Headers::default();
+        read_vui(&mut Bits::new(&[0x00, 0x00]), &mut headers);
+        assert_eq!(headers.interlaced, Some(false));
     }
 }
