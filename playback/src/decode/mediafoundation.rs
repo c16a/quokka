@@ -123,8 +123,19 @@ impl MediaFoundation {
             ),
         ] {
             // SAFETY: the transform is valid, and the message takes no parameter.
-            unsafe { transform.ProcessMessage(message, 0) }
-                .map_err(|error| step_error(name, error))?;
+            unsafe { transform.ProcessMessage(message, 0) }.map_err(|error| {
+                if error.code() == MF_E_TRANSFORM_TYPE_NOT_SET {
+                    // The decoder will not stream until an output type exists, and it offers none
+                    // yet. Decoders that need a Direct3D device do this, and Quokka does not set one
+                    // up, so the stream is refused rather than failed.
+                    unsupported(format!(
+                        "the {} decoder on this machine needs hardware acceleration, which Quokka does not set up yet",
+                        stream.codec.name()
+                    ))
+                } else {
+                    step_error(name, error)
+                }
+            })?;
         }
 
         let mut decoder = MediaFoundation {

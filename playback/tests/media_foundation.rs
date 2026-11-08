@@ -55,9 +55,11 @@ fn hevc_decodes_or_names_the_missing_extension() {
             assert!(count > 0, "no frames came out");
             assert_eq!(count, expected, "frames out of hevc_10_420.mp4");
         }
+        // A refusal must say why. Two reasons are expected: the extensions are not installed, or the
+        // decoder that Windows offers needs hardware acceleration, which Quokka does not set up yet.
         Err(FrameError::NoDecoder(reason)) => assert!(
-            reason.contains("HEVC Video Extensions"),
-            "the refusal does not say what is missing: {reason}"
+            reason.contains("HEVC Video Extensions") || reason.contains("hardware acceleration"),
+            "the refusal does not say why: {reason}"
         ),
         Err(other) => panic!("unexpected error: {other}"),
     }
