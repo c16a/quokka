@@ -25,3 +25,8 @@ objc2-app-kit.workspace = true
 # The H.264 and HEVC decoder on Linux, through FFmpeg's libavcodec. macOS decodes both with VideoToolbox.
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 ffmpeg-next.workspace = true
+
+[features]
+# Build FFmpeg from source and link it into the binary, so the binary runs without a system FFmpeg.
+# Off here; the app turns it on by default. See docs/relinking.md for the system build.
+static-ffmpeg = ["ffmpeg-next/build"]

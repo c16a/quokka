@@ -14,7 +14,7 @@ publish = false
 # Platform-only features (for example Linux windowing) are added in the crate that needs them.
 [workspace.dependencies]
 directories = { version = "6.0.0", default-features = false }
-ffmpeg-next = { version = "7.1.0", default-features = false, features = ["codec", "format"] }
+ffmpeg-next = { version = "=8.1.0", default-features = false, features = ["codec", "format"] }
 egui_system_font_provider = { version = "0.37.0", default-features = false }
 eframe = { version = "0.37.0", default-features = false, features = ["wgpu", "default_fonts", "accesskit", "clipboard", "links", "system_fonts"] }
 lofty = { version = "0.25.5", default-features = false, features = ["id3v2_compression_support"] }

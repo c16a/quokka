@@ -27,3 +27,7 @@ rfd = { workspace = true, features = ["xdg-portal"] }
 objc2.workspace = true
 objc2-foundation.workspace = true
 objc2-metal.workspace = true
+
+[features]
+# Passed through to the playback crate. See quokka-playback's static-ffmpeg.
+static-ffmpeg = ["quokka-playback/static-ffmpeg"]

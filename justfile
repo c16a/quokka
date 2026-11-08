@@ -1,21 +1,20 @@
 # Default: run the full local check.
 default: check
 
-# Fail early, with the install command, when FFmpeg's development libraries are missing on Linux. The
-# H.264 and HEVC decoder links against libavcodec. macOS uses VideoToolbox and needs nothing here.
-ffmpeg-check:
-    @if [ "$(uname)" = "Darwin" ]; then exit 0; fi; pkg-config --exists libavcodec libavutil libswscale || { echo "FFmpeg development libraries not found. On Debian or Ubuntu: sudo apt install pkg-config libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libclang-dev"; exit 1; }
-
 # Build the whole workspace.
-build: ffmpeg-check
+build:
     cargo build --workspace
 
 # Build optimised.
-release: ffmpeg-check
+release:
     cargo build --workspace --release
 
+# Build optimised, linking against a system FFmpeg 8.1 instead of building it in. See docs/relinking.md.
+release-system:
+    cargo build -p quokka-app --release --no-default-features
+
 # Run all tests.
-test: ffmpeg-check
+test:
     cargo test --workspace
 
 # Format the code in place.
@@ -23,13 +22,13 @@ fmt:
     cargo fmt --all
 
 # Verify formatting, lints (warnings are errors) and tests. Used before commits and in CI.
-check: ffmpeg-check
+check:
     cargo fmt --all -- --check
     cargo clippy --workspace --all-targets -- -D warnings
     cargo test --workspace
 
 # Launch the desktop app.
-run: ffmpeg-check
+run:
     cargo run -p quokka-app
 
 # Build the app icon, packaging/AppIcon.icns, from packaging/icon/quokka.svg. Needs ImageMagick
