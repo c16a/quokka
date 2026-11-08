@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    # Quokka is macOS-only: the decoders, the GPU import and the media controls use macOS frameworks.
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      # rust-toolchain.toml pins the toolchain, so rustup installs exactly that version.
+      - name: Install just
+        run: brew install just
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting, clippy and tests
+        run: just check
