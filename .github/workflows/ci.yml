@@ -14,16 +14,30 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # One run per platform: the same steps on macOS and on Ubuntu. fail-fast is off, so a failure on
+  # one platform does not cancel the other.
   check:
-    # Quokka is macOS-only: the decoders, the GPU import and the media controls use macOS frameworks.
-    runs-on: macos-26
+    name: Check (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-26, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
 
       # rust-toolchain.toml pins the toolchain, so rustup installs exactly that version.
-      - name: Install just
+      - name: Install just (macOS)
+        if: runner.os == 'macOS'
         run: brew install just
+
+      # libmpv is the playback backend, ALSA is the audio output, and the rest are the windowing and D-Bus headers.
+      - name: Install just and the system libraries (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y just libmpv-dev libasound2-dev libclang-dev libdbus-1-dev libssl-dev libwayland-dev libxkbcommon-dev libx11-dev libxcursor-dev libxi-dev libxrandr-dev libgl-dev libegl-dev
 
       - uses: Swatinem/rust-cache@v2
 
@@ -40,39 +54,19 @@ jobs:
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: just release
 
-  # Linux: the same steps as `check`, on Ubuntu. It runs alongside `check`, with no `needs`.
-  check-linux:
-    name: Check (Linux)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v7
-
-      # libmpv is the playback backend, ALSA is the audio output, and the rest are the windowing and D-Bus headers.
-      - name: Install just and the system libraries
-        run: |
-          sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y just libmpv-dev libasound2-dev libclang-dev libdbus-1-dev libssl-dev libwayland-dev libxkbcommon-dev libx11-dev libxcursor-dev libxi-dev libxrandr-dev libgl-dev libegl-dev
-
-      - uses: Swatinem/rust-cache@v2
-
-      - name: Check formatting, clippy and tests
-        run: just check
-
-      # Pull requests: a debug build of the whole workspace.
-      - name: Build the workspace
-        if: github.event_name == 'pull_request'
-        run: just build
-
-      # After a merge to main: a release build.
-      - name: Release build
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: just release
-
-  # Runs alongside `check`: no `needs`, so the two jobs start together.
+  # Runs alongside `check`: no `needs`, so the jobs start together. Each platform reports under its
+  # own category, so the results stay apart.
   codeql:
-    name: CodeQL (rust)
-    runs-on: macos-26
+    name: CodeQL (rust, ${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-26
+            category: /language:rust
+          - os: ubuntu-24.04
+            category: /language:rust/linux
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     permissions:
       contents: read
@@ -90,26 +84,4 @@ jobs:
 
       - uses: github/codeql-action/analyze@v4
         with:
-          category: /language:rust
-
-  # CodeQL analyses the code for the platform it runs on, so the macOS job above skips the
-  # Linux-only paths. This job covers them. Its results sit in their own category.
-  codeql-linux:
-    name: CodeQL (rust, Linux)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    permissions:
-      contents: read
-      security-events: write
-      actions: read
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: github/codeql-action/init@v4
-        with:
-          languages: rust
-          queries: security-extended
-
-      - uses: github/codeql-action/analyze@v4
-        with:
-          category: /language:rust/linux
+          category: ${{ matrix.category }}
