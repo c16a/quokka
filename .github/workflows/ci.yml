@@ -59,21 +59,12 @@ jobs:
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: just release
 
-  # Runs alongside `check`: no `needs`, so the jobs start together. Each platform reports under its
-  # own category, so the results stay apart.
+  # Runs alongside `check`: no `needs`, so the jobs start together. One job on Linux analyses the whole
+  # workspace. CodeQL's Rust extraction runs no build and extracts every source file, but it is not
+  # confirmed that code gated by `#[cfg(windows)]` gets full analysis on Linux.
   codeql:
-    name: CodeQL (rust, ${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: macos-26
-            category: /language:rust
-          - os: ubuntu-26.04
-            category: /language:rust/linux
-          - os: ubuntu-26.04-arm
-            category: /language:rust/linux-arm
-    runs-on: ${{ matrix.os }}
+    name: CodeQL (rust)
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     permissions:
       contents: read
@@ -91,4 +82,4 @@ jobs:
 
       - uses: github/codeql-action/analyze@v4
         with:
-          category: ${{ matrix.category }}
+          category: /language:rust
