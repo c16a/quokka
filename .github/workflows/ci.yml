@@ -44,7 +44,15 @@ jobs:
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y just nasm libasound2-dev libclang-dev libdbus-1-dev libssl-dev libwayland-dev libxkbcommon-dev libx11-dev libxcursor-dev libxi-dev libxrandr-dev libgl-dev libegl-dev
 
+      # The cache is keyed by platform and profile only. The job id and the environment hash are left out, so
+      # each platform shares one dev cache across jobs and branches. Only main saves it: pull requests read it,
+      # so their branches do not each create a cache that counts against the repository limit.
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ runner.os }}-${{ runner.arch }}-dev
+          add-job-id-key: "false"
+          add-rust-environment-hash-key: "false"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Check formatting, clippy and tests
         run: just check
@@ -54,9 +62,41 @@ jobs:
         if: github.event_name == 'pull_request'
         run: just build
 
-      # After a merge to main: a release build, so the shipped configuration compiles on every change to main.
+  # After a merge to main: a release build, so the shipped configuration compiles on every change to main.
+  # It is its own job, so its release-profile cache does not replace the dev cache that `check` saves.
+  release:
+    name: Release build (${{ matrix.os }})
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-26, ubuntu-26.04, ubuntu-26.04-arm, windows-2025-vs2026, windows-11-vs2026-arm]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install just (macOS)
+        if: runner.os == 'macOS'
+        run: brew install just
+
+      - name: Install just (Windows)
+        if: runner.os == 'Windows'
+        run: choco install just --yes --no-progress
+
+      - name: Install just and the system libraries (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y just nasm libasound2-dev libclang-dev libdbus-1-dev libssl-dev libwayland-dev libxkbcommon-dev libx11-dev libxcursor-dev libxi-dev libxrandr-dev libgl-dev libegl-dev
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ runner.os }}-${{ runner.arch }}-release
+          add-job-id-key: "false"
+          add-rust-environment-hash-key: "false"
+
       - name: Release build
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: just release
 
   # Runs alongside `check`: no `needs`, so the jobs start together. One job on Linux analyses the whole
