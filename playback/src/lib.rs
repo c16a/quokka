@@ -1,6 +1,6 @@
 //! Playback abstraction. The UI and the library talk to playback only through
-//! [`Player`]; concrete backends implement it: rodio for audio, and for video the decoders on macOS
-//! and libmpv elsewhere, until the decoders cover those platforms too.
+//! [`Player`]; concrete backends implement it: rodio for audio, and the decoders for video on every
+//! platform, with the operating system's decoder first where it exists.
 
 mod chain;
 pub mod decode;
@@ -8,8 +8,6 @@ pub mod frame_video;
 mod loudness;
 mod mock;
 pub mod movie_audio;
-#[cfg(not(target_os = "macos"))]
-mod mpv_backend;
 mod rodio_backend;
 mod stream;
 mod symphonia_source;
@@ -22,15 +20,8 @@ use thiserror::Error;
 pub use frame_video::FrameVideo;
 pub use loudness::{Loudness, measure_loudness};
 pub use mock::MockPlayer;
-#[cfg(not(target_os = "macos"))]
-pub use mpv_backend::MpvPlayer;
-#[cfg(target_os = "macos")]
-/// On macOS the video plays from the decoders, in the app's own window.
-#[cfg(target_os = "macos")]
+/// The video player on every platform: the decoders draw into the app's own window.
 pub type VideoPlayer = FrameVideo;
-/// Elsewhere the video plays in mpv's own window, with its own controls.
-#[cfg(not(target_os = "macos"))]
-pub type VideoPlayer = MpvPlayer;
 pub use rodio_backend::{RodioPlayer, output_device_names};
 pub use stream::open_stream;
 pub use symphonia_source::SymphoniaSource;

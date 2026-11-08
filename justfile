@@ -1,40 +1,35 @@
 # Default: run the full local check.
 default: check
 
-# Fail early, with the install command, when libmpv is missing. The player links against it.
-# Install it with `brew install mpv`. The linker search path for Homebrew is in .cargo/config.toml.
-libmpv-check:
-    @if [ "$(uname)" = "Darwin" ]; then exit 0; fi; pkg-config --exists mpv || { echo "libmpv not found. Install it with: brew install mpv"; exit 1; }
+# Fail early, with the install command, when FFmpeg's development libraries are missing on Linux. The
+# H.264 and HEVC decoder links against libavcodec. macOS uses VideoToolbox and needs nothing here.
+ffmpeg-check:
+    @if [ "$(uname)" = "Darwin" ]; then exit 0; fi; pkg-config --exists libavcodec libavutil libswscale || { echo "FFmpeg development libraries not found. On Debian or Ubuntu: sudo apt install pkg-config libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libclang-dev"; exit 1; }
 
 # Build the whole workspace.
-build: libmpv-check
+build: ffmpeg-check
     cargo build --workspace
 
 # Build optimised.
-release: libmpv-check
+release: ffmpeg-check
     cargo build --workspace --release
 
 # Run all tests.
-test: libmpv-check
+test: ffmpeg-check
     cargo test --workspace
-
-# Play real video through libmpv: `just test-video ~/Movies/clip.mkv`. Runs the checks that need a
-# file, which are skipped by `just test`. Use an AV1 file to exercise the new backend.
-test-video path: libmpv-check
-    QUOKKA_TEST_VIDEO={{path}} cargo test -p quokka-playback --test mpv_player
 
 # Format the code in place.
 fmt:
     cargo fmt --all
 
 # Verify formatting, lints (warnings are errors) and tests. Used before commits and in CI.
-check: libmpv-check
+check: ffmpeg-check
     cargo fmt --all -- --check
     cargo clippy --workspace --all-targets -- -D warnings
     cargo test --workspace
 
 # Launch the desktop app.
-run: libmpv-check
+run: ffmpeg-check
     cargo run -p quokka-app
 
 # Build the app icon, packaging/AppIcon.icns, from packaging/icon/quokka.svg. Needs ImageMagick

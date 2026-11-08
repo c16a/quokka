@@ -17,16 +17,11 @@ symphonia-adapter-opus-rs.workspace = true
 thiserror.workspace = true
 ureq.workspace = true
 
-# libmpv's video window must be created on the main thread, so this test runs its own main.
-[[test]]
-name = "mpv_player"
-harness = false
-
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2.workspace = true
 objc2-foundation.workspace = true
 objc2-app-kit.workspace = true
 
-# libmpv plays video on platforms the decoders do not cover yet. macOS plays from the decoders.
+# The H.264 and HEVC decoder on Linux, through FFmpeg's libavcodec. macOS decodes both with VideoToolbox.
 [target.'cfg(not(target_os = "macos"))'.dependencies]
-libmpv2.workspace = true
+ffmpeg-next.workspace = true

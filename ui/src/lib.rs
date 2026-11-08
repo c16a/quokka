@@ -20,10 +20,8 @@ mod progress_writer;
 mod queue;
 mod radio;
 mod recent;
-mod search;
-// Screenshots are taken from the video window only, which is macOS-only.
-#[cfg(target_os = "macos")]
 mod screenshot;
+mod search;
 mod settings_view;
 mod side;
 mod slider;
@@ -136,13 +134,10 @@ struct App {
     movie_progress_for: Option<PathBuf>,
     movie_progress: Option<Progress>,
     /// Whether the video window is open. A movie that starts opens it again.
-    #[cfg(target_os = "macos")]
     video_window_open: bool,
     /// Whether a video was showing last frame, to see when a new one starts.
-    #[cfg(target_os = "macos")]
     video_was_showing: bool,
     /// Whether the movie was playing last frame, to see when playback starts again.
-    #[cfg(target_os = "macos")]
     video_was_playing: bool,
     status: Text,
     /// Whether the sidebar is open. It collapses to a narrow rail when the window is narrow.
@@ -177,7 +172,6 @@ pub fn run(paths: Paths) -> Result<(), Box<dyn std::error::Error>> {
             if let Some(render_state) = cc.wgpu_render_state.as_ref() {
                 mesh_background::install(render_state);
             }
-            #[cfg(target_os = "macos")]
             if let Some(render_state) = cc.wgpu_render_state.as_ref() {
                 video_gpu::install(render_state);
             }
@@ -290,11 +284,8 @@ impl App {
             last_progress: Instant::now(),
             movie_progress_for: None,
             movie_progress: None,
-            #[cfg(target_os = "macos")]
             video_window_open: false,
-            #[cfg(target_os = "macos")]
             video_was_showing: false,
-            #[cfg(target_os = "macos")]
             video_was_playing: false,
             status: Text::empty(),
             sidebar_open: true,
@@ -650,7 +641,6 @@ impl App {
 impl App {
     /// Show a movie's picture in its own window. The window opens when a movie starts or playback
     /// starts again. Closing it pauses the movie and saves where it is, so playing again resumes there.
-    #[cfg(target_os = "macos")]
     fn show_video_window(&mut self, ctx: &egui::Context) {
         let showing = self.playback.borrow_mut().video_showing();
         let playing = self.playback.borrow_mut().is_playing();
@@ -958,7 +948,6 @@ impl eframe::App for App {
             || (self.tab == Tab::Playlists && !self.playlists.showing_detail())
             || (self.tab == Tab::Albums && self.albums.showing_detail())
             || (self.tab == Tab::Movies && self.movies.showing_page());
-        #[cfg(target_os = "macos")]
         self.show_video_window(&ui.ctx().clone());
         let main_frame = if full_width {
             egui::Frame::central_panel(ui.style()).inner_margin(egui::Margin::same(0))

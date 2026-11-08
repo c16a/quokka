@@ -32,12 +32,12 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install just
 
-      # libmpv is the playback backend, ALSA is the audio output, and the rest are the windowing and D-Bus headers.
+      # FFmpeg's libraries are the H.264 and HEVC decoder, ALSA is the audio output, and the rest are the windowing and D-Bus headers.
       - name: Install just and the system libraries (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y just libmpv-dev libasound2-dev libclang-dev libdbus-1-dev libssl-dev libwayland-dev libxkbcommon-dev libx11-dev libxcursor-dev libxi-dev libxrandr-dev libgl-dev libegl-dev
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y just libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libasound2-dev libclang-dev libdbus-1-dev libssl-dev libwayland-dev libxkbcommon-dev libx11-dev libxcursor-dev libxi-dev libxrandr-dev libgl-dev libegl-dev
 
       - uses: Swatinem/rust-cache@v2
 

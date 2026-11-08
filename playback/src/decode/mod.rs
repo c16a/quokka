@@ -6,6 +6,8 @@
 pub mod audio;
 pub mod av1;
 pub mod frames;
+#[cfg(not(target_os = "macos"))]
+pub mod libav;
 pub mod player;
 #[cfg(target_os = "macos")]
 pub mod videotoolbox;
@@ -98,7 +100,8 @@ pub trait VideoDecoder {
 }
 
 /// Open the first backend that accepts the stream. The operating system's decoder is tried first.
-/// Bundled decoders cover what it does not handle: VP9 on every platform for now.
+/// Bundled decoders cover what it does not handle: VP9 and AV1 on every platform, and H.264 and HEVC
+/// on Linux, through libavcodec.
 pub fn open(stream: &StreamConfig) -> Result<Box<dyn VideoDecoder>, DecodeError> {
     #[cfg(target_os = "macos")]
     let system = videotoolbox::VideoToolbox::open(stream)
@@ -113,6 +116,10 @@ pub fn open(stream: &StreamConfig) -> Result<Box<dyn VideoDecoder>, DecodeError>
         Err(error) => error,
     };
     match stream.codec {
+        #[cfg(not(target_os = "macos"))]
+        Codec::H264 | Codec::Hevc => {
+            libav::Libav::open(stream).map(|decoder| Box::new(decoder) as Box<dyn VideoDecoder>)
+        }
         Codec::Vp9 => {
             vp9::Vp9::open(stream).map(|decoder| Box::new(decoder) as Box<dyn VideoDecoder>)
         }
