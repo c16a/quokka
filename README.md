@@ -23,8 +23,11 @@ not supported yet.
 
 ## Platform support
 
-**Windows is not supported.** There is no Windows build, no Windows tests and no Windows playback
-yet.
+**Windows is not supported yet.** Windows support is in progress. The H.264 and HEVC decoder for
+Windows is written and compiles for the MSVC toolchain, and CI is set up to build and test on
+Windows 11 ARM and Windows Server 2025. None of it has run on a Windows machine yet, so there is
+no tested Windows build and no Windows playback. On Windows, HEVC needs the HEVC Video Extensions
+from the Microsoft Store.
 
 Each cell shows what has been tested on that platform. "Tested" means the feature was used in the
 app on that platform. "CI" means only the automated build and tests have run there. "Not tested"
