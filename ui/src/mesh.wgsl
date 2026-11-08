@@ -43,7 +43,8 @@ fn linear_from_gamma(c: vec3<f32>) -> vec3<f32> {
 
 @fragment
 fn fs_mesh(in: VertexOut) -> @location(0) vec4<f32> {
-    let time = params.settings.x * 0.12;
+    // Each point completes a drift in roughly 9 to 17 seconds, so the motion is visible.
+    let time = params.settings.x * 0.6;
     let seed = params.settings.y;
     let aspect = params.settings.z;
     let p = vec2<f32>(in.uv.x * aspect, in.uv.y);
