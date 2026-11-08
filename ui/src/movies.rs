@@ -3,7 +3,7 @@
 //! description and cast come from TMDb, using the key the user set in Settings. When a file name
 //! matches weakly, the page offers the candidates to pick from, each with its cover.
 
-use crate::i18n;
+use crate::i18n::{self, Text};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
@@ -74,7 +74,7 @@ pub struct MoviesView {
     /// Candidates to pick from, for one movie. Nothing is saved until one is picked.
     choices: Option<(i64, Vec<MovieInfo>)>,
     /// What happened on the last job, when it needs saying.
-    notice: Option<String>,
+    notice: Option<Text>,
     /// Covers for choice cards, by TMDb poster path.
     thumbs: HashMap<String, Thumb>,
     /// The colour that covers most of each poster, by TMDb poster path.
@@ -521,7 +521,11 @@ impl MoviesView {
             self.choice_list(ui, movie.id);
         } else if self.details.contains_key(&movie.id) {
             if let Some(notice) = &self.notice {
-                ui.label(egui::RichText::new(notice).size(13.0).color(p.weak));
+                ui.label(
+                    egui::RichText::new(notice.to_string())
+                        .size(13.0)
+                        .color(p.weak),
+                );
             }
         } else if self.fetching_id() == Some(movie.id) {
             ui.label(
@@ -535,7 +539,11 @@ impl MoviesView {
                 self.start(ui.ctx(), movie.id, job);
             }
             if let Some(notice) = &self.notice {
-                ui.label(egui::RichText::new(notice).size(13.0).color(p.weak));
+                ui.label(
+                    egui::RichText::new(notice.to_string())
+                        .size(13.0)
+                        .color(p.weak),
+                );
             }
         } else {
             ui.label(
@@ -687,7 +695,7 @@ impl MoviesView {
         ui.add_space(6.0);
         if squircle::text_button(ui, i18n::none_of_these()).clicked() {
             self.choices = None;
-            self.notice = Some(i18n::left_unmatched().to_owned());
+            self.notice = Some(Text::of(i18n::left_unmatched));
         }
     }
 
@@ -929,11 +937,9 @@ impl MoviesView {
             return;
         };
         let result = match rx.try_recv() {
-            Ok(result) => result,
+            Ok(result) => result.map_err(Text::from),
             Err(TryRecvError::Empty) => return,
-            Err(TryRecvError::Disconnected) => {
-                Err(i18n::the_lookup_stopped_unexpectedly().to_owned())
-            }
+            Err(TryRecvError::Disconnected) => Err(Text::of(i18n::the_lookup_stopped_unexpectedly)),
         };
         let media_id = *media_id;
         self.fetching = None;
@@ -948,12 +954,12 @@ impl MoviesView {
                 self.notice = None;
             }
             Ok(MatchOutcome::Nothing) => {
-                self.notice = Some(i18n::no_tmdb_details_for_this_movie().to_owned());
+                self.notice = Some(Text::of(i18n::no_tmdb_details_for_this_movie));
             }
             Err(e) => {
-                self.notice = Some(i18n::fill(
-                    i18n::could_not_fetch_details(),
-                    &[&e.to_string()],
+                self.notice = Some(Text::filled(
+                    i18n::could_not_fetch_details,
+                    vec![e.to_string().into()],
                 ));
             }
         }

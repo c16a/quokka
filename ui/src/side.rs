@@ -1,6 +1,6 @@
 //! The lyrics and track info panels, beside the main view.
 
-use crate::i18n;
+use crate::i18n::{self, Text};
 use std::path::Path;
 use std::process::Command;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
@@ -33,7 +33,7 @@ enum Lookup {
     Pending,
     /// Finished. The cache holds the result, which may be that nothing was found.
     Done,
-    Failed(String),
+    Failed(Text),
 }
 
 /// What a lookup sends back: the track it was for, and the result.
@@ -132,12 +132,12 @@ impl SidePanels {
                         self.lookup = Lookup::Done;
                     }
                     // A failed lookup is not cached, so it can be tried again.
-                    Err(e) => self.lookup = Lookup::Failed(e),
+                    Err(e) => self.lookup = Lookup::Failed(Text::from(e)),
                 }
             }
             Err(TryRecvError::Empty) => self.results = Some(rx),
             Err(TryRecvError::Disconnected) => {
-                self.lookup = Lookup::Failed(i18n::the_lookup_stopped_unexpectedly().into());
+                self.lookup = Lookup::Failed(Text::of(i18n::the_lookup_stopped_unexpectedly));
             }
         }
     }

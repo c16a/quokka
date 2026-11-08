@@ -25,6 +25,7 @@ pub mod squircle;
 #[cfg(target_os = "macos")]
 pub mod video_gpu;
 
+use i18n::Text;
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -104,7 +105,7 @@ struct App {
     /// Folders waiting to be scanned. Each folder is scanned on its own, one after another.
     queue: VecDeque<PathBuf>,
     /// One line per folder scanned in the current run.
-    report: Vec<String>,
+    report: Vec<Text>,
     /// Set while the scan worker runs the processing steps, after the files are read.
     processing: Arc<AtomicBool>,
     /// Watches the library folder. Dropping it stops the watch.
@@ -130,7 +131,7 @@ struct App {
     /// Whether the movie was playing last frame, to see when playback starts again.
     #[cfg(target_os = "macos")]
     video_was_playing: bool,
-    status: String,
+    status: Text,
     /// Whether the sidebar is open. It collapses to a narrow rail when the window is narrow.
     sidebar_open: bool,
     /// Whether the window was narrow last frame, so the sidebar only changes when the width crosses the line.
@@ -277,7 +278,7 @@ impl App {
             video_was_showing: false,
             #[cfg(target_os = "macos")]
             video_was_playing: false,
-            status: String::new(),
+            status: Text::empty(),
             sidebar_open: true,
             narrow: false,
             folder_files: Vec::new(),
@@ -289,7 +290,7 @@ impl App {
             app.start_station_sync(&ctx);
         }
         if app.settings.library_roots.is_empty() {
-            app.status = i18n::add_a_folder_to_get_started().into();
+            app.status = Text::of(i18n::add_a_folder_to_get_started);
         } else {
             app.watch(&ctx);
             let roots = app.settings.library_roots.clone();
@@ -350,7 +351,7 @@ impl App {
             ctx.request_repaint();
         });
         self.station_sync = Some(rx);
-        self.status = i18n::syncing_the_radio_station_list().into();
+        self.status = Text::of(i18n::syncing_the_radio_station_list);
     }
 
     /// Collect a finished station sync, if there is one.
@@ -360,13 +361,16 @@ impl App {
         };
         match rx.try_recv() {
             Ok(Ok(count)) => {
-                self.status = i18n::fill(i18n::radio_station_count(), &[&count.to_string()]);
+                self.status =
+                    Text::filled(i18n::radio_station_count, vec![count.to_string().into()]);
                 self.radio.reload(&self.library);
             }
-            Ok(Err(e)) => self.status = i18n::fill(i18n::radio_sync_failed(), &[&e.to_string()]),
+            Ok(Err(e)) => {
+                self.status = Text::filled(i18n::radio_sync_failed, vec![e.to_string().into()])
+            }
             Err(TryRecvError::Empty) => self.station_sync = Some(rx),
             Err(TryRecvError::Disconnected) => {
-                self.status = i18n::radio_station_sync_stopped_unexpectedly().into();
+                self.status = Text::of(i18n::radio_station_sync_stopped_unexpectedly);
             }
         }
     }
@@ -375,7 +379,7 @@ impl App {
     fn set_lyrics_online(&mut self, on: bool) {
         self.settings.lyrics_online = on;
         if let Err(e) = self.settings.save(&self.paths.settings) {
-            self.status = i18n::fill(i18n::could_not_save_settings(), &[&e.to_string()]);
+            self.status = Text::filled(i18n::could_not_save_settings, vec![e.to_string().into()]);
         }
     }
 
@@ -505,8 +509,11 @@ impl App {
         });
         let folder = root.display().to_string();
         self.status = match self.queue.len() {
-            0 => i18n::fill(i18n::scanning_folder(), &[&folder]),
-            n => i18n::fill(i18n::scanning_folder_queued(), &[&folder, &n.to_string()]),
+            0 => Text::filled(i18n::scanning_folder, vec![folder.to_string().into()]),
+            n => Text::filled(
+                i18n::scanning_folder_queued,
+                vec![folder.to_string().into(), n.to_string().into()],
+            ),
         };
         self.scan = Some((root, rx));
     }
@@ -514,7 +521,7 @@ impl App {
     /// Save the folder list and watch all of its folders again.
     fn save_and_watch(&mut self, ctx: &egui::Context) {
         if let Err(e) = self.settings.save(&self.paths.settings) {
-            self.status = i18n::fill(i18n::could_not_save_settings(), &[&e.to_string()]);
+            self.status = Text::filled(i18n::could_not_save_settings, vec![e.to_string().into()]);
         }
         self.watch(ctx);
     }
@@ -568,47 +575,48 @@ impl App {
             return;
         };
         let result = match rx.try_recv() {
-            Ok(result) => result,
+            Ok(result) => result.map_err(Text::from),
             Err(TryRecvError::Empty) => return,
-            Err(TryRecvError::Disconnected) => {
-                Err(i18n::the_scan_stopped_unexpectedly().to_string())
-            }
+            Err(TryRecvError::Disconnected) => Err(Text::of(i18n::the_scan_stopped_unexpectedly)),
         };
         let name = root.display().to_string();
         self.scan = None;
         let line = match result {
             Ok(scanned) => {
                 let stats = scanned.stats;
-                let mut sentences = vec![i18n::fill(
-                    i18n::scan_summary(),
-                    &[
-                        &name,
-                        &stats.indexed.to_string(),
-                        &stats.unchanged.to_string(),
-                        &stats.removed.to_string(),
+                let mut sentences = vec![Text::filled(
+                    i18n::scan_summary,
+                    vec![
+                        name.to_string().into(),
+                        stats.indexed.to_string().into(),
+                        stats.unchanged.to_string().into(),
+                        stats.removed.to_string().into(),
                     ],
                 )];
                 if scanned.matched > 0 {
-                    sentences.push(i18n::fill(
-                        i18n::matched_on_tmdb(),
-                        &[&scanned.matched.to_string()],
+                    sentences.push(Text::filled(
+                        i18n::matched_on_tmdb,
+                        vec![scanned.matched.to_string().into()],
                     ));
                 }
                 if let Some(e) = scanned.lookup_error {
-                    sentences.push(i18n::fill(i18n::tmdb_lookup_stopped(), &[&e.to_string()]));
+                    sentences.push(Text::filled(
+                        i18n::tmdb_lookup_stopped,
+                        vec![e.to_string().into()],
+                    ));
                 }
-                sentences.join(" ")
+                Text::joined(sentences, " ")
             }
             // One unreadable folder (for example an unplugged drive) doesn't stop the others.
-            Err(e) => i18n::fill(
-                i18n::could_not_be_scanned(),
-                &[&name.to_string(), &e.to_string()],
+            Err(e) => Text::filled(
+                i18n::could_not_be_scanned,
+                vec![name.to_string().into(), e.to_string().into()],
             ),
         };
         self.report.push(line);
         self.reload_views();
         if self.queue.is_empty() {
-            self.status = self.report.join("\n");
+            self.status = Text::joined(self.report.clone(), "\n");
         }
         self.start_next(ctx);
     }
@@ -829,7 +837,8 @@ impl eframe::App for App {
         if let Some(speed) = self.playback.take_speed_change() {
             self.settings.playback_speed = speed;
             if let Err(e) = self.settings.save(&self.paths.settings) {
-                self.status = i18n::fill(i18n::could_not_save_settings(), &[&e.to_string()]);
+                self.status =
+                    Text::filled(i18n::could_not_save_settings, vec![e.to_string().into()]);
             }
         }
         // An album clicked in the bar opens on the album page.
@@ -837,7 +846,8 @@ impl eframe::App for App {
             if self.albums.open_by_name(&self.library, &name) {
                 self.tab = Tab::Albums;
             } else {
-                self.status = i18n::fill(i18n::could_not_find_album(), &[&name]);
+                self.status =
+                    Text::filled(i18n::could_not_find_album, vec![name.to_string().into()]);
             }
         }
         let panel = self.playback.panel;
@@ -983,7 +993,7 @@ impl eframe::App for App {
                         ui,
                         &self.settings,
                         self.scan.is_some(),
-                        &self.status,
+                        &self.status.to_string(),
                         &self.folder_files,
                         self.processing.load(Ordering::Relaxed),
                     );
@@ -1015,14 +1025,15 @@ impl eframe::App for App {
             Some(radio::RadioAction::TogglePlayback) => self.playback.toggle(),
             Some(radio::RadioAction::TuneInAndPlay(station)) => {
                 if let Err(e) = self.library.tune_in(&station) {
-                    self.status = i18n::fill(i18n::could_not_tune_in(), &[&e.to_string()]);
+                    self.status = Text::filled(i18n::could_not_tune_in, vec![e.to_string().into()]);
                 }
                 self.radio.reload(&self.library);
                 self.playback.tune(station);
             }
             Some(radio::RadioAction::TuneOut(uuid)) => {
                 if let Err(e) = self.library.tune_out(&uuid) {
-                    self.status = i18n::fill(i18n::could_not_tune_out(), &[&e.to_string()]);
+                    self.status =
+                        Text::filled(i18n::could_not_tune_out, vec![e.to_string().into()]);
                 }
                 self.radio.reload(&self.library);
             }
@@ -1048,8 +1059,10 @@ impl eframe::App for App {
                     match self.library.add_to_playlist(playlist, &[media_id]) {
                         Ok(()) => self.playlists.reload(&self.library),
                         Err(e) => {
-                            self.status =
-                                i18n::fill(i18n::could_not_add_to_playlist(), &[&e.to_string()])
+                            self.status = Text::filled(
+                                i18n::could_not_add_to_playlist,
+                                vec![e.to_string().into()],
+                            )
                         }
                     }
                 }
@@ -1059,8 +1072,10 @@ impl eframe::App for App {
         match action {
             Some(settings_view::Action::AddFolder { path, kind }) => {
                 if self.settings.library_roots.contains(&path) {
-                    self.status =
-                        i18n::fill(i18n::already_in_library(), &[&path.display().to_string()]);
+                    self.status = Text::filled(
+                        i18n::already_in_library,
+                        vec![path.display().to_string().into()],
+                    );
                 } else {
                     self.settings.library_roots.push(path.clone());
                     self.settings.set_library_kind(&path, kind);
@@ -1073,7 +1088,7 @@ impl eframe::App for App {
                     self.settings.set_library_kind(&root, kind);
                     if let Err(e) = self.settings.save(&self.paths.settings) {
                         self.status =
-                            i18n::fill(i18n::could_not_save_settings(), &[&e.to_string()]);
+                            Text::filled(i18n::could_not_save_settings, vec![e.to_string().into()]);
                     }
                 }
             }
@@ -1083,13 +1098,16 @@ impl eframe::App for App {
                     self.settings.forget_library_kind(&root);
                     self.queue.retain(|queued| *queued != root);
                     self.status = match self.library.forget_root(&root) {
-                        Ok(removed) => i18n::fill(
-                            i18n::removed_folder(),
-                            &[&root.display().to_string(), &i18n::file_count(removed)],
+                        Ok(removed) => Text::filled(
+                            i18n::removed_folder,
+                            vec![
+                                root.display().to_string().into(),
+                                Text::new(move || i18n::file_count(removed)),
+                            ],
                         ),
-                        Err(e) => i18n::fill(
-                            i18n::could_not_remove_folder(),
-                            &[&root.display().to_string(), &e.to_string()],
+                        Err(e) => Text::filled(
+                            i18n::could_not_remove_folder,
+                            vec![root.display().to_string().into(), e.to_string().into()],
                         ),
                     };
                     self.reload_views();
@@ -1109,15 +1127,17 @@ impl eframe::App for App {
             Some(settings_view::Action::SetCrossfade(secs)) => {
                 self.settings.crossfade_secs = secs;
                 if let Err(e) = self.settings.save(&self.paths.settings) {
-                    self.status = i18n::fill(i18n::could_not_save_settings(), &[&e.to_string()]);
+                    self.status =
+                        Text::filled(i18n::could_not_save_settings, vec![e.to_string().into()]);
                 }
             }
             Some(settings_view::Action::SetTmdbKey(key)) => {
                 self.settings.tmdb_api_key = (!key.is_empty()).then_some(key);
                 match self.settings.save(&self.paths.settings) {
-                    Ok(()) => self.status = i18n::saved_the_tmdb_key().into(),
+                    Ok(()) => self.status = Text::of(i18n::saved_the_tmdb_key),
                     Err(e) => {
-                        self.status = i18n::fill(i18n::could_not_save_settings(), &[&e.to_string()])
+                        self.status =
+                            Text::filled(i18n::could_not_save_settings, vec![e.to_string().into()])
                     }
                 }
             }
@@ -1125,7 +1145,8 @@ impl eframe::App for App {
                 self.settings.replay_gain = mode;
                 self.playback.set_replay_gain(mode);
                 if let Err(e) = self.settings.save(&self.paths.settings) {
-                    self.status = i18n::fill(i18n::could_not_save_settings(), &[&e.to_string()]);
+                    self.status =
+                        Text::filled(i18n::could_not_save_settings, vec![e.to_string().into()]);
                 }
             }
             Some(settings_view::Action::SetLanguage(language)) => {
@@ -1133,14 +1154,16 @@ impl eframe::App for App {
                 fonts::use_language(&ctx, i18n::current_tag());
                 self.settings.language = language;
                 if let Err(e) = self.settings.save(&self.paths.settings) {
-                    self.status = i18n::fill(i18n::could_not_save_settings(), &[&e.to_string()]);
+                    self.status =
+                        Text::filled(i18n::could_not_save_settings, vec![e.to_string().into()]);
                 }
             }
             Some(settings_view::Action::SetTheme(theme)) => {
                 self.settings.theme = theme;
                 ctx.set_theme(preference(theme));
                 if let Err(e) = self.settings.save(&self.paths.settings) {
-                    self.status = i18n::fill(i18n::could_not_save_settings(), &[&e.to_string()]);
+                    self.status =
+                        Text::filled(i18n::could_not_save_settings, vec![e.to_string().into()]);
                 }
             }
             None => {}

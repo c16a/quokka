@@ -32,8 +32,9 @@ mod zh_hans;
 #[path = "zh-Hant.rs"]
 mod zh_hant;
 
-use std::sync::OnceLock;
+use std::fmt;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, OnceLock};
 
 /// Declares the strings: a method on [`Translation`] for each one, and a free function that
 /// resolves it in the current language with the English fallback.
@@ -494,6 +495,82 @@ fn primary(tag: &str) -> &str {
     tag.split('-').next().unwrap_or(tag)
 }
 
+/// A message to show later, such as a status line or an error, kept as the strings and values it is
+/// made from rather than as finished text. It is put together each time it is shown, so it follows
+/// a change of language made while it is on screen.
+#[derive(Clone)]
+pub struct Text(Arc<dyn Fn() -> String + Send + Sync>);
+
+impl Text {
+    /// One of the UI's strings, such as `Text::of(i18n::scanning)`.
+    pub fn of(string: fn() -> &'static str) -> Self {
+        Self(Arc::new(move || string().to_owned()))
+    }
+
+    /// A template filled with `values`, which may themselves be translated, as [`fill`] does.
+    pub fn filled(template: fn() -> &'static str, values: Vec<Text>) -> Self {
+        Self(Arc::new(move || {
+            let values: Vec<String> = values.iter().map(Text::to_string).collect();
+            let values: Vec<&str> = values.iter().map(String::as_str).collect();
+            fill(template(), &values)
+        }))
+    }
+
+    /// Text that is the same in every language, such as a path or an error from the system.
+    pub fn plain(text: impl Into<String>) -> Self {
+        let text = text.into();
+        Self(Arc::new(move || text.clone()))
+    }
+
+    /// `texts` one after another, separated by `separator`.
+    pub fn joined(texts: Vec<Text>, separator: &'static str) -> Self {
+        Self(Arc::new(move || {
+            texts
+                .iter()
+                .map(Text::to_string)
+                .collect::<Vec<_>>()
+                .join(separator)
+        }))
+    }
+
+    /// Text made by `render`, for anything the other constructors don't cover.
+    pub fn new(render: impl Fn() -> String + Send + Sync + 'static) -> Self {
+        Self(Arc::new(render))
+    }
+
+    /// No text.
+    pub fn empty() -> Self {
+        Self::plain(String::new())
+    }
+}
+
+impl fmt::Display for Text {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&(self.0)())
+    }
+}
+
+impl fmt::Debug for Text {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Text({:?})", self.to_string())
+    }
+}
+
+/// Two texts are equal when they are the same message, not merely the same words.
+impl PartialEq for Text {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for Text {}
+
+impl From<String> for Text {
+    fn from(text: String) -> Self {
+        Self::plain(text)
+    }
+}
+
 /// `template` with each `{n}` replaced by the nth value.
 pub fn fill(template: &str, values: &[&str]) -> String {
     let mut text = template.to_owned();
@@ -625,6 +702,25 @@ mod tests {
     #[test]
     fn fills_templates_in_any_order() {
         assert_eq!(fill("{1} then {0}", &["a", "b"]), "b then a");
+    }
+
+    #[test]
+    fn text_follows_a_change_of_language() {
+        use std::sync::atomic::AtomicBool;
+
+        static GERMAN: AtomicBool = AtomicBool::new(false);
+        fn greeting() -> &'static str {
+            if GERMAN.load(Ordering::Relaxed) {
+                "Hallo {0}"
+            } else {
+                "Hello {0}"
+            }
+        }
+        // Made while the language is English, shown after it changes.
+        let text = Text::filled(greeting, vec![Text::plain("Ada")]);
+        assert_eq!(text.to_string(), "Hello Ada");
+        GERMAN.store(true, Ordering::Relaxed);
+        assert_eq!(text.to_string(), "Hallo Ada");
     }
 
     #[test]

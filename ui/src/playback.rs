@@ -1,4 +1,4 @@
-use crate::i18n;
+use crate::i18n::{self, Text};
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
@@ -48,14 +48,15 @@ const RADIO_RECONNECTS: u32 = 5;
 
 /// A video player for this platform: the decoders on macOS, libmpv elsewhere.
 #[cfg(target_os = "macos")]
-fn new_video() -> Result<VideoPlayer, String> {
+fn new_video() -> Result<VideoPlayer, Text> {
     Ok(VideoPlayer::new())
 }
 
 /// A video player for this platform: the decoders on macOS, libmpv elsewhere.
 #[cfg(not(target_os = "macos"))]
-fn new_video() -> Result<VideoPlayer, String> {
-    VideoPlayer::new().map_err(|e| i18n::fill(i18n::video_needs_libmpv(), &[&e.to_string()]))
+fn new_video() -> Result<VideoPlayer, Text> {
+    VideoPlayer::new()
+        .map_err(|e| Text::filled(i18n::video_needs_libmpv, vec![e.to_string().into()]))
 }
 
 pub struct Playback {
@@ -96,7 +97,7 @@ pub struct Playback {
     /// Slider position in seconds. Follows the player unless the user is dragging.
     seek_secs: f64,
     dragging: bool,
-    error: Option<String>,
+    error: Option<Text>,
     /// Measured widths of the centred rows, from the previous frame.
     row_widths: [f32; 3],
     /// Whether the queue panel is open. The bar's queue button toggles it.
@@ -141,7 +142,10 @@ impl Playback {
             Ok(player) => (Some(player), None),
             Err(e) => (
                 None,
-                Some(i18n::fill(i18n::no_audio_output_error(), &[&e.to_string()])),
+                Some(Text::filled(
+                    i18n::no_audio_output_error,
+                    vec![e.to_string().into()],
+                )),
             ),
         };
         Self {
@@ -309,27 +313,28 @@ impl Playback {
                     self.player = RodioPlayer::new().ok();
                     self.apply_volume();
                 }
-                let outcome = match self.player.as_mut() {
-                    Some(player) => player.load_stream(source).and_then(|_| player.play()),
-                    None => Err(quokka_playback::PlaybackError::Backend(
-                        i18n::no_audio_output_device_available().into(),
-                    )),
+                let reason = match self.player.as_mut() {
+                    Some(player) => player
+                        .load_stream(source)
+                        .and_then(|_| player.play())
+                        .err()
+                        .map(|e| Text::plain(e.to_string())),
+                    None => Some(Text::of(i18n::no_audio_output_device_available)),
                 };
-                self.error = outcome
-                    .err()
-                    .map(|e| i18n::fill(i18n::could_not_play_station(), &[&e.to_string()]));
+                self.error =
+                    reason.map(|reason| Text::filled(i18n::could_not_play_station, vec![reason]));
             }
             Ok(Err(e)) => {
                 self.radio_paused = true;
-                self.error = Some(i18n::fill(
-                    i18n::could_not_connect_station_error(),
-                    &[&e.to_string()],
+                self.error = Some(Text::filled(
+                    i18n::could_not_connect_station_error,
+                    vec![e.to_string().into()],
                 ));
             }
             Err(TryRecvError::Empty) => self.radio_loading = Some(rx),
             Err(TryRecvError::Disconnected) => {
                 self.radio_paused = true;
-                self.error = Some(i18n::could_not_connect_to_the_station().into());
+                self.error = Some(Text::of(i18n::could_not_connect_to_the_station));
             }
         }
     }
@@ -342,7 +347,7 @@ impl Playback {
         self.radio_reconnects += 1;
         if self.radio_reconnects > RADIO_RECONNECTS {
             self.radio_paused = true;
-            self.error = Some(i18n::the_station_keeps_dropping_the_connection().into());
+            self.error = Some(Text::of(i18n::the_station_keeps_dropping_the_connection));
             return;
         }
         self.connect_radio();
@@ -382,9 +387,9 @@ impl Playback {
                             ui.weak(status);
                         });
                     });
-                    if let Some(error) = self.error.as_deref() {
+                    if let Some(error) = &self.error {
                         ui.add_space(6.0);
-                        ui.colored_label(ui.visuals().error_fg_color, error);
+                        ui.colored_label(ui.visuals().error_fg_color, error.to_string());
                     }
                 });
             });
@@ -571,9 +576,9 @@ impl Playback {
                 self.error = None;
             }
             Err(e) => {
-                self.error = Some(i18n::fill(
-                    i18n::could_not_switch_output(),
-                    &[&e.to_string()],
+                self.error = Some(Text::filled(
+                    i18n::could_not_switch_output,
+                    vec![e.to_string().into()],
                 ));
                 return;
             }
@@ -626,7 +631,10 @@ impl Playback {
             if self.error.is_none()
                 && let Some(reason) = video.failure()
             {
-                self.error = Some(i18n::fill(i18n::could_not_play_video(), &[reason]));
+                self.error = Some(Text::filled(
+                    i18n::could_not_play_video,
+                    vec![reason.to_string().into()],
+                ));
             }
         }
         self.sync_gapless();
@@ -645,9 +653,9 @@ impl Playback {
             _ => self.next(),
         }
         if let Some(message) = stopped_early {
-            self.error = Some(i18n::fill(
-                i18n::playback_stopped_early(),
-                &[&message.to_string()],
+            self.error = Some(Text::filled(
+                i18n::playback_stopped_early,
+                vec![message.to_string().into()],
             ));
         }
     }
@@ -969,7 +977,7 @@ impl Playback {
             None => return,
         };
         if let Err(e) = result {
-            self.error = Some(e.to_string());
+            self.error = Some(Text::plain(e.to_string()));
         }
     }
 
@@ -1045,9 +1053,9 @@ impl Playback {
             .and_then(|_| if autoplay { video.play() } else { Ok(()) });
         self.error = match loaded {
             Ok(()) => None,
-            Err(e) => Some(i18n::fill(
-                i18n::could_not_play_item(),
-                &[format::title(item).as_str(), &e.to_string()],
+            Err(e) => Some(Text::filled(
+                i18n::could_not_play_item,
+                vec![format::title(item).into(), e.to_string().into()],
             )),
         };
         let path = item.path.clone();
@@ -1079,15 +1087,15 @@ impl Playback {
             self.apply_volume();
         }
         let Some(player) = self.player.as_mut() else {
-            self.error = Some(i18n::no_audio_output_device_available_2().into());
+            self.error = Some(Text::of(i18n::no_audio_output_device_available_2));
             return;
         };
         let loaded = player.load(&item.path);
         self.error = match loaded.and_then(|_| if autoplay { player.play() } else { Ok(()) }) {
             Ok(()) => None,
-            Err(e) => Some(i18n::fill(
-                i18n::could_not_play_item(),
-                &[format::title(&item).as_str(), &e.to_string()],
+            Err(e) => Some(Text::filled(
+                i18n::could_not_play_item,
+                vec![format::title(&item).into(), e.to_string().into()],
             )),
         };
         let path = item.path.clone();
@@ -1637,9 +1645,9 @@ impl Playback {
                     );
                     self.right_width = right_used;
                 });
-                if let Some(error) = self.error.as_deref() {
+                if let Some(error) = &self.error {
                     ui.add_space(6.0);
-                    ui.colored_label(ui.visuals().error_fg_color, error);
+                    ui.colored_label(ui.visuals().error_fg_color, error.to_string());
                 }
             });
 
