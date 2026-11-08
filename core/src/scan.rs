@@ -17,6 +17,8 @@ pub struct ScanStats {
     pub unchanged: usize,
     /// Index rows removed because the file no longer exists under the root.
     pub removed: usize,
+    /// Index rows kept but marked unavailable because their folder could not be read.
+    pub unavailable: usize,
     /// Entries that could not be read (permissions, broken symlinks, ...).
     pub errors: usize,
 }
@@ -25,6 +27,7 @@ struct Known {
     id: i64,
     size: i64,
     mtime: i64,
+    unavailable: bool,
 }
 
 /// A file that needs its tags read.
@@ -52,7 +55,7 @@ pub(crate) fn scan(conn: &mut Connection, root: &Path) -> Result<ScanStats> {
     let mut known: HashMap<String, Known> = HashMap::new();
     {
         let mut stmt = tx.prepare_cached(
-            "SELECT id, path, size, mtime FROM media WHERE path >= ?1 AND path < ?2",
+            "SELECT id, path, size, mtime, unavailable FROM media WHERE path >= ?1 AND path < ?2",
         )?;
         let rows = stmt.query_map(params![root_prefix, upper_bound], |r| {
             Ok((
@@ -61,6 +64,7 @@ pub(crate) fn scan(conn: &mut Connection, root: &Path) -> Result<ScanStats> {
                     id: r.get(0)?,
                     size: r.get(2)?,
                     mtime: r.get(3)?,
+                    unavailable: r.get::<_, i64>(4)? != 0,
                 },
             ))
         })?;
@@ -73,6 +77,11 @@ pub(crate) fn scan(conn: &mut Connection, root: &Path) -> Result<ScanStats> {
     // Pass 1 (sequential): walk the tree, skip unchanged files, and collect the rest.
     let mut seen: HashSet<String> = HashSet::new();
     let mut pending: Vec<Pending> = Vec::new();
+    // Paths that could not be read. Files under them are not missing, only out of reach, so they
+    // are kept and marked unavailable rather than deleted.
+    let mut failed: Vec<PathBuf> = Vec::new();
+    // Known files that are readable again and were marked unavailable.
+    let mut restore: Vec<i64> = Vec::new();
     let walker = WalkDir::new(&root)
         .follow_links(false)
         .into_iter()
@@ -80,8 +89,11 @@ pub(crate) fn scan(conn: &mut Connection, root: &Path) -> Result<ScanStats> {
     for entry in walker {
         let entry = match entry {
             Ok(e) => e,
-            Err(_) => {
+            Err(err) => {
                 stats.errors += 1;
+                // An error with no path means the walk as a whole could not continue, so every
+                // file under the root is out of reach.
+                failed.push(err.path().map_or_else(|| root.clone(), Path::to_path_buf));
                 continue;
             }
         };
@@ -96,6 +108,7 @@ pub(crate) fn scan(conn: &mut Connection, root: &Path) -> Result<ScanStats> {
             Ok(m) => m,
             Err(_) => {
                 stats.errors += 1;
+                failed.push(path.to_path_buf());
                 continue;
             }
         };
@@ -114,6 +127,9 @@ pub(crate) fn scan(conn: &mut Connection, root: &Path) -> Result<ScanStats> {
             && k.size == size
             && k.mtime == mtime
         {
+            if k.unavailable {
+                restore.push(k.id);
+            }
             stats.unchanged += 1;
             continue;
         }
@@ -162,7 +178,8 @@ pub(crate) fn scan(conn: &mut Connection, root: &Path) -> Result<ScanStats> {
                bitrate_kbps = excluded.bitrate_kbps, video_codec = excluded.video_codec, \
                width = excluded.width, height = excluded.height, \
                video_bit_depth = NULL, video_chroma = NULL, video_fps = NULL, \
-               video_fps_variable = 0, video_aspect = NULL, hdr = NULL, processed = 0, lookup_pending = 1",
+               video_fps_variable = 0, video_aspect = NULL, hdr = NULL, processed = 0, lookup_pending = 1, \
+               unavailable = 0",
         )?;
         for (p, info) in &read {
             upsert.execute(params![
@@ -192,11 +209,27 @@ pub(crate) fn scan(conn: &mut Connection, root: &Path) -> Result<ScanStats> {
         }
     }
 
-    // Anything we knew about that was not seen this time has been deleted or moved.
+    // Anything we knew about that was not seen this time. Under a folder that could not be read it
+    // may still exist, so it is kept and marked unavailable. Anywhere else it has been deleted or
+    // moved, so its row goes.
     {
+        let mut restore_row =
+            tx.prepare_cached("UPDATE media SET unavailable = 0 WHERE id = ?1")?;
+        for id in &restore {
+            restore_row.execute([id])?;
+        }
+        let mut mark = tx.prepare_cached("UPDATE media SET unavailable = 1 WHERE id = ?1")?;
         let mut delete = tx.prepare_cached("DELETE FROM media WHERE id = ?1")?;
         for (path, k) in &known {
-            if !seen.contains(path) {
+            if seen.contains(path) {
+                continue;
+            }
+            if failed.iter().any(|dir| Path::new(path).starts_with(dir)) {
+                if !k.unavailable {
+                    mark.execute([k.id])?;
+                }
+                stats.unavailable += 1;
+            } else {
                 delete.execute([k.id])?;
                 stats.removed += 1;
             }

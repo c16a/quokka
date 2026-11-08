@@ -150,6 +150,9 @@ pub struct MediaItem {
     pub video_aspect: Option<f64>,
     /// Whether the picture is HDR (movies only). `None` when the file does not say.
     pub hdr: Option<bool>,
+    /// Whether the file's folder could not be read on the last scan, so the file may be missing.
+    /// Such files stay in the library and in search results until a scan finds them again.
+    pub unavailable: bool,
     pub channels: Option<i64>,
     pub bitrate_kbps: Option<i64>,
     pub track: Option<i64>,
@@ -427,8 +430,8 @@ impl Library {
     }
 }
 
-const COLUMNS: &str = "id, path, kind, size, duration_ms, title, artist, album, genre, track, year, album_artist, composer, codec, bit_depth, sample_rate, channels, bitrate_kbps, video_codec, width, height, video_bit_depth, video_chroma, video_fps, video_fps_variable, video_aspect, hdr";
-const M_COLUMNS: &str = "m.id, m.path, m.kind, m.size, m.duration_ms, m.title, m.artist, m.album, m.genre, m.track, m.year, m.album_artist, m.composer, m.codec, m.bit_depth, m.sample_rate, m.channels, m.bitrate_kbps, m.video_codec, m.width, m.height, m.video_bit_depth, m.video_chroma, m.video_fps, m.video_fps_variable, m.video_aspect, m.hdr";
+const COLUMNS: &str = "id, path, kind, size, duration_ms, title, artist, album, genre, track, year, album_artist, composer, codec, bit_depth, sample_rate, channels, bitrate_kbps, video_codec, width, height, video_bit_depth, video_chroma, video_fps, video_fps_variable, video_aspect, hdr, unavailable";
+const M_COLUMNS: &str = "m.id, m.path, m.kind, m.size, m.duration_ms, m.title, m.artist, m.album, m.genre, m.track, m.year, m.album_artist, m.composer, m.codec, m.bit_depth, m.sample_rate, m.channels, m.bitrate_kbps, m.video_codec, m.width, m.height, m.video_bit_depth, m.video_chroma, m.video_fps, m.video_fps_variable, m.video_aspect, m.hdr, m.unavailable";
 
 pub(crate) fn row_to_item(r: &rusqlite::Row<'_>) -> rusqlite::Result<MediaItem> {
     let kind: String = r.get(2)?;
@@ -460,6 +463,7 @@ pub(crate) fn row_to_item(r: &rusqlite::Row<'_>) -> rusqlite::Result<MediaItem> 
         video_fps_variable: r.get::<_, i64>(24)? != 0,
         video_aspect: r.get(25)?,
         hdr: r.get::<_, Option<i64>>(26)?.map(|value| value != 0),
+        unavailable: r.get::<_, i64>(27)? != 0,
     })
 }
 

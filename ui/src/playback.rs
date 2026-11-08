@@ -2120,6 +2120,7 @@ mod tests {
             bit_depth: None,
             sample_rate: None,
             channels: None,
+            unavailable: false,
             video_codec: None,
             width: None,
             height: None,

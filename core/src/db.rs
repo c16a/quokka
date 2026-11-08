@@ -3,7 +3,7 @@ use rusqlite::Connection;
 use crate::Result;
 
 /// Bump when the schema changes and add a matching migration step below.
-const SCHEMA_VERSION: i64 = 21;
+const SCHEMA_VERSION: i64 = 22;
 
 /// Per-connection settings and schema migration.
 pub(crate) fn configure(conn: &Connection) -> Result<()> {
@@ -78,6 +78,9 @@ pub(crate) fn configure(conn: &Connection) -> Result<()> {
     }
     if version < 21 {
         conn.execute_batch(SCHEMA_V21)?;
+    }
+    if version < 22 {
+        conn.execute_batch(SCHEMA_V22)?;
     }
     if version != SCHEMA_VERSION {
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
@@ -339,4 +342,10 @@ CREATE TABLE tag_snapshot (path TEXT PRIMARY KEY, tags TEXT NOT NULL);
 /// whole library.
 const SCHEMA_V21: &str = "
 CREATE INDEX media_audio_album_track ON media(kind, COALESCE(album, ''), track);
+";
+
+/// Whether a file is out of reach: its folder could not be read on the last scan, so the row is
+/// kept rather than deleted. Audio and video alike. Cleared when a scan reads the file again.
+const SCHEMA_V22: &str = "
+ALTER TABLE media ADD COLUMN unavailable INTEGER NOT NULL DEFAULT 0;
 ";
