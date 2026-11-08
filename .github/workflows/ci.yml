@@ -44,7 +44,15 @@ jobs:
           sudo apt-get update
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y just nasm libasound2-dev libclang-dev libdbus-1-dev libssl-dev libwayland-dev libxkbcommon-dev libx11-dev libxcursor-dev libxi-dev libxrandr-dev libgl-dev libegl-dev
 
+      # The cache is keyed by platform and profile only. The job id and the environment hash are left out, so
+      # each platform shares one dev cache across jobs and branches. Only main saves it: pull requests read it,
+      # so their branches do not each create a cache that counts against the repository limit.
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ runner.os }}-${{ runner.arch }}-dev
+          add-job-id-key: "false"
+          add-rust-environment-hash-key: "false"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Check formatting, clippy and tests
         run: just check
@@ -54,9 +62,41 @@ jobs:
         if: github.event_name == 'pull_request'
         run: just build
 
-      # After a merge to main: a release build, so the shipped configuration compiles on every change to main.
+  # After a merge to main: a release build, so the shipped configuration compiles on every change to main.
+  # It is its own job, so its release-profile cache does not replace the dev cache that `check` saves.
+  release:
+    name: Release build (${{ matrix.os }})
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-26, ubuntu-26.04, ubuntu-26.04-arm, windows-2025-vs2026, windows-11-vs2026-arm]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install just (macOS)
+        if: runner.os == 'macOS'
+        run: brew install just
+
+      - name: Install just (Windows)
+        if: runner.os == 'Windows'
+        run: choco install just --yes --no-progress
+
+      - name: Install just and the system libraries (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y just nasm libasound2-dev libclang-dev libdbus-1-dev libssl-dev libwayland-dev libxkbcommon-dev libx11-dev libxcursor-dev libxi-dev libxrandr-dev libgl-dev libegl-dev
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ runner.os }}-${{ runner.arch }}-release
+          add-job-id-key: "false"
+          add-rust-environment-hash-key: "false"
+
       - name: Release build
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: just release
 
   # Runs alongside `check`: no `needs`, so the jobs start together. One job on Linux analyses the whole
@@ -83,3 +123,33 @@ jobs:
       - uses: github/codeql-action/analyze@v4
         with:
           category: /language:rust
+
+  # After a save on main, delete the older caches for the same OS, architecture and profile. Each lockfile
+  # change writes a new cache entry, and the old ones stay until GitHub evicts them. Entries in one group share
+  # every part of the key except the trailing lockfile hash, so the newest entry in each group is kept and the
+  # rest are deleted. It needs `check` and `release` to succeed, so the new caches are saved before anything goes.
+  prune-caches:
+    name: Prune superseded caches
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [check, release]
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      actions: write
+    steps:
+      - name: Delete caches superseded by a newer save
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/caches?per_page=100" \
+            --jq '.actions_caches[] | select(.key | startswith("v0-rust-")) | [.id, .key, .created_at] | @tsv' > caches.tsv
+          # Group = key without its trailing 8-hex lockfile hash. Sort newest first within each group,
+          # keep the first row of each group, and list the rest as id<TAB>key.
+          awk -F'\t' 'BEGIN { OFS = "\t" } { g = $2; sub(/-[0-9a-f]{8}$/, "", g); print g, $3, $1, $2 }' caches.tsv \
+            | sort -t $'\t' -k1,1 -k2,2r \
+            | awk -F'\t' '$1 != last { last = $1; next } { print $3 "\t" $4 }' > stale.tsv
+          while IFS=$'\t' read -r id key; do
+            echo "Deleting $key ($id)"
+            gh api --method DELETE "repos/${GITHUB_REPOSITORY}/actions/caches/${id}"
+          done < stale.tsv
