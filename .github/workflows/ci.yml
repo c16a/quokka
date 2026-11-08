@@ -30,6 +30,16 @@ jobs:
       - name: Check formatting, clippy and tests
         run: just check
 
+      # Pull requests: a debug build of the whole workspace.
+      - name: Build the workspace
+        if: github.event_name == 'pull_request'
+        run: just build
+
+      # After a merge to main: a release build, so the shipped configuration compiles on every change to main.
+      - name: Release build
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: just release
+
   # Runs alongside `check`: no `needs`, so the two jobs start together.
   codeql:
     name: CodeQL (rust)
