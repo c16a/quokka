@@ -2324,6 +2324,7 @@ fn audio_track_text(track: &AudioTrackInfo) -> String {
 
 /// Full-screen button: four corner brackets, drawn rather than read from the icon font. The brackets
 /// point inwards to enter full screen and outwards to leave it.
+#[cfg(target_os = "macos")]
 fn fullscreen_button(ui: &mut egui::Ui, active: bool) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(22.0, 22.0), egui::Sense::click());
     let visuals = ui.style().interact(&response);
