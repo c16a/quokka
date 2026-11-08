@@ -16,10 +16,10 @@ concurrency:
 jobs:
   check:
     # Quokka is macOS-only: the decoders, the GPU import and the media controls use macOS frameworks.
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # rust-toolchain.toml pins the toolchain, so rustup installs exactly that version.
       - name: Install just
