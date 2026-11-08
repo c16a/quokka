@@ -6,12 +6,21 @@
 pub mod audio;
 pub mod av1;
 pub mod frames;
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", windows)))]
 pub mod libav;
+#[cfg(windows)]
+pub mod mediafoundation;
 pub mod player;
 #[cfg(target_os = "macos")]
 pub mod videotoolbox;
 pub mod vp9;
+
+// Helpers for the Windows backend. They are plain byte handling, so they build and are tested on
+// every platform.
+#[cfg(any(windows, test))]
+mod annexb;
+#[cfg(any(windows, test))]
+mod semiplanar;
 
 use quokka_core::video::{Chroma, Codec, Colour};
 use thiserror::Error;
@@ -101,12 +110,16 @@ pub trait VideoDecoder {
 
 /// Open the first backend that accepts the stream. The operating system's decoder is tried first.
 /// Bundled decoders cover what it does not handle: VP9 and AV1 on every platform, and H.264 and HEVC
-/// on Linux, through libavcodec.
+/// on Linux, through libavcodec. On Windows, Media Foundation decodes H.264 and HEVC, and nothing
+/// bundled takes them over; ProRes is not decoded there.
 pub fn open(stream: &StreamConfig) -> Result<Box<dyn VideoDecoder>, DecodeError> {
     #[cfg(target_os = "macos")]
     let system = videotoolbox::VideoToolbox::open(stream)
         .map(|decoder| Box::new(decoder) as Box<dyn VideoDecoder>);
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(windows)]
+    let system = mediafoundation::MediaFoundation::open(stream)
+        .map(|decoder| Box::new(decoder) as Box<dyn VideoDecoder>);
+    #[cfg(not(any(target_os = "macos", windows)))]
     let system: Result<Box<dyn VideoDecoder>, DecodeError> = Err(DecodeError::Unsupported {
         backend: "system",
         reason: "no system decoder on this platform".into(),
@@ -116,7 +129,7 @@ pub fn open(stream: &StreamConfig) -> Result<Box<dyn VideoDecoder>, DecodeError>
         Err(error) => error,
     };
     match stream.codec {
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", windows)))]
         Codec::H264 | Codec::Hevc => {
             libav::Libav::open(stream).map(|decoder| Box::new(decoder) as Box<dyn VideoDecoder>)
         }

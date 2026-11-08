@@ -3410,6 +3410,7 @@ dependencies = [
  "symphonia-adapter-opus-rs",
  "thiserror 2.0.21",
  "ureq",
+ "windows",
 ]
 
 [[package]]
@@ -3426,6 +3427,7 @@ dependencies = [
  "objc2-metal 0.3.2",
  "quokka-core",
  "quokka-playback",
+ "raw-window-handle",
  "rfd",
  "souvlaki",
 ]

@@ -14,14 +14,14 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # One run per platform: the same steps on macOS and on Ubuntu. fail-fast is off, so a failure on
-  # one platform does not cancel the other.
+  # One run per platform: the same steps on macOS, Ubuntu and Windows. fail-fast is off, so a failure on
+  # one platform does not cancel the others.
   check:
     name: Check (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-26, ubuntu-26.04, ubuntu-26.04-arm]
+        os: [macos-26, ubuntu-26.04, ubuntu-26.04-arm, windows-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:
@@ -31,6 +31,11 @@ jobs:
       - name: Install just (macOS)
         if: runner.os == 'macOS'
         run: brew install just
+
+      # The runner's Chocolatey installs just. The MSVC toolchain is already on the runner.
+      - name: Install just (Windows)
+        if: runner.os == 'Windows'
+        run: choco install just --yes --no-progress
 
       # FFmpeg is built from source by the build, so it needs nasm for the x86 assembly, plus ALSA for audio and the windowing and D-Bus headers.
       - name: Install just and the system libraries (Linux)

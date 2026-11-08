@@ -1,3 +1,7 @@
+# Recipes run under PowerShell on Windows, where `sh` is not on the default path. The recipes that
+# use shell syntax (bundle, icon) are macOS-only and are not run there.
+set windows-shell := ["pwsh.exe", "-NoLogo", "-Command"]
+
 # Default: run the full local check.
 default: check
 
