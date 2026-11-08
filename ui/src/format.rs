@@ -1,15 +1,22 @@
 use crate::i18n;
 use quokka_core::MediaItem;
 
-/// Display title: the tag title, or the file name without extension.
+/// Display title: the tag title, or the file name without extension. A file that is out of reach
+/// has its title followed by a marker, wherever it is listed.
 pub fn title(item: &MediaItem) -> String {
-    if let Some(title) = item.title.as_deref() {
-        return title.to_owned();
+    let name = match item.title.as_deref() {
+        Some(title) => title.to_owned(),
+        None => item
+            .path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| item.path.display().to_string()),
+    };
+    if item.unavailable {
+        format!("{name} ({})", i18n::unavailable())
+    } else {
+        name
     }
-    item.path
-        .file_stem()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_else(|| item.path.display().to_string())
 }
 
 /// `m:ss`, or `h:mm:ss` for items an hour or longer.

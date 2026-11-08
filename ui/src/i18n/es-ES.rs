@@ -70,6 +70,9 @@ impl Translation for EsEs {
         Some("Todos los artistas")
     }
     // format.rs
+    fn unavailable(&self) -> Option<&'static str> {
+        Some("No disponible")
+    }
     fn mono(&self) -> Option<&'static str> {
         Some("Mono")
     }

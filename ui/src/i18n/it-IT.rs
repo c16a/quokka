@@ -70,6 +70,9 @@ impl Translation for ItIt {
         Some("Tutti gli artisti")
     }
     // format.rs
+    fn unavailable(&self) -> Option<&'static str> {
+        Some("Non disponibile")
+    }
     fn mono(&self) -> Option<&'static str> {
         Some("Mono")
     }

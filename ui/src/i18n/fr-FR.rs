@@ -78,6 +78,9 @@ impl Translation for FrFr {
         Some("Tous les artistes")
     }
     // format.rs
+    fn unavailable(&self) -> Option<&'static str> {
+        Some("Indisponible")
+    }
     fn mono(&self) -> Option<&'static str> {
         Some("Mono")
     }

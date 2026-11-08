@@ -70,6 +70,9 @@ impl Translation for DeDe {
         Some("Alle Künstler")
     }
     // format.rs
+    fn unavailable(&self) -> Option<&'static str> {
+        Some("Nicht verfügbar")
+    }
     fn mono(&self) -> Option<&'static str> {
         Some("Mono")
     }

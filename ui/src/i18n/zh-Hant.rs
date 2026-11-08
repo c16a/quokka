@@ -70,6 +70,9 @@ impl Translation for ZhHant {
         Some("所有藝人")
     }
     // format.rs
+    fn unavailable(&self) -> Option<&'static str> {
+        Some("無法使用")
+    }
     fn mono(&self) -> Option<&'static str> {
         Some("單聲道")
     }

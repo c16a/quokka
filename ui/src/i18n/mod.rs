@@ -118,6 +118,7 @@ strings! {
     // format.rs
     mono,
     stereo,
+    unavailable,
     // lib.rs
     add_a_folder_to_get_started,
     syncing_the_radio_station_list,

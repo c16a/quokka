@@ -70,6 +70,9 @@ impl Translation for NlNl {
         Some("Alle artiesten")
     }
     // format.rs
+    fn unavailable(&self) -> Option<&'static str> {
+        Some("Niet beschikbaar")
+    }
     fn mono(&self) -> Option<&'static str> {
         Some("Mono")
     }

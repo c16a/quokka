@@ -74,6 +74,9 @@ impl Translation for PtBr {
         Some("Todos os artistas")
     }
     // format.rs
+    fn unavailable(&self) -> Option<&'static str> {
+        Some("Indisponível")
+    }
     fn mono(&self) -> Option<&'static str> {
         Some("Mono")
     }

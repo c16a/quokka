@@ -70,6 +70,9 @@ impl Translation for ZhHans {
         Some("所有艺人")
     }
     // format.rs
+    fn unavailable(&self) -> Option<&'static str> {
+        Some("不可用")
+    }
     fn mono(&self) -> Option<&'static str> {
         Some("单声道")
     }

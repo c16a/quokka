@@ -70,6 +70,9 @@ impl Translation for KoKr {
         Some("모든 아티스트")
     }
     // format.rs
+    fn unavailable(&self) -> Option<&'static str> {
+        Some("사용할 수 없음")
+    }
     fn mono(&self) -> Option<&'static str> {
         Some("모노")
     }

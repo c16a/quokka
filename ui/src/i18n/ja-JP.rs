@@ -70,6 +70,9 @@ impl Translation for JaJp {
         Some("すべてのアーティスト")
     }
     // format.rs
+    fn unavailable(&self) -> Option<&'static str> {
+        Some("利用できません")
+    }
     fn mono(&self) -> Option<&'static str> {
         Some("モノラル")
     }

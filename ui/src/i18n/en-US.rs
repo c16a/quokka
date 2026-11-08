@@ -71,6 +71,9 @@ impl Translation for EnUs {
         Some("All artists")
     }
     // format.rs
+    fn unavailable(&self) -> Option<&'static str> {
+        Some("Unavailable")
+    }
     fn mono(&self) -> Option<&'static str> {
         Some("Mono")
     }
