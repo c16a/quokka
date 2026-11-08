@@ -14,14 +14,14 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # One run per platform: the same steps on macOS and on Ubuntu. fail-fast is off, so a failure on
-  # one platform does not cancel the other.
+  # One run per platform: the same steps on macOS, Ubuntu and Windows. fail-fast is off, so a failure on
+  # one platform does not cancel the others.
   check:
     name: Check (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-26, ubuntu-26.04, ubuntu-26.04-arm]
+        os: [macos-26, ubuntu-26.04, ubuntu-26.04-arm, windows-2025-vs2026, windows-11-vs2026-arm]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:
@@ -31,6 +31,11 @@ jobs:
       - name: Install just (macOS)
         if: runner.os == 'macOS'
         run: brew install just
+
+      # The runner's Chocolatey installs just. The MSVC toolchain is already on the runner.
+      - name: Install just (Windows)
+        if: runner.os == 'Windows'
+        run: choco install just --yes --no-progress
 
       # FFmpeg is built from source by the build, so it needs nasm for the x86 assembly, plus ALSA for audio and the windowing and D-Bus headers.
       - name: Install just and the system libraries (Linux)
@@ -54,21 +59,12 @@ jobs:
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: just release
 
-  # Runs alongside `check`: no `needs`, so the jobs start together. Each platform reports under its
-  # own category, so the results stay apart.
+  # Runs alongside `check`: no `needs`, so the jobs start together. One job on Linux analyses the whole
+  # workspace. CodeQL's Rust extraction runs no build and extracts every source file, but it is not
+  # confirmed that code gated by `#[cfg(windows)]` gets full analysis on Linux.
   codeql:
-    name: CodeQL (rust, ${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: macos-26
-            category: /language:rust
-          - os: ubuntu-26.04
-            category: /language:rust/linux
-          - os: ubuntu-26.04-arm
-            category: /language:rust/linux-arm
-    runs-on: ${{ matrix.os }}
+    name: CodeQL (rust)
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     permissions:
       contents: read
@@ -86,4 +82,4 @@ jobs:
 
       - uses: github/codeql-action/analyze@v4
         with:
-          category: ${{ matrix.category }}
+          category: /language:rust

@@ -175,7 +175,12 @@ pub fn run(paths: Paths) -> Result<(), Box<dyn std::error::Error>> {
             if let Some(render_state) = cc.wgpu_render_state.as_ref() {
                 video_gpu::install(render_state);
             }
-            let app = App::new(cc.egui_ctx.clone(), paths, settings, library);
+            // Windows' media controls are attached to the window, so they need its handle.
+            #[cfg(windows)]
+            let hwnd = media::window_handle(cc);
+            #[cfg(not(windows))]
+            let hwnd = None;
+            let app = App::new(cc.egui_ctx.clone(), paths, settings, library, hwnd);
             let app: Box<dyn eframe::App> = Box::new(app);
             Ok(app)
         }),
@@ -201,7 +206,13 @@ fn preference(theme: Theme) -> egui::ThemePreference {
 }
 
 impl App {
-    fn new(ctx: egui::Context, paths: Paths, settings: Settings, library: Library) -> Self {
+    fn new(
+        ctx: egui::Context,
+        paths: Paths,
+        settings: Settings,
+        library: Library,
+        hwnd: Option<*mut std::ffi::c_void>,
+    ) -> Self {
         let mut playback = Playback::new();
         playback.set_library(paths.db.clone());
         let progress = progress_writer::ProgressWriter::start(&paths.db);
@@ -247,7 +258,7 @@ impl App {
         } else {
             Tab::Settings
         };
-        let media = media::Media::new(&ctx);
+        let media = media::Media::new(&ctx, hwnd);
         let (change_tx, changes) = mpsc::channel();
         let mut app = Self {
             paths,

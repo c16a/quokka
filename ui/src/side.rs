@@ -488,9 +488,14 @@ fn reveal(path: &Path) {
     #[cfg(target_os = "macos")]
     let result = Command::new("open").arg("-R").arg(path).spawn();
     #[cfg(target_os = "windows")]
-    let result = Command::new("explorer")
-        .arg(format!("/select,{}", path.display()))
-        .spawn();
+    let result = {
+        use std::os::windows::process::CommandExt;
+        // Explorer reads `/select,"path"` as typed. A plain argument would have the quotes added
+        // around the whole thing, which Explorer does not read when the path has spaces.
+        Command::new("explorer")
+            .raw_arg(format!("/select,\"{}\"", path.display()))
+            .spawn()
+    };
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     let result = Command::new("xdg-open")
         .arg(path.parent().unwrap_or(path))

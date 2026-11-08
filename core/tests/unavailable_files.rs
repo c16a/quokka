@@ -1,5 +1,8 @@
 //! Files under a folder the scanner cannot read stay in the library, marked unavailable, and still
 //! turn up in search. They are removed only when a readable folder no longer holds them.
+//! Unix only: the test makes a folder unreadable with Unix permission bits, which Windows does not have.
+
+#![cfg(unix)]
 
 use std::fs::{self, Permissions};
 use std::os::unix::fs::PermissionsExt;

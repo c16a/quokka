@@ -2,6 +2,8 @@
 //! System Media Transport Controls on Windows.
 
 use std::cell::RefCell;
+use std::ffi::c_void;
+use std::path::Path;
 use std::rc::{Rc, Weak};
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
@@ -41,16 +43,13 @@ pub struct Media {
 impl Media {
     /// Connect to the system's media controls. Returns `None` when they can't be set up, so the
     /// app runs without media keys.
-    pub fn new(ctx: &egui::Context) -> Option<Self> {
-        // Windows needs the window handle, and the app does not pass it in yet. Without it the
-        // media keys stay off there, rather than the setup panicking.
-        if cfg!(windows) {
-            return None;
-        }
+    /// `hwnd` is the window's handle, which Windows needs; the other platforms pass `None`. Without
+    /// it, Windows' media keys stay off, rather than the setup panicking.
+    pub fn new(ctx: &egui::Context, hwnd: Option<*mut c_void>) -> Option<Self> {
         let config = PlatformConfig {
             display_name: "Quokka",
             dbus_name: "quokka",
-            hwnd: None,
+            hwnd,
         };
         let mut controls = MediaControls::new(config).ok()?;
         let (tx, events) = mpsc::channel();
@@ -212,13 +211,41 @@ fn post_drain() {
 #[cfg(not(target_os = "macos"))]
 fn post_drain() {}
 
+/// The window's handle, for the media controls. Windows needs it; the other platforms do not.
+#[cfg(windows)]
+pub fn window_handle(window: &impl raw_window_handle::HasWindowHandle) -> Option<*mut c_void> {
+    use raw_window_handle::RawWindowHandle;
+    match window.window_handle().ok()?.as_raw() {
+        RawWindowHandle::Win32(handle) => Some(handle.hwnd.get() as *mut c_void),
+        _ => None,
+    }
+}
+
 /// Write the track's embedded cover to a temporary file, and return its `file://` URL. The
 /// system reads the cover from there. `None` when the track has no cover or it can't be written.
 fn cover_file(item: &MediaItem) -> Option<String> {
     let bytes = quokka_core::read_cover(&item.path)?;
     let path = std::env::temp_dir().join(format!("quokka-cover-{}", item.id));
     std::fs::write(&path, bytes).ok()?;
-    Some(format!("file://{}", path.display()))
+    Some(file_url(&path))
+}
+
+/// The `file://` URL of a local path. A Windows path starts with a drive letter and uses
+/// backslashes, so it becomes `file:///C:/...`, with the characters a URL cannot hold escaped.
+fn file_url(path: &Path) -> String {
+    #[cfg(windows)]
+    {
+        let forward = path.display().to_string().replace('\\', "/");
+        let escaped = forward
+            .replace('%', "%25")
+            .replace(' ', "%20")
+            .replace('#', "%23");
+        format!("file:///{escaped}")
+    }
+    #[cfg(not(windows))]
+    {
+        format!("file://{}", path.display())
+    }
 }
 
 /// Keeps the system from suspending the app while media plays. macOS naps a background app that is

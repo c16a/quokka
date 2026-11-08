@@ -22,8 +22,13 @@ objc2.workspace = true
 objc2-foundation.workspace = true
 objc2-app-kit.workspace = true
 
-# The H.264 and HEVC decoder on Linux, through FFmpeg's libavcodec. macOS decodes both with VideoToolbox.
-[target.'cfg(not(target_os = "macos"))'.dependencies]
+# Media Foundation, the H.264 and HEVC decoder on Windows.
+[target.'cfg(windows)'.dependencies]
+windows.workspace = true
+
+# The H.264 and HEVC decoder on Linux, through FFmpeg's libavcodec. macOS decodes both with VideoToolbox,
+# and Windows with Media Foundation.
+[target.'cfg(not(any(target_os = "macos", windows)))'.dependencies]
 ffmpeg-next.workspace = true
 
 [features]
