@@ -820,4 +820,16 @@ impl Translation for NlNl {
     fn many_files(&self) -> Option<&'static str> {
         Some("{0} bestanden")
     }
+    fn audio_track(&self) -> Option<&'static str> {
+        Some("Audiospoor")
+    }
+    fn track_label(&self) -> Option<&'static str> {
+        Some("Spoor {0}")
+    }
+    fn deinterlace(&self) -> Option<&'static str> {
+        Some("Interlacing verwijderen")
+    }
+    fn screenshot_saved(&self) -> Option<&'static str> {
+        Some("Schermafbeelding opgeslagen in {0}")
+    }
 }

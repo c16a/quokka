@@ -9,7 +9,7 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender};
 use std::thread;
 use std::time::Duration;
 
-use quokka_core::video::{AudioTrack, read_audio_samples};
+use quokka_core::video::{AudioTrack, read_audio_samples_track};
 use rodio::{ChannelCount, MixerDeviceSink, Player, SampleRate, Source};
 
 use crate::PlaybackError;
@@ -51,7 +51,16 @@ impl MovieAudio {
 
     /// As `open`, but starting at `start` seconds. See [`AudioSource::open_at`].
     pub fn open_at(path: &Path, start: f64) -> Result<Option<Self>, PlaybackError> {
-        match AudioSource::read(path)? {
+        Self::open_track(path, 0, start)
+    }
+
+    /// As `open_at`, for the audio track at `track` among the file's audio tracks.
+    pub fn open_track(
+        path: &Path,
+        track: usize,
+        start: f64,
+    ) -> Result<Option<Self>, PlaybackError> {
+        match AudioSource::read_track(path, track)? {
             Some(source) => source.open_at(start).map(Some),
             None => Ok(None),
         }
@@ -92,11 +101,17 @@ pub struct AudioSource {
 impl AudioSource {
     /// Read the first audio track of `path`. `None` when the file has no audio this reads.
     pub fn read(path: &Path) -> Result<Option<Self>, PlaybackError> {
-        let track =
-            read_audio_samples(path).map_err(|error| PlaybackError::Open(error.to_string()))?;
-        Ok(track.map(|track| AudioSource {
+        Self::read_track(path, 0)
+    }
+
+    /// Read the audio track at `track` among the file's audio tracks. `None` when there is no such
+    /// track, or its codec is not one this reads.
+    pub fn read_track(path: &Path, track: usize) -> Result<Option<Self>, PlaybackError> {
+        let samples = read_audio_samples_track(path, track)
+            .map_err(|error| PlaybackError::Open(error.to_string()))?;
+        Ok(samples.map(|samples| AudioSource {
             path: path.to_path_buf(),
-            track: Arc::new(track),
+            track: Arc::new(samples),
         }))
     }
 

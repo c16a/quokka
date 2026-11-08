@@ -381,6 +381,13 @@ strings! {
     many_folders,
     one_file,
     many_files,
+    // video.rs
+    audio_track,
+    // Templates: `{0}` is the track's number.
+    track_label,
+    deinterlace,
+    // Templates: `{0}` is the path the screenshot was saved to.
+    screenshot_saved,
 }
 
 /// Every translation the UI ships, in the order the language menu lists them. When a user's

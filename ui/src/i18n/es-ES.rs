@@ -822,4 +822,16 @@ impl Translation for EsEs {
     fn many_files(&self) -> Option<&'static str> {
         Some("{0} archivos")
     }
+    fn audio_track(&self) -> Option<&'static str> {
+        Some("Pista de audio")
+    }
+    fn track_label(&self) -> Option<&'static str> {
+        Some("Pista {0}")
+    }
+    fn deinterlace(&self) -> Option<&'static str> {
+        Some("Desentrelazar")
+    }
+    fn screenshot_saved(&self) -> Option<&'static str> {
+        Some("Captura guardada en {0}")
+    }
 }

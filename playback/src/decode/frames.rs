@@ -209,6 +209,12 @@ impl Yuv {
 
     /// The picture converted to RGBA on the CPU.
     pub fn to_rgba(&self) -> Rgba {
+        self.to_rgba_deinterlaced(false)
+    }
+
+    /// The picture converted to RGBA on the CPU. With `deinterlace`, each odd row takes the average
+    /// of the rows around it, which hides the two fields of an interlaced picture.
+    pub fn to_rgba_deinterlaced(&self, deinterlace: bool) -> Rgba {
         convert(
             self.width,
             self.height,
@@ -216,6 +222,7 @@ impl Yuv {
             &self.sample_bytes(),
             self.matrix,
             self.full_range,
+            deinterlace,
         )
     }
 }
@@ -245,6 +252,7 @@ fn convert(
     samples: &[u8],
     matrix: Matrix,
     full_range: bool,
+    deinterlace: bool,
 ) -> Rgba {
     let c = coefficients(matrix, full_range);
     let (w, h) = (width as usize, height as usize);
@@ -276,7 +284,15 @@ fn convert(
     // Converts one row into `out`, four bytes a pixel. Rows do not depend on each other.
     let convert_row = |y: usize, out: &mut [u8]| {
         for x in 0..w {
-            let luma = read((y * w + x) * bytes) as f32;
+            // An odd row is between two rows of the other field. The row above always exists; the
+            // row below is clamped to the last row. The average is not rounded, as in the rest.
+            let luma = if deinterlace && y % 2 == 1 {
+                let above = read(((y - 1) * w + x) * bytes) as f32;
+                let below = read(((y + 1).min(h - 1) * w + x) * bytes) as f32;
+                (above + below) / 2.0
+            } else {
+                read((y * w + x) * bytes) as f32
+            };
             let chroma = (y >> layout.shift_y) * cw + (x >> layout.shift_x);
             let (cb, cr) = if layout.biplanar {
                 let at = luma_bytes + chroma * 2 * bytes;
@@ -443,6 +459,25 @@ mod tests {
     #[test]
     fn unknown_formats_are_not_converted() {
         assert!(to_rgba(&picture(b"????", vec![0; 16]), Colour::default()).is_none());
+    }
+
+    #[test]
+    fn deinterlacing_blends_the_alternating_rows() {
+        // Three rows of luma, 100 then 200 then 100: the odd row is the other field. Its blend with
+        // the rows around it is 100, so the whole picture comes out one colour.
+        let frame = Picture {
+            width: 2,
+            height: 3,
+            presentation_time: 0,
+            pixel_format: *b"I420",
+            surface: Surface::Cpu(vec![100, 100, 200, 200, 100, 100, 128, 128, 128, 128]),
+        };
+        let yuv = Yuv::from_picture(frame, Colour::default()).unwrap();
+        let woven = yuv.to_rgba_deinterlaced(false);
+        let blended = yuv.to_rgba_deinterlaced(true);
+        let first = &blended.pixels[..4];
+        assert!(blended.pixels.chunks(4).all(|px| px == first));
+        assert!(!woven.pixels.chunks(4).all(|px| px == first));
     }
 
     #[test]

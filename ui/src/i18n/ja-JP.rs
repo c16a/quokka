@@ -820,4 +820,16 @@ impl Translation for JaJp {
     fn many_files(&self) -> Option<&'static str> {
         Some("{0}個のファイル")
     }
+    fn audio_track(&self) -> Option<&'static str> {
+        Some("音声トラック")
+    }
+    fn track_label(&self) -> Option<&'static str> {
+        Some("トラック {0}")
+    }
+    fn deinterlace(&self) -> Option<&'static str> {
+        Some("インターレース解除")
+    }
+    fn screenshot_saved(&self) -> Option<&'static str> {
+        Some("スクリーンショットを {0} に保存しました")
+    }
 }

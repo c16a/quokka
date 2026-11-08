@@ -35,8 +35,9 @@ pub struct VideoGpu {
     params: wgpu::Buffer,
     planes: Option<Planes>,
     target: Option<Target>,
-    /// The frame count shown when the planes were last uploaded, so a frame is uploaded once.
-    uploaded: Option<u64>,
+    /// The frame count and deinterlace setting last converted, so an unchanged frame is not converted
+    /// again. The planes are uploaded once per frame, whatever the setting.
+    uploaded: Option<(u64, bool)>,
     /// Hardware frames are read in place when this is set; `None` on devices that cannot.
     #[cfg(target_os = "macos")]
     importer: Option<metal_video::Importer>,
@@ -234,8 +235,10 @@ impl VideoGpu {
         }
     }
 
-    /// Upload `frame` and convert it to the target, unless `shown` is the frame already uploaded.
-    /// The conversion is recorded into `encoder`, which runs before the window is drawn.
+    /// Upload `frame` and convert it to the target, unless `shown` and `deinterlace` are the ones
+    /// already converted. A change of `deinterlace` alone converts the planes on the GPU again
+    /// without uploading them. The conversion is recorded into `encoder`, which runs before the
+    /// window is drawn.
     pub fn prepare(
         &mut self,
         device: &wgpu::Device,
@@ -243,15 +246,17 @@ impl VideoGpu {
         encoder: &mut wgpu::CommandEncoder,
         frame: &Yuv,
         shown: u64,
+        deinterlace: bool,
     ) {
-        if self.uploaded == Some(shown) {
+        if self.uploaded == Some((shown, deinterlace)) {
             return;
         }
+        let new_frame = self.uploaded.is_none_or(|(uploaded, _)| uploaded != shown);
         #[cfg(target_os = "macos")]
-        let zero_copy = self.import_frame(device, frame);
+        let zero_copy = new_frame && self.import_frame(device, frame);
         #[cfg(not(target_os = "macos"))]
         let zero_copy = false;
-        let samples = if zero_copy {
+        let samples = if !new_frame || zero_copy {
             None
         } else {
             let samples = frame.sample_bytes();
@@ -260,7 +265,7 @@ impl VideoGpu {
             }
             Some(samples)
         };
-        self.uploaded = Some(shown);
+        self.uploaded = Some((shown, deinterlace));
         if samples.is_some() {
             self.ensure_planes(device, frame);
         }
@@ -272,7 +277,7 @@ impl VideoGpu {
         if let Some(samples) = &samples {
             upload(queue, planes, frame, samples);
         }
-        queue.write_buffer(&self.params, 0, &params_bytes(frame));
+        queue.write_buffer(&self.params, 0, &params_bytes(frame, deinterlace));
 
         let view = target
             .texture
@@ -528,6 +533,8 @@ pub struct VideoPaint {
     pub frame: Arc<Yuv>,
     /// Which frame this is, so an unchanged frame is not uploaded again.
     pub shown: u64,
+    /// Whether odd rows are blended with their neighbours, for an interlaced picture.
+    pub deinterlace: bool,
 }
 
 impl egui_wgpu::CallbackTrait for VideoPaint {
@@ -540,7 +547,14 @@ impl egui_wgpu::CallbackTrait for VideoPaint {
         resources: &mut egui_wgpu::CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
         if let Some(gpu) = resources.get_mut::<VideoGpu>() {
-            gpu.prepare(device, queue, encoder, &self.frame, self.shown);
+            gpu.prepare(
+                device,
+                queue,
+                encoder,
+                &self.frame,
+                self.shown,
+                self.deinterlace,
+            );
         }
         Vec::new()
     }
@@ -709,7 +723,7 @@ fn write_plane(
 }
 
 /// The conversion parameters for a frame, as the shader declares them: sixteen 32-bit words.
-fn params_bytes(frame: &Yuv) -> [u8; PARAMS_BYTES as usize] {
+fn params_bytes(frame: &Yuv, deinterlace: bool) -> [u8; PARAMS_BYTES as usize] {
     let c = coefficients(frame.matrix, frame.full_range);
     let words: [u32; 16] = [
         frame.width,
@@ -725,7 +739,7 @@ fn params_bytes(frame: &Yuv) -> [u8; PARAMS_BYTES as usize] {
         c.g_from_cb.to_bits(),
         c.g_from_cr.to_bits(),
         c.b_from_cb.to_bits(),
-        0,
+        u32::from(deinterlace),
         0,
         0,
     ];

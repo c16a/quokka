@@ -850,4 +850,16 @@ impl Translation for EnUs {
     fn many_files(&self) -> Option<&'static str> {
         Some("{0} files")
     }
+    fn audio_track(&self) -> Option<&'static str> {
+        Some("Audio track")
+    }
+    fn track_label(&self) -> Option<&'static str> {
+        Some("Track {0}")
+    }
+    fn deinterlace(&self) -> Option<&'static str> {
+        Some("Deinterlace")
+    }
+    fn screenshot_saved(&self) -> Option<&'static str> {
+        Some("Screenshot saved to {0}")
+    }
 }

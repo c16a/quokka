@@ -17,7 +17,9 @@ struct Params {
     g_from_cb: f32,
     g_from_cr: f32,
     b_from_cb: f32,
-    pad0: u32,
+    // 1 to average each odd row with the rows above and below it, hiding the fields of an
+    // interlaced picture.
+    deinterlace: u32,
     pad1: u32,
     pad2: u32,
 }
@@ -38,12 +40,22 @@ fn vs_full(@builtin(vertex_index) index: u32) -> @builtin(position) vec4<f32> {
     return vec4<f32>(corners[index], 0.0, 1.0);
 }
 
+// The 8-bit luma sample at a column and row of the frame.
+fn luma_at(x: u32, y: u32) -> f32 {
+    let raw = textureLoad(luma, vec2<i32>(i32(x), i32(y)), 0).r;
+    return f32(raw >> params.sample_shift);
+}
+
 @fragment
 fn fs_convert(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
     let x = u32(position.x);
     let y = u32(position.y);
-    let luma_raw = textureLoad(luma, vec2<i32>(i32(x), i32(y)), 0).r;
-    let luma_value = f32(luma_raw >> params.sample_shift);
+    var luma_value = luma_at(x, y);
+    // An odd row lies between two rows of the other field. The row above always exists; the row
+    // below is clamped to the last row. The average is not rounded, as on the CPU.
+    if params.deinterlace == 1u && (y & 1u) == 1u {
+        luma_value = (luma_at(x, y - 1u) + luma_at(x, min(y + 1u, params.height - 1u))) * 0.5;
+    }
 
     // Chroma is shared by a block of pixels, so each pixel reads the chroma sample for its block.
     let chroma_pos = vec2<i32>(i32(x >> params.shift_x), i32(y >> params.shift_y));

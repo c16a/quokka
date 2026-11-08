@@ -814,4 +814,16 @@ impl Translation for ZhHant {
     fn many_files(&self) -> Option<&'static str> {
         Some("{0} 個檔案")
     }
+    fn audio_track(&self) -> Option<&'static str> {
+        Some("音軌")
+    }
+    fn track_label(&self) -> Option<&'static str> {
+        Some("音軌 {0}")
+    }
+    fn deinterlace(&self) -> Option<&'static str> {
+        Some("去交錯")
+    }
+    fn screenshot_saved(&self) -> Option<&'static str> {
+        Some("截圖已儲存至 {0}")
+    }
 }

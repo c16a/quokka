@@ -21,6 +21,9 @@ mod queue;
 mod radio;
 mod recent;
 mod search;
+// Screenshots are taken from the video window only, which is macOS-only.
+#[cfg(target_os = "macos")]
+mod screenshot;
 mod settings_view;
 mod side;
 mod slider;

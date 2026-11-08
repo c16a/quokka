@@ -814,4 +814,16 @@ impl Translation for ZhHans {
     fn many_files(&self) -> Option<&'static str> {
         Some("{0} 个文件")
     }
+    fn audio_track(&self) -> Option<&'static str> {
+        Some("音轨")
+    }
+    fn track_label(&self) -> Option<&'static str> {
+        Some("音轨 {0}")
+    }
+    fn deinterlace(&self) -> Option<&'static str> {
+        Some("去交错")
+    }
+    fn screenshot_saved(&self) -> Option<&'static str> {
+        Some("截图已保存至 {0}")
+    }
 }

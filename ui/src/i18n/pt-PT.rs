@@ -822,4 +822,16 @@ impl Translation for PtPt {
     fn many_files(&self) -> Option<&'static str> {
         Some("{0} ficheiros")
     }
+    fn audio_track(&self) -> Option<&'static str> {
+        Some("Faixa de áudio")
+    }
+    fn track_label(&self) -> Option<&'static str> {
+        Some("Faixa {0}")
+    }
+    fn deinterlace(&self) -> Option<&'static str> {
+        Some("Desentrelaçar")
+    }
+    fn screenshot_saved(&self) -> Option<&'static str> {
+        Some("Captura de ecrã guardada em {0}")
+    }
 }

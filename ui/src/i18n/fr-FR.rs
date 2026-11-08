@@ -836,4 +836,16 @@ impl Translation for FrFr {
     fn many_files(&self) -> Option<&'static str> {
         Some("{0} fichiers")
     }
+    fn audio_track(&self) -> Option<&'static str> {
+        Some("Piste audio")
+    }
+    fn track_label(&self) -> Option<&'static str> {
+        Some("Piste {0}")
+    }
+    fn deinterlace(&self) -> Option<&'static str> {
+        Some("Désentrelacer")
+    }
+    fn screenshot_saved(&self) -> Option<&'static str> {
+        Some("Capture d'écran enregistrée dans {0}")
+    }
 }

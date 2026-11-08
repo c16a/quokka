@@ -828,4 +828,16 @@ impl Translation for DeDe {
     fn many_files(&self) -> Option<&'static str> {
         Some("{0} Dateien")
     }
+    fn audio_track(&self) -> Option<&'static str> {
+        Some("Audiospur")
+    }
+    fn track_label(&self) -> Option<&'static str> {
+        Some("Spur {0}")
+    }
+    fn deinterlace(&self) -> Option<&'static str> {
+        Some("Deinterlacing")
+    }
+    fn screenshot_saved(&self) -> Option<&'static str> {
+        Some("Screenshot gespeichert unter {0}")
+    }
 }

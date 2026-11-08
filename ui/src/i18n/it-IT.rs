@@ -822,4 +822,16 @@ impl Translation for ItIt {
     fn many_files(&self) -> Option<&'static str> {
         Some("{0} file")
     }
+    fn audio_track(&self) -> Option<&'static str> {
+        Some("Traccia audio")
+    }
+    fn track_label(&self) -> Option<&'static str> {
+        Some("Traccia {0}")
+    }
+    fn deinterlace(&self) -> Option<&'static str> {
+        Some("Deinterlaccia")
+    }
+    fn screenshot_saved(&self) -> Option<&'static str> {
+        Some("Screenshot salvato in {0}")
+    }
 }

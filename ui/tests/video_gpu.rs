@@ -67,7 +67,7 @@ fn convert_on_gpu(
     shown: u64,
 ) -> Vec<u8> {
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-    gpu.prepare(device, queue, &mut encoder, frame, shown);
+    gpu.prepare(device, queue, &mut encoder, frame, shown, false);
     let texture = gpu.rgba_texture().expect("the frame was converted");
     let (w, h) = (frame.width, frame.height);
     // Rows read back must be a multiple of 256 bytes wide.
@@ -209,7 +209,7 @@ fn draw_into(format: wgpu::TextureFormat, frame: &Yuv) -> Option<Vec<u8>> {
     let (device, queue) = offscreen_device()?;
     let mut gpu = VideoGpu::new(&device, format);
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-    gpu.prepare(&device, &queue, &mut encoder, frame, 1);
+    gpu.prepare(&device, &queue, &mut encoder, frame, 1, false);
     let (w, h) = (frame.width, frame.height);
     let target = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("draw target"),

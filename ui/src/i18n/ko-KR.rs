@@ -814,4 +814,16 @@ impl Translation for KoKr {
     fn many_files(&self) -> Option<&'static str> {
         Some("파일 {0}개")
     }
+    fn audio_track(&self) -> Option<&'static str> {
+        Some("오디오 트랙")
+    }
+    fn track_label(&self) -> Option<&'static str> {
+        Some("트랙 {0}")
+    }
+    fn deinterlace(&self) -> Option<&'static str> {
+        Some("인터레이스 해제")
+    }
+    fn screenshot_saved(&self) -> Option<&'static str> {
+        Some("스크린샷을 {0}에 저장함")
+    }
 }

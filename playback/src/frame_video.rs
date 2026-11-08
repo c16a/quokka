@@ -2,8 +2,8 @@
 //! the output device, and the sound's clock (or the wall clock, once the sound has ended) decides
 //! which frame is on screen. It implements [`Player`], so the playback bar drives it like any other.
 
-use std::path::Path;
-use std::sync::mpsc::{Receiver, TryRecvError};
+use std::path::{Path, PathBuf};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, TryRecvError};
 use std::time::{Duration, Instant};
 
 use quokka_core::video::{Cue, read_subtitles};
@@ -13,12 +13,20 @@ use std::sync::Arc;
 use crate::decode::frames::Yuv;
 use crate::decode::player::{FramePlayer, VideoFrame, VideoSource};
 use crate::movie_audio::{AudioSource, MovieAudio};
-use crate::{Player, PlayerState, Result};
+use crate::{PlaybackError, Player, PlayerState, Result};
+
+/// How long a frame step waits for the decoder, or for a seek to open, before it gives up.
+const STEP_WAIT: Duration = Duration::from_secs(1);
+
+/// How often a frame step checks the decoder while it waits.
+const STEP_POLL: Duration = Duration::from_millis(2);
 
 /// The parts of a file that are read on a worker thread, ready for the window's thread to start.
 struct Prepared {
     /// The position the file starts from, in seconds.
     start: f64,
+    /// The audio track the soundtrack was read from.
+    audio_track: usize,
     video: VideoSource,
     /// The soundtrack's tables, kept for seeking.
     audio_source: Option<AudioSource>,
@@ -55,13 +63,15 @@ fn open_streams(
 
 /// Read a file's tables, open its decoders and sound output at `start`, and read its subtitles.
 /// All of it runs off the window's thread: this is the slow part of loading.
-fn prepare(path: &Path, start: f64) -> std::result::Result<Prepared, String> {
+fn prepare(path: &Path, start: f64, audio_track: usize) -> std::result::Result<Prepared, String> {
     let video = VideoSource::read(path).map_err(|error| error.to_string())?;
-    let audio_source = AudioSource::read(path).map_err(|error| error.to_string())?;
+    let audio_source =
+        AudioSource::read_track(path, audio_track).map_err(|error| error.to_string())?;
     let (frames, audio) = open_streams(&video, audio_source.as_ref(), start)?;
     let cues = read_subtitles(path).unwrap_or_default();
     Ok(Prepared {
         start,
+        audio_track,
         video,
         audio_source,
         audio,
@@ -87,8 +97,10 @@ pub struct FrameVideo {
     audio_offset: f64,
     /// A frame whose time has not come up yet.
     next: Option<VideoFrame>,
-    /// The frame on screen, and how many frames have been shown, so the window knows when to redraw.
+    /// The frame on screen, its time, and how many frames have been shown, so the window knows when
+    /// to redraw.
     image: Option<Arc<Yuv>>,
+    image_time: Option<f64>,
     shown: u64,
     /// Whether the sound has ended, and the wall clock has taken over from it.
     sound_done: bool,
@@ -105,6 +117,10 @@ pub struct FrameVideo {
     want_play: bool,
     /// Why the file could not be loaded, if it could not.
     failure: Option<String>,
+    /// The file being played, so that its soundtrack can be read again for another track.
+    path: Option<PathBuf>,
+    /// The audio track the soundtrack is read from, among the file's audio tracks.
+    audio_track: usize,
 }
 
 impl FrameVideo {
@@ -202,8 +218,7 @@ impl FrameVideo {
             }
             match self.next.take() {
                 Some(frame) if frame.time <= clock => {
-                    self.image = Some(Arc::new(frame.image));
-                    self.shown += 1;
+                    self.set_picture(frame);
                     changed = true;
                 }
                 other => {
@@ -224,6 +239,7 @@ impl FrameVideo {
 
     /// Start what the worker prepared: the picture and the sound were both opened there.
     fn finish_loading(&mut self, prepared: Prepared) -> Result<()> {
+        let loaded_track = prepared.audio_track;
         self.duration = prepared.video.duration();
         self.audio_offset = prepared.start;
         self.wall_base = prepared.start;
@@ -235,6 +251,11 @@ impl FrameVideo {
         cues.sort_by(|a, b| a.start.total_cmp(&b.start));
         self.cues = cues;
         self.loaded = true;
+        // The track may have been chosen while the file loaded, so the sound is read again for it.
+        if loaded_track != self.audio_track {
+            let track = self.audio_track;
+            self.set_audio_track(track)?;
+        }
         if std::mem::take(&mut self.want_play) {
             self.play()?;
         }
@@ -265,13 +286,39 @@ impl FrameVideo {
     /// play was pressed meanwhile. Loading a movie already loaded replaces it.
     pub fn load_at(&mut self, path: &Path, start: f64) -> Result<()> {
         *self = FrameVideo::new();
-        let (sender, receiver) = std::sync::mpsc::channel();
         let path = path.to_path_buf();
+        self.path = Some(path.clone());
+        // The track is back at 0 after the reset, so each file starts on its first audio track.
+        let audio_track = self.audio_track;
+        let (sender, receiver) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            let _ = sender.send(prepare(&path, start));
+            let _ = sender.send(prepare(&path, start, audio_track));
         });
         self.loading = Some(receiver);
         Ok(())
+    }
+
+    /// Choose which of the file's audio tracks plays. A loaded file reopens its sound at the
+    /// current position, keeping the playing or paused state. A file still loading picks the track
+    /// up when it is ready.
+    pub fn set_audio_track(&mut self, track: usize) -> Result<()> {
+        let path = match self.path.clone() {
+            Some(path) if self.loaded && self.loading.is_none() => path,
+            _ => {
+                self.audio_track = track;
+                return Ok(());
+            }
+        };
+        let Some(source) = AudioSource::read_track(&path, track)? else {
+            return Err(PlaybackError::Backend(format!(
+                "the file has no audio track {track}"
+            )));
+        };
+        self.audio_track = track;
+        self.audio_source = Some(Arc::new(source));
+        // Seeking to the current position opens the decoders and the sound from the new source.
+        let position = self.position().unwrap_or_default();
+        self.seek(position)
     }
 
     /// Why the file could not be loaded, if it could not.
@@ -282,6 +329,31 @@ impl FrameVideo {
     /// The frame on screen, if one has been shown.
     pub fn image(&self) -> Option<&Arc<Yuv>> {
         self.image.as_ref()
+    }
+
+    /// The time of the frame on screen, in seconds, if one has been shown.
+    pub fn image_time(&self) -> Option<f64> {
+        self.image_time
+    }
+
+    /// Show the frame before the one on screen (`forward` false), or the frame after it, while
+    /// paused. Playback stays paused. `frame_secs` is the length of one frame.
+    pub fn step(&mut self, forward: bool, frame_secs: f64) -> Result<()> {
+        if !self.loaded {
+            return Ok(());
+        }
+        self.pause()?;
+        if !self.settle_seek()? {
+            return Ok(());
+        }
+        if forward {
+            if let Some(frame) = self.next_frame_waiting() {
+                self.show_stepped(frame);
+            }
+            Ok(())
+        } else {
+            self.step_back(frame_secs)
+        }
     }
 
     /// How many frames have been shown. It changes whenever the picture does.
@@ -336,6 +408,131 @@ impl FrameVideo {
         if let Some(started) = self.wall_started.take() {
             self.wall_base += started.elapsed().as_secs_f64();
         }
+    }
+
+    /// Put `frame` on screen as the clock reaches it.
+    fn set_picture(&mut self, frame: VideoFrame) {
+        self.image_time = Some(frame.time);
+        self.image = Some(Arc::new(frame.image));
+        self.shown += 1;
+    }
+
+    /// Put `frame` on screen and move the paused clock to its time, so that the position and the
+    /// picture agree.
+    fn show_stepped(&mut self, frame: VideoFrame) {
+        let time = frame.time;
+        self.set_picture(frame);
+        self.move_clock(time);
+    }
+
+    /// Set the paused position to `time`. The sound stays paused: its offset moves so that its own
+    /// clock reads `time`, which is how a seek sets the position too.
+    fn move_clock(&mut self, time: f64) {
+        if let Some(audio) = &self.audio
+            && !self.sound_done
+        {
+            self.audio_offset = time - audio.clock();
+        }
+        self.wall_base = time;
+    }
+
+    /// Wait briefly for a seek to open its decoder and sound, and start them. `false` when the seek
+    /// has not finished or has failed, so the step is not taken.
+    fn settle_seek(&mut self) -> Result<bool> {
+        let Some(pending) = self.seeking.take() else {
+            return Ok(true);
+        };
+        match pending.opened.recv_timeout(STEP_WAIT) {
+            Ok(Ok((frames, audio))) => {
+                self.finish_seek(pending.target, false, frames, audio)?;
+                Ok(true)
+            }
+            Ok(Err(reason)) => {
+                self.failure = Some(reason);
+                Ok(false)
+            }
+            Err(RecvTimeoutError::Timeout) => {
+                self.seeking = Some(pending);
+                Ok(false)
+            }
+            Err(RecvTimeoutError::Disconnected) => {
+                self.failure = Some("seeking stopped".into());
+                Ok(false)
+            }
+        }
+    }
+
+    /// The next frame, waiting briefly for the decoder to produce one. `None` when the file has
+    /// ended, or when no frame came in time.
+    fn next_frame_waiting(&mut self) -> Option<VideoFrame> {
+        if let Some(frame) = self.next.take() {
+            return Some(frame);
+        }
+        let deadline = Instant::now() + STEP_WAIT;
+        loop {
+            let frames = self.frames.as_mut()?;
+            match frames.next_frame() {
+                Ok(Some(frame)) => return Some(frame),
+                Ok(None) if !frames.finished() && Instant::now() < deadline => {
+                    std::thread::sleep(STEP_POLL);
+                }
+                Ok(None) => return None,
+                Err(_) => {
+                    self.ended = true;
+                    return None;
+                }
+            }
+        }
+    }
+
+    /// Show the frame before the picture on screen. The decoder is reopened a little before it and
+    /// read on up to the picture's time, keeping the last frame before it.
+    fn step_back(&mut self, frame_secs: f64) -> Result<()> {
+        let clock = self.clock();
+        // The picture is the last frame at or before the clock. Stepping from its time, not the
+        // clock's, moves a frame even when the clock is partway through one.
+        let current = match self.image_time {
+            Some(time) if time <= clock && clock - time < frame_secs => time,
+            _ => clock,
+        };
+        self.seek(Duration::from_secs_f64(
+            (current - 1.5 * frame_secs).max(0.0),
+        ))?;
+        if !self.settle_seek()? {
+            return Ok(());
+        }
+        let mut decoded = Vec::new();
+        while let Some(frame) = self.next_frame_waiting() {
+            let reached = frame.time >= current;
+            decoded.push(frame);
+            if reached {
+                break;
+            }
+        }
+        let times: Vec<f64> = decoded.iter().map(|frame| frame.time).collect();
+        let Some(index) = backward_index(&times, current) else {
+            return Ok(());
+        };
+        // The frame that reached the picture's time waits in `next`, so that `poll` shows it on time.
+        let mut rest = decoded.split_off(index + 1);
+        if let Some(frame) = decoded.pop() {
+            self.show_stepped(frame);
+        }
+        self.next = rest.pop();
+        Ok(())
+    }
+}
+
+/// The index of the frame a backward step shows, among frame times in order, ending with the first
+/// frame at or after `current`: the last frame before `current`, or that first frame when none is.
+fn backward_index(times: &[f64], current: f64) -> Option<usize> {
+    let before = times.partition_point(|&time| time < current);
+    if before > 0 {
+        Some(before - 1)
+    } else if times.is_empty() {
+        None
+    } else {
+        Some(0)
     }
 }
 
@@ -445,5 +642,24 @@ impl Player for FrameVideo {
             audio.set_volume(volume);
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::backward_index;
+
+    #[test]
+    fn backward_step_takes_the_last_frame_before_the_picture() {
+        let times = [0.0, 0.04, 0.08, 0.12];
+        assert_eq!(backward_index(&times, 0.12), Some(2));
+        assert_eq!(backward_index(&times, 0.10), Some(2));
+    }
+
+    #[test]
+    fn backward_step_takes_the_first_frame_when_none_is_before() {
+        assert_eq!(backward_index(&[0.0, 0.04], 0.0), Some(0));
+        assert_eq!(backward_index(&[0.12], 0.12), Some(0));
+        assert_eq!(backward_index(&[], 1.0), None);
     }
 }

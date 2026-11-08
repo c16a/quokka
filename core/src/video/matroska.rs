@@ -325,7 +325,16 @@ struct Header {
     size: Option<u64>,
 }
 
-/// The samples of the first track of `kind` (1 for video, 2 for audio) in a Matroska or WebM file,
+/// The samples of the first track of `kind` (1 for video, 2 for audio, 17 for subtitles) in a
+/// Matroska or WebM file. See `read_track_at`.
+pub(crate) fn read_track<R: Read + Seek>(
+    file: &mut R,
+    kind: u64,
+) -> io::Result<Option<(Track, u64, Vec<Sample>)>> {
+    read_track_at(file, kind, 0)
+}
+
+/// The samples of the track at `index` among the tracks of `kind`, counted from 0 in file order,
 /// with the track they belong to and the time scale of their times. The file is read in one pass
 /// over its element headers: clusters and block groups are entered rather than skipped, so only the
 /// headers are read, plus the small `Info` and `Tracks` elements. Each block is one sample, and its
@@ -333,9 +342,10 @@ struct Header {
 ///
 /// Blocks carry only presentation times, so the decode time is set to the presentation time. That
 /// is correct for streams without reordered frames, which covers the VP9 and AV1 fixtures.
-pub(crate) fn read_track<R: Read + Seek>(
+pub(crate) fn read_track_at<R: Read + Seek>(
     file: &mut R,
     kind: u64,
+    index: usize,
 ) -> io::Result<Option<(Track, u64, Vec<Sample>)>> {
     let end = file.seek(SeekFrom::End(0))?;
     let mut scale = DEFAULT_TIMESTAMP_SCALE;
@@ -369,7 +379,8 @@ pub(crate) fn read_track<R: Read + Seek>(
                 selected = elements(&tracks)
                     .filter(|(id, _)| *id == TRACK_ENTRY)
                     .map(|(_, entry)| parse_track(entry))
-                    .find(|track| track.kind == kind);
+                    .filter(|track| track.kind == kind)
+                    .nth(index);
             }
             TIMESTAMP => {
                 cluster_time = uint(&read_span(file, body, body_end)?) as i64;
@@ -430,10 +441,13 @@ pub(crate) fn read_samples<R: Read + Seek>(file: &mut R) -> io::Result<Option<Sa
     }))
 }
 
-/// The first audio track of a Matroska or WebM file. The format comes from the track's own
-/// fields where it has them, and otherwise from the first frame.
-pub(crate) fn read_audio<R: Read + Seek>(file: &mut R) -> io::Result<Option<AudioTrack>> {
-    let Some((track, timescale, samples)) = read_track(file, AUDIO_TRACK)? else {
+/// The audio track at `index` among the audio tracks of a Matroska or WebM file. The format comes
+/// from the track's own fields where it has them, and otherwise from the first frame.
+pub(crate) fn read_audio<R: Read + Seek>(
+    file: &mut R,
+    index: usize,
+) -> io::Result<Option<AudioTrack>> {
+    let Some((track, timescale, samples)) = read_track_at(file, AUDIO_TRACK, index)? else {
         return Ok(None);
     };
     let codec = match track.codec_id.as_str() {

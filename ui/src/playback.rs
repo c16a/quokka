@@ -6,7 +6,11 @@ use std::time::Duration;
 use eframe::egui;
 use quokka_core::RepeatMode as Repeat;
 use quokka_core::Station;
+#[cfg(target_os = "macos")]
+use quokka_core::video::AudioTrackInfo;
 use quokka_core::{MediaItem, MediaKind, ReplayGainMode, Session};
+#[cfg(target_os = "macos")]
+use quokka_playback::decode::frames::Yuv;
 use quokka_playback::{
     Player, PlayerState, RodioPlayer, SymphoniaSource, VideoPlayer, open_stream,
     output_device_names,
@@ -14,11 +18,17 @@ use quokka_playback::{
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::thread;
+#[cfg(target_os = "macos")]
+use std::time::Instant;
 
 use crate::format;
 use crate::icons;
 use crate::slider;
 use crate::squircle::{Padding, SquircleButton};
+
+/// How long a message about a saved screenshot stays on the video.
+#[cfg(target_os = "macos")]
+const SCREENSHOT_MESSAGE_SECS: f64 = 3.0;
 
 /// A track to add to the queue from elsewhere in the app.
 pub enum MenuRequest {
@@ -121,6 +131,18 @@ pub struct Playback {
     radio_reconnects: u32,
     /// Whether the output list above the bar is open.
     output_menu: bool,
+    /// Whether the picture of the video window is deinterlaced. Kept from one movie to the next.
+    #[cfg(target_os = "macos")]
+    deinterlace: bool,
+    /// The audio track of the movie that plays, from 0. Each file starts on its first track.
+    #[cfg(target_os = "macos")]
+    audio_track: usize,
+    /// The audio tracks listed in the video window's menu, while the menu is open.
+    #[cfg(target_os = "macos")]
+    audio_menu: Option<Vec<AudioTrackInfo>>,
+    /// A message about a saved screenshot, and when it was set. It leaves the video after a few seconds.
+    #[cfg(target_os = "macos")]
+    screenshot_message: Option<(String, Instant)>,
 }
 
 /// What the bar asked for this frame. Applied after drawing.
@@ -184,6 +206,14 @@ impl Playback {
             radio_paused: false,
             radio_reconnects: 0,
             output_menu: false,
+            #[cfg(target_os = "macos")]
+            deinterlace: false,
+            #[cfg(target_os = "macos")]
+            audio_track: 0,
+            #[cfg(target_os = "macos")]
+            audio_menu: None,
+            #[cfg(target_os = "macos")]
+            screenshot_message: None,
         }
     }
 
@@ -1076,6 +1106,11 @@ impl Playback {
             return;
         };
         self.armed = None;
+        // A file opened now plays its first audio track, as the decoders load it from track 0.
+        #[cfg(target_os = "macos")]
+        {
+            self.audio_track = 0;
+        }
         if item.kind == MediaKind::Video {
             self.start_video(&item, autoplay);
             return;
@@ -1131,7 +1166,8 @@ impl Playback {
 
     /// Controls for the video window, in its bottom strip. A seek bar runs across the width. Below it:
     /// back 10 seconds, play or pause, forward 10 seconds, and the elapsed and total times. On the
-    /// right: mute, volume and full screen. A seek is made when the bar is let go. Returns true when
+    /// right: mute, volume and full screen, with the deinterlace and audio track buttons beside mute.
+    /// A seek is made when the bar is let go. Returns true when
     /// the full-screen button was clicked, so the window can change its own state.
     #[cfg(target_os = "macos")]
     pub fn show_video_controls(&mut self, ui: &mut egui::Ui, fullscreen: bool) -> bool {
@@ -1227,6 +1263,54 @@ impl Playback {
                 {
                     self.toggle_mute();
                 }
+                if text_button(ui, i18n::deinterlace(), self.deinterlace).clicked() {
+                    self.toggle_deinterlace();
+                }
+                // Audio tracks: a button that opens a list of them, as the bar's output button does. The
+                // list is read from the file when it opens, not on every frame.
+                let audio =
+                    audio_button(ui, self.audio_menu.is_some()).on_hover_text(i18n::audio_track());
+                if audio.clicked() {
+                    self.audio_menu = if self.audio_menu.is_some() {
+                        None
+                    } else {
+                        Some(self.audio_tracks())
+                    };
+                }
+                let mut choice = None;
+                if let Some(tracks) = &self.audio_menu {
+                    let height = 44.0 + 28.0 * tracks.len() as f32;
+                    let pos =
+                        egui::pos2(audio.rect.right() - 240.0, audio.rect.top() - height - 8.0);
+                    let area = egui::Area::new(ui.scope_id().with("audio_menu"))
+                        .order(egui::Order::Foreground)
+                        .fixed_pos(pos)
+                        .show(ui.ctx(), |ui| {
+                            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                                ui.set_width(240.0);
+                                ui.weak(i18n::audio_track());
+                                // Only the tracks this build can decode are offered.
+                                for track in tracks.iter().filter(|track| track.supported) {
+                                    let current = track.index == self.audio_track;
+                                    if ui
+                                        .selectable_label(current, audio_track_text(track))
+                                        .clicked()
+                                    {
+                                        choice = Some(track.index);
+                                    }
+                                }
+                            });
+                        });
+                    // A click anywhere else closes the list.
+                    let pressed = ui.input(|i| i.pointer.any_pressed());
+                    if pressed && !area.response.contains_pointer() && !audio.hovered() {
+                        self.audio_menu = None;
+                    }
+                }
+                if let Some(track) = choice {
+                    self.audio_menu = None;
+                    self.set_audio_track(track);
+                }
             });
         });
         full_screen_clicked
@@ -1260,7 +1344,11 @@ impl Playback {
                     ui.painter()
                         .add(eframe::egui_wgpu::Callback::new_paint_callback(
                             rect,
-                            crate::video_gpu::VideoPaint { frame, shown },
+                            crate::video_gpu::VideoPaint {
+                                frame,
+                                shown,
+                                deinterlace: self.deinterlace,
+                            },
                         ));
                 });
             }
@@ -1288,6 +1376,30 @@ impl Playback {
                         });
                 });
         }
+        // The message about a screenshot, in the top left corner, until its time is up.
+        if let Some((text, at)) = self.screenshot_message.clone() {
+            let left = SCREENSHOT_MESSAGE_SECS - at.elapsed().as_secs_f64();
+            if left > 0.0 {
+                let pane = ui.max_rect();
+                egui::Area::new(ui.scope_id().with("screenshot_message"))
+                    .order(egui::Order::Foreground)
+                    .fixed_pos(pane.left_top() + egui::vec2(16.0, 16.0))
+                    .show(ui.ctx(), |ui| {
+                        egui::Frame::new()
+                            .fill(egui::Color32::from_black_alpha(170))
+                            .corner_radius(6.0)
+                            .inner_margin(egui::Margin::symmetric(12, 6))
+                            .show(ui, |ui| {
+                                ui.label(egui::RichText::new(text).color(egui::Color32::WHITE));
+                            });
+                    });
+                // The window only redraws on input, so ask for one when the message should leave.
+                ui.ctx()
+                    .request_repaint_after(Duration::from_secs_f64(left));
+            } else {
+                self.screenshot_message = None;
+            }
+        }
     }
 
     /// Show or hide the subtitles of the video, if it has any.
@@ -1300,6 +1412,89 @@ impl Playback {
 
     #[cfg(not(target_os = "macos"))]
     pub fn toggle_subtitles(&mut self) {}
+
+    /// Show the frame before (`forward` false) or after the one on screen, while the movie is paused.
+    #[cfg(target_os = "macos")]
+    pub fn step_frame(&mut self, forward: bool) {
+        if !self.video_loaded {
+            return;
+        }
+        // A frame lasts as long as the movie's frame rate says. Without a known rate, 24 frames a second.
+        let frame_secs = self
+            .current()
+            .and_then(|item| item.video_fps)
+            .filter(|fps| *fps > 0.0)
+            .map_or(1.0 / 24.0, |fps| 1.0 / fps);
+        let Some(video) = self.video.as_mut() else {
+            return;
+        };
+        if let Err(e) = video.step(forward, frame_secs) {
+            self.error = Some(Text::plain(e.to_string()));
+        }
+    }
+
+    /// The frame on screen in the video window, if a movie is showing one.
+    #[cfg(target_os = "macos")]
+    pub fn video_frame(&self) -> Option<Arc<Yuv>> {
+        if !self.video_loaded {
+            return None;
+        }
+        self.video.as_ref()?.image().cloned()
+    }
+
+    /// The time of the frame on screen, in seconds. Before a frame is shown, the clock's position.
+    #[cfg(target_os = "macos")]
+    pub fn video_position(&self) -> Option<f64> {
+        self.video
+            .as_ref()
+            .and_then(VideoPlayer::image_time)
+            .or_else(|| self.position().map(|p| p.as_secs_f64()))
+    }
+
+    /// The audio tracks of the current movie. Empty when its file can't be read.
+    #[cfg(target_os = "macos")]
+    pub fn audio_tracks(&self) -> Vec<AudioTrackInfo> {
+        match self.current() {
+            Some(item) => quokka_core::video::audio_tracks(&item.path).unwrap_or_default(),
+            None => Vec::new(),
+        }
+    }
+
+    /// Play audio track `track` of the movie. The sound reopens at the current position.
+    #[cfg(target_os = "macos")]
+    pub fn set_audio_track(&mut self, track: usize) {
+        let Some(video) = self.video.as_mut() else {
+            return;
+        };
+        match video.set_audio_track(track) {
+            Ok(()) => self.audio_track = track,
+            Err(e) => self.error = Some(Text::plain(e.to_string())),
+        }
+    }
+
+    /// Turn deinterlacing of the picture on or off.
+    #[cfg(target_os = "macos")]
+    pub fn toggle_deinterlace(&mut self) {
+        self.deinterlace = !self.deinterlace;
+    }
+
+    /// Save the frame on screen as a PNG, and say where it went in the video window for a few seconds.
+    #[cfg(target_os = "macos")]
+    pub fn save_screenshot(&mut self) {
+        let Some(frame) = self.video_frame() else {
+            return;
+        };
+        let title = self.video_title().unwrap_or_default();
+        let position = self.video_position().unwrap_or_default();
+        let message = match crate::screenshot::save(&frame, &title, position) {
+            Ok(path) => {
+                let path = Text::plain(path.display().to_string());
+                Text::filled(i18n::screenshot_saved, vec![path]).to_string()
+            }
+            Err(error) => error,
+        };
+        self.screenshot_message = Some((message, Instant::now()));
+    }
 
     pub fn show(&mut self, ui: &mut egui::Ui, compact: bool) {
         if self.radio.is_some() {
@@ -1723,7 +1918,8 @@ pub fn handle_keys(ctx: &egui::Context, playback: &mut Playback) {
 
 /// Keyboard shortcuts for the video window. Its keys reach only that window, so it runs this as
 /// well as `handle_keys`, which covers the main window. Returns true when full screen should change:
-/// F toggles it, and Escape leaves it.
+/// F toggles it, and Escape leaves it. Period and comma step a paused movie a frame forward and back,
+/// S saves the frame on screen, and D deinterlaces the picture. Only this window has them.
 #[cfg(target_os = "macos")]
 pub fn handle_video_keys(ctx: &egui::Context, playback: &mut Playback, fullscreen: bool) -> bool {
     if ctx.egui_wants_keyboard_input() {
@@ -1737,6 +1933,18 @@ pub fn handle_video_keys(ctx: &egui::Context, playback: &mut Playback, fullscree
         }
         if fullscreen && input.consume_key(none, egui::Key::Escape) {
             toggle_fullscreen = true;
+        }
+        if input.consume_key(none, egui::Key::Period) {
+            playback.step_frame(true);
+        }
+        if input.consume_key(none, egui::Key::Comma) {
+            playback.step_frame(false);
+        }
+        if input.consume_key(none, egui::Key::S) {
+            playback.save_screenshot();
+        }
+        if input.consume_key(none, egui::Key::D) {
+            playback.toggle_deinterlace();
         }
     });
     handle_keys(ctx, playback);
@@ -2057,6 +2265,55 @@ fn output_button(ui: &mut egui::Ui, active: bool) -> egui::Response {
     response
 }
 
+/// Round button with the audio icon, for the list of audio tracks. Tinted while the list is open.
+#[cfg(target_os = "macos")]
+fn audio_button(ui: &mut egui::Ui, active: bool) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(28.0, 28.0), egui::Sense::click());
+    let visuals = ui.style().interact(&response);
+    hover_fill(ui, rect, 14.0, &response);
+    let colour = if active {
+        ui.visuals().hyperlink_color
+    } else {
+        visuals.fg_stroke.color
+    };
+    icons::paint(ui.painter(), rect.center(), icons::EQUALIZER, 16.0, colour);
+    response
+}
+
+/// A small pill button with a text label. The label uses the accent colour while `active`.
+#[cfg(target_os = "macos")]
+fn text_button(ui: &mut egui::Ui, label: &str, active: bool) -> egui::Response {
+    let colour = if active {
+        ui.visuals().hyperlink_color
+    } else {
+        ui.visuals().text_color()
+    };
+    let text = egui::RichText::new(label).size(12.0).color(colour);
+    SquircleButton::new(egui::Label::new(text).extend())
+        .padding(Padding::symmetric(10.0, 6.0))
+        .show(ui)
+}
+
+/// An audio track as the menu lists it: `Track 2 (eng, Stereo)`. The language and the channels
+/// are left out when the file doesn't give them.
+#[cfg(target_os = "macos")]
+fn audio_track_text(track: &AudioTrackInfo) -> String {
+    let number = (track.index + 1).to_string();
+    let text = i18n::fill(i18n::track_label(), &[number.as_str()]);
+    let mut details = Vec::new();
+    if let Some(language) = &track.language {
+        details.push(language.clone());
+    }
+    if let Some(channels) = track.channels {
+        details.push(format::channels(i64::from(channels)));
+    }
+    if details.is_empty() {
+        text
+    } else {
+        format!("{text} ({})", details.join(", "))
+    }
+}
+
 /// Full-screen button: four corner brackets, drawn rather than read from the icon font. The brackets
 /// point inwards to enter full screen and outwards to leave it.
 fn fullscreen_button(ui: &mut egui::Ui, active: bool) -> egui::Response {
@@ -2179,6 +2436,14 @@ mod tests {
             radio_paused: false,
             radio_reconnects: 0,
             output_menu: false,
+            #[cfg(target_os = "macos")]
+            deinterlace: false,
+            #[cfg(target_os = "macos")]
+            audio_track: 0,
+            #[cfg(target_os = "macos")]
+            audio_menu: None,
+            #[cfg(target_os = "macos")]
+            screenshot_message: None,
         };
         p.play_queue((1..=n).map(item).collect(), 0);
         p

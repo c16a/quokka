@@ -99,7 +99,7 @@ fn main() {
     let mut new_path = |frame: &Yuv| {
         shown += 1;
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-        gpu.prepare(&device, &queue, &mut encoder, frame, shown);
+        gpu.prepare(&device, &queue, &mut encoder, frame, shown, false);
         queue.submit([encoder.finish()]);
         let _ = device.poll(wgpu::PollType::wait_indefinitely());
     };
