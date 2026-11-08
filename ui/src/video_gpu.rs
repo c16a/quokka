@@ -3,6 +3,7 @@
 //! scaled to its place, bilinearly filtered as before. The CPU no longer computes every pixel, and
 //! the upload is 1.5 bytes a pixel rather than 4.
 
+use std::collections::VecDeque;
 use std::pin::pin;
 use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
@@ -11,11 +12,18 @@ use eframe::egui;
 use eframe::egui_wgpu::{self, wgpu};
 use quokka_playback::decode::frames::{Layout, Yuv, coefficients};
 
+#[cfg(target_os = "macos")]
+use crate::metal_video;
+
 const CONVERT: &str = include_str!("video_convert.wgsl");
 const DRAW: &str = include_str!("video_draw.wgsl");
 
 /// The conversion parameters: sixteen 32-bit words.
 const PARAMS_BYTES: u64 = 64;
+
+/// Planes of earlier frames kept alive after they are replaced. The GPU may still be reading them
+/// when the next frame arrives, and a hardware buffer must not be reused until it has finished.
+const RETIRED_PLANES: usize = 4;
 
 /// The GPU state for video: the two pipelines, and the textures for the frame on screen.
 pub struct VideoGpu {
@@ -29,6 +37,11 @@ pub struct VideoGpu {
     target: Option<Target>,
     /// The frame count shown when the planes were last uploaded, so a frame is uploaded once.
     uploaded: Option<u64>,
+    /// Hardware frames are read in place when this is set; `None` on devices that cannot.
+    #[cfg(target_os = "macos")]
+    importer: Option<metal_video::Importer>,
+    #[cfg(target_os = "macos")]
+    retired: VecDeque<Planes>,
 }
 
 /// The sample planes of a frame, as textures, and the bind group that reads them.
@@ -36,12 +49,25 @@ struct Planes {
     width: u32,
     height: u32,
     layout: Layout,
+    /// The hardware buffer the planes read, when the frame was not copied into them.
+    #[cfg(target_os = "macos")]
+    imported: Option<metal_video::Imported>,
     y: wgpu::Texture,
     /// Cb, or the interleaved CbCr plane.
     chroma_a: wgpu::Texture,
     /// Cr, or a one-texel stand-in when Cb and Cr are interleaved.
     chroma_b: wgpu::Texture,
     bind: wgpu::BindGroup,
+}
+
+impl Planes {
+    /// Whether the planes read a hardware buffer in place, rather than textures uploaded to.
+    fn is_imported(&self) -> bool {
+        #[cfg(target_os = "macos")]
+        return self.imported.is_some();
+        #[cfg(not(target_os = "macos"))]
+        return false;
+    }
 }
 
 /// The converted frame: RGBA at the size of the video, and the bind group that draws it.
@@ -201,6 +227,10 @@ impl VideoGpu {
             planes: None,
             target: None,
             uploaded: None,
+            #[cfg(target_os = "macos")]
+            importer: metal_video::Importer::new(device),
+            #[cfg(target_os = "macos")]
+            retired: VecDeque::new(),
         }
     }
 
@@ -217,17 +247,31 @@ impl VideoGpu {
         if self.uploaded == Some(shown) {
             return;
         }
-        if frame.samples.len() < frame.layout.total_bytes(frame.width, frame.height) {
-            return;
-        }
+        #[cfg(target_os = "macos")]
+        let zero_copy = self.import_frame(device, frame);
+        #[cfg(not(target_os = "macos"))]
+        let zero_copy = false;
+        let samples = if zero_copy {
+            None
+        } else {
+            let samples = frame.sample_bytes();
+            if samples.len() < frame.layout.total_bytes(frame.width, frame.height) {
+                return;
+            }
+            Some(samples)
+        };
         self.uploaded = Some(shown);
-        self.ensure_planes(device, frame);
+        if samples.is_some() {
+            self.ensure_planes(device, frame);
+        }
         self.ensure_target(device, frame.width, frame.height);
         let (Some(planes), Some(target)) = (self.planes.as_ref(), self.target.as_ref()) else {
             return;
         };
 
-        upload(queue, planes, frame);
+        if let Some(samples) = &samples {
+            upload(queue, planes, frame, samples);
+        }
         queue.write_buffer(&self.params, 0, &params_bytes(frame));
 
         let view = target
@@ -273,11 +317,100 @@ impl VideoGpu {
         self.target.as_ref().map(|target| &target.texture)
     }
 
+    /// Read a hardware frame's planes in place. Returns `false` when the frame has no hardware
+    /// buffer or the device cannot import it, and the frame then takes the upload path.
+    #[cfg(target_os = "macos")]
+    fn import_frame(&mut self, device: &wgpu::Device, frame: &Yuv) -> bool {
+        let (Some(importer), Some(buffer)) = (self.importer.as_mut(), frame.platform.as_ref())
+        else {
+            return false;
+        };
+        let Some(imported) =
+            importer.import(device, buffer, frame.layout, frame.width, frame.height)
+        else {
+            return false;
+        };
+        let bytes = frame.layout.bytes();
+        let stand_in = texture(
+            device,
+            1,
+            1,
+            sample_format(bytes, 1),
+            wgpu::TextureUsages::TEXTURE_BINDING,
+        );
+        let luma = imported.luma.clone();
+        let chroma = imported.chroma.clone();
+        let bind = self.bind_group(device, &luma, &chroma, &stand_in);
+        let planes = Planes {
+            width: frame.width,
+            height: frame.height,
+            layout: frame.layout,
+            imported: Some(imported),
+            y: luma,
+            chroma_a: chroma,
+            chroma_b: stand_in,
+            bind,
+        };
+        self.replace_planes(planes);
+        true
+    }
+
+    /// Make `planes` the planes on screen. The ones they replace are kept a few frames longer, so
+    /// the GPU has finished reading them before their hardware buffers are released.
+    fn replace_planes(&mut self, planes: Planes) {
+        if let Some(old) = self.planes.replace(planes) {
+            #[cfg(target_os = "macos")]
+            {
+                self.retired.push_back(old);
+                while self.retired.len() > RETIRED_PLANES {
+                    self.retired.pop_front();
+                }
+            }
+            #[cfg(not(target_os = "macos"))]
+            drop(old);
+        }
+    }
+
+    fn bind_group(
+        &self,
+        device: &wgpu::Device,
+        y: &wgpu::Texture,
+        a: &wgpu::Texture,
+        b: &wgpu::Texture,
+    ) -> wgpu::BindGroup {
+        let y_view = y.create_view(&wgpu::TextureViewDescriptor::default());
+        let a_view = a.create_view(&wgpu::TextureViewDescriptor::default());
+        let b_view = b.create_view(&wgpu::TextureViewDescriptor::default());
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("video planes"),
+            layout: &self.convert_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.params.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&y_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&a_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&b_view),
+                },
+            ],
+        })
+    }
+
     fn ensure_planes(&mut self, device: &wgpu::Device, frame: &Yuv) {
         let fits = self.planes.as_ref().is_some_and(|planes| {
             planes.width == frame.width
                 && planes.height == frame.height
                 && planes.layout == frame.layout
+                && !planes.is_imported()
         });
         if fits {
             return;
@@ -333,15 +466,18 @@ impl VideoGpu {
                 },
             ],
         });
-        self.planes = Some(Planes {
+        let planes = Planes {
             width: frame.width,
             height: frame.height,
             layout,
+            #[cfg(target_os = "macos")]
+            imported: None,
             y,
             chroma_a,
             chroma_b,
             bind,
-        });
+        };
+        self.replace_planes(planes);
     }
 
     fn ensure_target(&mut self, device: &wgpu::Device, width: u32, height: u32) {
@@ -498,14 +634,14 @@ fn texture(
 }
 
 /// Upload the frame's planes. Each plane is one texture, with its rows as they lie in memory.
-fn upload(queue: &wgpu::Queue, planes: &Planes, frame: &Yuv) {
+/// Copy a frame's samples into `planes`. `samples` holds the frame's planes one after another.
+fn upload(queue: &wgpu::Queue, planes: &Planes, frame: &Yuv, samples: &[u8]) {
     let layout = frame.layout;
     let (w, h) = (frame.width as usize, frame.height as usize);
     let (cw, ch) = layout.chroma_size(w, h);
     let bytes = layout.bytes();
     let luma_len = w * h * bytes;
     let chroma_len = cw * ch * bytes;
-    let samples = &frame.samples;
     write_plane(
         queue,
         &planes.y,

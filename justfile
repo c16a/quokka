@@ -96,3 +96,8 @@ decode-check *files:
 # decodes for ten seconds and reports the frame rate.
 frame-bench file seconds:
     cargo run -q --release -p quokka-playback --example frame_bench -- {{file}} {{seconds}}
+
+# Play a file the way the output device does, and report how long each block waited for the decoder:
+# `just underrun-probe song.flac 10`. Needs an optimised build, like frame-bench.
+underrun-probe file block_ms:
+    cargo run -q --release -p quokka-playback --example underrun_probe -- {{file}} {{block_ms}}

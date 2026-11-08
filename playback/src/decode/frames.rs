@@ -2,11 +2,14 @@
 //! Y'CbCr planes, so the display can convert them on the GPU. The conversion here is the reference
 //! that the GPU conversion is checked against.
 
+use std::borrow::Cow;
 use std::num::NonZeroUsize;
 use std::thread;
 
 use quokka_core::video::{Colour, Matrix};
 
+#[cfg(target_os = "macos")]
+use super::videotoolbox::PixelBuffer;
 use super::{Picture, Surface};
 
 /// A picture as tight RGBA rows, four bytes a pixel.
@@ -142,8 +145,12 @@ pub struct Yuv {
     pub matrix: Matrix,
     pub full_range: bool,
     /// The planes one after another: luma, then the Cb and Cr planes or one interleaved CbCr plane.
-    /// Samples above 8 bits are 16-bit little-endian.
+    /// Samples above 8 bits are 16-bit little-endian. Empty for a hardware frame, which keeps its
+    /// buffer in `platform` instead; use [`Yuv::sample_bytes`] to read the samples either way.
     pub samples: Vec<u8>,
+    /// The hardware decoder's buffer, when the frame came from one. The GPU reads it in place.
+    #[cfg(target_os = "macos")]
+    pub platform: Option<PixelBuffer>,
 }
 
 impl Yuv {
@@ -153,30 +160,51 @@ impl Yuv {
     /// it is not.
     pub fn from_picture(picture: Picture, colour: Colour) -> Option<Yuv> {
         let layout = Layout::of(&picture.pixel_format)?;
-        // Only macOS decoders hand over a platform buffer; elsewhere every picture is CPU bytes.
-        #[cfg(target_os = "macos")]
-        let samples = match picture.surface {
-            Surface::Cpu(bytes) => bytes,
-            Surface::Platform(buffer) => buffer.to_bytes(),
-        };
-        #[cfg(not(target_os = "macos"))]
-        let Surface::Cpu(samples) = picture.surface;
-        if samples.len() < layout.total_bytes(picture.width, picture.height) {
-            return None;
-        }
         let matrix = colour.matrix.unwrap_or(if picture.height > 576 {
             Matrix::Bt709
         } else {
             Matrix::Bt601
         });
-        Some(Yuv {
-            width: picture.width,
-            height: picture.height,
-            layout,
-            matrix,
-            full_range: colour.full_range.unwrap_or(false),
-            samples,
-        })
+        let full_range = colour.full_range.unwrap_or(false);
+        match picture.surface {
+            Surface::Cpu(samples) => {
+                if samples.len() < layout.total_bytes(picture.width, picture.height) {
+                    return None;
+                }
+                Some(Yuv {
+                    width: picture.width,
+                    height: picture.height,
+                    layout,
+                    matrix,
+                    full_range,
+                    samples,
+                    #[cfg(target_os = "macos")]
+                    platform: None,
+                })
+            }
+            #[cfg(target_os = "macos")]
+            Surface::Platform(buffer) => Some(Yuv {
+                width: picture.width,
+                height: picture.height,
+                layout,
+                matrix,
+                full_range,
+                samples: Vec::new(),
+                platform: Some(buffer),
+            }),
+        }
+    }
+
+    /// The samples as they sit in memory, one plane after another. A hardware frame is copied out
+    /// here, so the GPU path must not call this.
+    pub fn sample_bytes(&self) -> Cow<'_, [u8]> {
+        #[cfg(target_os = "macos")]
+        {
+            if let Some(buffer) = &self.platform {
+                return Cow::Owned(buffer.to_bytes());
+            }
+        }
+        Cow::Borrowed(&self.samples)
     }
 
     /// The picture converted to RGBA on the CPU.
@@ -185,7 +213,7 @@ impl Yuv {
             self.width,
             self.height,
             self.layout,
-            &self.samples,
+            &self.sample_bytes(),
             self.matrix,
             self.full_range,
         )

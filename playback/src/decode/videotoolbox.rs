@@ -198,8 +198,29 @@ pub struct PixelBuffer(Handle);
 // SAFETY: a retained Core Video pixel buffer is immutable from our side and may be released from
 // any thread.
 unsafe impl Send for PixelBuffer {}
+// SAFETY: as above; its planes are only read, and reads may happen on any number of threads.
+unsafe impl Sync for PixelBuffer {}
+
+impl Clone for PixelBuffer {
+    fn clone(&self) -> Self {
+        // SAFETY: the buffer is alive while we hold our reference, so retaining it is valid.
+        PixelBuffer(unsafe { CFRetain(self.0) })
+    }
+}
+
+impl std::fmt::Debug for PixelBuffer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("PixelBuffer")
+    }
+}
 
 impl PixelBuffer {
+    /// The Core Video buffer itself, for handing to other Core Video or Metal calls. The buffer
+    /// stays owned by this value.
+    pub fn as_raw(&self) -> *const c_void {
+        self.0
+    }
+
     /// The picture's planes copied out, row by row, one after another, with no padding. The
     /// hardware decoder's pictures are biplanar: a luma plane, then a plane of interleaved chroma
     /// pairs.

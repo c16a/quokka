@@ -10,6 +10,9 @@ mod i18n;
 mod icons;
 mod media;
 mod mesh_background;
+#[cfg(target_os = "macos")]
+#[cfg(target_os = "macos")]
+mod metal_video;
 mod movies;
 mod playback;
 mod playlists;
@@ -22,7 +25,6 @@ mod settings_view;
 mod side;
 mod slider;
 pub mod squircle;
-#[cfg(target_os = "macos")]
 pub mod video_gpu;
 
 use i18n::Text;

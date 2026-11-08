@@ -43,6 +43,8 @@ fn synthetic(width: u32, height: u32, layout: Layout, matrix: Matrix, full_range
         matrix,
         full_range,
         samples,
+        #[cfg(target_os = "macos")]
+        platform: None,
     }
 }
 
