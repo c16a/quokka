@@ -1,0 +1,14 @@
+Quokka includes the following third-party fonts. Their licence texts are kept
+beside the font files, in ui/assets/fonts/.
+
+Inter (Inter-Regular.ttf, Inter-SemiBold.ttf, Inter-Bold.ttf)
+  Copyright (c) 2016 The Inter Project Authors (https://github.com/rsms/inter)
+  Licensed under the SIL Open Font License, Version 1.1.
+  See ui/assets/fonts/Inter-OFL.txt.
+
+Phosphor icons (Phosphor.ttf, Phosphor-Fill.ttf)
+  Copyright (c) 2023 Romet Tagobert
+  Licensed under the MIT License.
+  See ui/assets/fonts/Phosphor-LICENSE.txt.
+
+Rust dependencies are listed in Cargo.lock, and each carries its own licence.
