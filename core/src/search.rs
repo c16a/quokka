@@ -4,12 +4,12 @@
 
 use rusqlite::types::Value;
 
-use crate::{COLUMNS, Library, MediaItem, Result, row_to_item};
+use crate::{COLUMNS, Library, MediaItem, Result, fts_query, row_to_item};
 
 /// A parsed search. Empty fields don't restrict the results.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SongQuery {
-    /// Words that must appear in the title.
+    /// Words that must start a word in the title.
     pub text: String,
     pub artist: Option<String>,
     pub album: Option<String>,
@@ -104,9 +104,10 @@ impl Library {
     pub fn search_songs(&self, query: &SongQuery, limit: usize) -> Result<Vec<MediaItem>> {
         let mut conditions = vec!["kind = 'audio'".to_string()];
         let mut values: Vec<Value> = Vec::new();
-        if !query.text.is_empty() {
-            conditions.push("title LIKE ? ESCAPE '\\'".into());
-            values.push(Value::Text(like(&query.text)));
+        if let Some(matching) = fts_query(&query.text, Some("title")) {
+            conditions
+                .push("rowid IN (SELECT rowid FROM media_fts WHERE media_fts MATCH ?)".into());
+            values.push(Value::Text(matching));
         }
         if let Some(artist) = &query.artist {
             conditions.push(
@@ -137,7 +138,7 @@ impl Library {
             "SELECT {COLUMNS} FROM media WHERE {} ORDER BY title COLLATE NOCASE LIMIT ?",
             conditions.join(" AND ")
         );
-        let mut stmt = self.conn.prepare(&sql)?;
+        let mut stmt = self.conn.prepare_cached(&sql)?;
         let rows = stmt.query_map(rusqlite::params_from_iter(values.iter()), row_to_item)?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
@@ -145,7 +146,54 @@ impl Library {
 
 #[cfg(test)]
 mod tests {
+    use rusqlite::params;
+
     use super::SongQuery;
+    use crate::Library;
+
+    fn insert_song(lib: &Library, path: &str, title: &str) {
+        lib.conn
+            .execute(
+                "INSERT INTO media (path, kind, size, mtime, title) VALUES (?1, 'audio', 1, 1, ?2)",
+                params![path, title],
+            )
+            .unwrap();
+    }
+
+    fn titles(lib: &Library, input: &str) -> Vec<String> {
+        lib.search_songs(&SongQuery::parse(input), 50)
+            .unwrap()
+            .into_iter()
+            .filter_map(|item| item.title)
+            .collect()
+    }
+
+    #[test]
+    fn title_words_match_by_prefix() {
+        let lib = Library::open_in_memory().unwrap();
+        insert_song(&lib, "/m/a.mp3", "Love Story");
+        insert_song(&lib, "/m/b.mp3", "Glove");
+        insert_song(&lib, "/m/c.mp3", "Something Else");
+
+        assert_eq!(titles(&lib, "lov"), vec!["Love Story"]);
+        assert_eq!(titles(&lib, "sto"), vec!["Love Story"]);
+        assert_eq!(titles(&lib, "love sto"), vec!["Love Story"]);
+        assert!(titles(&lib, "ve").is_empty());
+    }
+
+    #[test]
+    fn title_search_ignores_artist_and_album_words() {
+        let lib = Library::open_in_memory().unwrap();
+        lib.conn
+            .execute(
+                "INSERT INTO media (path, kind, size, mtime, title, artist) \
+                 VALUES ('/m/a.mp3', 'audio', 1, 1, 'Dawn', 'Love Band')",
+                [],
+            )
+            .unwrap();
+
+        assert!(titles(&lib, "love").is_empty());
+    }
 
     #[test]
     fn filters_are_read_and_other_words_stay_as_title_text() {

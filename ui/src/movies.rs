@@ -7,6 +7,7 @@ use crate::i18n::{self, Text};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
+use std::sync::{Arc, Mutex};
 use std::thread;
 
 use crate::colour::{self, Lab};
@@ -37,6 +38,10 @@ const CHOICE_HEIGHT: f32 = 138.0;
 const SYNOPSIS_CHARS: usize = 280;
 /// The width of the file information panel on a movie's page.
 const INFO_PANEL_WIDTH: f32 = 330.0;
+/// How many covers download at once.
+const THUMB_WORKERS: usize = 4;
+/// The TMDb size of a cover, as the poster cache stores it.
+const THUMB_SIZE: &str = "w342";
 
 /// A background job: runs with the library database open, and says what it found.
 type Job = Box<dyn FnOnce(&Library) -> quokka_core::Result<MatchOutcome> + Send>;
@@ -44,11 +49,51 @@ type Job = Box<dyn FnOnce(&Library) -> quokka_core::Result<MatchOutcome> + Send>
 /// The result of a job: what it found, or an error message.
 type Lookup = Result<MatchOutcome, String>;
 
+/// A cover to download: its TMDb poster path, and the context to wake once it is in.
+type ThumbJob = (String, egui::Context);
+
 /// A cover for a choice card, as the download leaves it.
 enum Thumb {
     Loading,
     Ready(egui::TextureHandle),
     Missing,
+}
+
+/// Start the workers that download covers. They share one queue, and each takes one job at a time.
+fn spawn_thumb_workers(
+    results: Sender<(String, Option<egui::ColorImage>)>,
+    dir: PathBuf,
+) -> Sender<ThumbJob> {
+    let (jobs, queue) = mpsc::channel::<ThumbJob>();
+    let queue = Arc::new(Mutex::new(queue));
+    for _ in 0..THUMB_WORKERS {
+        let queue = Arc::clone(&queue);
+        let results = results.clone();
+        let dir = dir.clone();
+        thread::spawn(move || {
+            let tmdb = Tmdb::new(String::new());
+            loop {
+                let job = match queue.lock() {
+                    Ok(guard) => guard.recv(),
+                    Err(_) => break,
+                };
+                let Ok((path, ctx)) = job else { break };
+                let fetched =
+                    quokka_core::poster_cache::load_or_fetch(&dir, &tmdb, THUMB_SIZE, &path);
+                let image = fetched
+                    .ok()
+                    .and_then(|bytes| image::load_from_memory(&bytes).ok())
+                    .map(|picture| {
+                        let rgba = picture.to_rgba8();
+                        let size = [rgba.width() as usize, rgba.height() as usize];
+                        egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw())
+                    });
+                let _ = results.send((path, image));
+                ctx.request_repaint();
+            }
+        });
+    }
+    jobs
 }
 
 /// The movie grid, or one movie's page when one is selected.
@@ -81,11 +126,19 @@ pub struct MoviesView {
     accents: HashMap<String, egui::Color32>,
     thumb_tx: Sender<(String, Option<egui::ColorImage>)>,
     thumb_rx: Receiver<(String, Option<egui::ColorImage>)>,
+    /// The folder of cached posters, beside the library database.
+    poster_dir: PathBuf,
+    /// The queue of covers to download. The workers start on the first cover asked for.
+    thumb_jobs: Option<Sender<ThumbJob>>,
 }
 
 impl MoviesView {
     pub fn new(db: PathBuf) -> Self {
         let (thumb_tx, thumb_rx) = mpsc::channel();
+        let poster_dir = match db.parent() {
+            Some(parent) => parent.join("posters"),
+            None => db.clone(),
+        };
         Self {
             db,
             movies: Vec::new(),
@@ -102,6 +155,8 @@ impl MoviesView {
             accents: HashMap::new(),
             thumb_tx,
             thumb_rx,
+            poster_dir,
+            thumb_jobs: None,
         }
     }
 
@@ -809,23 +864,12 @@ impl MoviesView {
         None
     }
 
-    /// Download and decode a cover on a background thread.
-    fn fetch_thumb(&self, ctx: &egui::Context, path: String) {
-        let tx = self.thumb_tx.clone();
-        let ctx = ctx.clone();
-        thread::spawn(move || {
-            let image = Tmdb::new(String::new())
-                .poster_bytes(&path)
-                .ok()
-                .and_then(|bytes| image::load_from_memory(&bytes).ok())
-                .map(|picture| {
-                    let rgba = picture.to_rgba8();
-                    let size = [rgba.width() as usize, rgba.height() as usize];
-                    egui::ColorImage::from_rgba_unmultiplied(size, rgba.as_raw())
-                });
-            let _ = tx.send((path, image));
-            ctx.request_repaint();
+    /// Queue a cover to be downloaded and decoded by a background worker.
+    fn fetch_thumb(&mut self, ctx: &egui::Context, path: String) {
+        let jobs = self.thumb_jobs.get_or_insert_with(|| {
+            spawn_thumb_workers(self.thumb_tx.clone(), self.poster_dir.clone())
         });
+        let _ = jobs.send((path, ctx.clone()));
     }
 
     /// Take in the covers that have finished downloading, and upload them as textures.

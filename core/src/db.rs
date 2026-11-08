@@ -3,7 +3,7 @@ use rusqlite::Connection;
 use crate::Result;
 
 /// Bump when the schema changes and add a matching migration step below.
-const SCHEMA_VERSION: i64 = 20;
+const SCHEMA_VERSION: i64 = 21;
 
 /// Per-connection settings and schema migration.
 pub(crate) fn configure(conn: &Connection) -> Result<()> {
@@ -75,6 +75,9 @@ pub(crate) fn configure(conn: &Connection) -> Result<()> {
     }
     if version < 20 {
         conn.execute_batch(SCHEMA_V20)?;
+    }
+    if version < 21 {
+        conn.execute_batch(SCHEMA_V21)?;
     }
     if version != SCHEMA_VERSION {
         conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
@@ -330,4 +333,10 @@ ALTER TABLE media ADD COLUMN lookup_pending INTEGER NOT NULL DEFAULT 1;
 /// The tags each file had before the first edit made here, as JSON, until they are reverted.
 const SCHEMA_V10: &str = "
 CREATE TABLE tag_snapshot (path TEXT PRIMARY KEY, tags TEXT NOT NULL);
+";
+
+/// Lets album lookups use an index, so an album's tracks are found by name without scanning the
+/// whole library.
+const SCHEMA_V21: &str = "
+CREATE INDEX media_audio_album_track ON media(kind, COALESCE(album, ''), track);
 ";

@@ -1959,12 +1959,17 @@ fn spawn_measurer(db: PathBuf) -> (Sender<PathBuf>, Receiver<PathBuf>) {
     let (requests, queued) = mpsc::channel::<PathBuf>();
     let (done_tx, done) = mpsc::channel::<PathBuf>();
     thread::spawn(move || {
+        // Opened on first use and kept for later files. A failed open is not kept, so the next file retries it.
+        let mut library: Option<quokka_core::Library> = None;
         // Ends when the player is dropped, which closes the request channel.
         for path in queued {
-            if let Some(measured) = quokka_playback::measure_loudness(&path)
-                && let Ok(library) = quokka_core::Library::open(&db)
-            {
-                let _ = library.set_loudness(&path, measured.lufs, measured.peak);
+            if let Some(measured) = quokka_playback::measure_loudness(&path) {
+                if library.is_none() {
+                    library = quokka_core::Library::open(&db).ok();
+                }
+                if let Some(library) = &library {
+                    let _ = library.set_loudness(&path, measured.lufs, measured.peak);
+                }
             }
             if done_tx.send(path).is_err() {
                 break;

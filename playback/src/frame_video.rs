@@ -13,7 +13,7 @@ use std::sync::Arc;
 use crate::decode::frames::Yuv;
 use crate::decode::player::{FramePlayer, VideoFrame, VideoSource};
 use crate::movie_audio::{AudioSource, MovieAudio};
-use crate::{PlaybackError, Player, PlayerState, Result};
+use crate::{Player, PlayerState, Result};
 
 /// The parts of a file that are read on a worker thread, ready for the window's thread to start.
 struct Prepared {
@@ -28,16 +28,37 @@ struct Prepared {
     cues: Vec<Cue>,
 }
 
+/// A seek on a worker thread, until its decoder and sound are open.
+struct PendingSeek {
+    target: f64,
+    /// Whether playback runs once the seek completes. Play and pause pressed meanwhile change it.
+    was_playing: bool,
+    opened: Receiver<std::result::Result<Opened, String>>,
+}
+
+/// The decoder and the sound output, opened at one position.
+type Opened = (FramePlayer, Option<MovieAudio>);
+
+/// Open the picture's decoder and the soundtrack's output at `start`.
+fn open_streams(
+    video: &VideoSource,
+    audio_source: Option<&AudioSource>,
+    start: f64,
+) -> std::result::Result<Opened, String> {
+    let frames = video.open_at(start).map_err(|error| error.to_string())?;
+    let audio = match audio_source {
+        Some(source) => Some(source.open_at(start).map_err(|error| error.to_string())?),
+        None => None,
+    };
+    Ok((frames, audio))
+}
+
 /// Read a file's tables, open its decoders and sound output at `start`, and read its subtitles.
 /// All of it runs off the window's thread: this is the slow part of loading.
 fn prepare(path: &Path, start: f64) -> std::result::Result<Prepared, String> {
     let video = VideoSource::read(path).map_err(|error| error.to_string())?;
     let audio_source = AudioSource::read(path).map_err(|error| error.to_string())?;
-    let frames = video.open_at(start).map_err(|error| error.to_string())?;
-    let audio = match &audio_source {
-        Some(source) => Some(source.open_at(start).map_err(|error| error.to_string())?),
-        None => None,
-    };
+    let (frames, audio) = open_streams(&video, audio_source.as_ref(), start)?;
     let cues = read_subtitles(path).unwrap_or_default();
     Ok(Prepared {
         start,
@@ -55,8 +76,10 @@ pub struct FrameVideo {
     frames: Option<FramePlayer>,
     audio: Option<MovieAudio>,
     /// The file's samples, read once, so that seeking reopens the decoders without reading the file again.
-    video_source: Option<VideoSource>,
-    audio_source: Option<AudioSource>,
+    video_source: Option<Arc<VideoSource>>,
+    audio_source: Option<Arc<AudioSource>>,
+    /// The seek being opened on a worker thread, if one is.
+    seeking: Option<PendingSeek>,
     /// The subtitles of the file, and whether they are shown.
     cues: Vec<Cue>,
     subtitles_on: bool,
@@ -97,11 +120,15 @@ impl FrameVideo {
         if !self.subtitles_on || !self.loaded {
             return None;
         }
-        let now = self.clock();
-        let due: Vec<&str> = self
-            .cues
+        let now = self
+            .seeking
+            .as_ref()
+            .map_or_else(|| self.clock(), |pending| pending.target);
+        // The cues are sorted by start, so those starting later cannot be due.
+        let started = self.cues.partition_point(|cue| cue.start <= now);
+        let due: Vec<&str> = self.cues[..started]
             .iter()
-            .filter(|cue| cue.start <= now && now < cue.end)
+            .filter(|cue| now < cue.end)
             .map(|cue| cue.text.as_str())
             .collect();
         (!due.is_empty()).then(|| due.join("\n"))
@@ -133,6 +160,25 @@ impl FrameVideo {
                 }
             }
             return false;
+        }
+        if let Some(pending) = self.seeking.take() {
+            match pending.opened.try_recv() {
+                Ok(Ok((frames, audio))) => {
+                    if let Err(error) =
+                        self.finish_seek(pending.target, pending.was_playing, frames, audio)
+                    {
+                        self.failure = Some(error.to_string());
+                    }
+                }
+                Ok(Err(reason)) => self.failure = Some(reason),
+                Err(TryRecvError::Empty) => {
+                    self.seeking = Some(pending);
+                    return false;
+                }
+                Err(TryRecvError::Disconnected) => {
+                    self.failure = Some("seeking stopped".into());
+                }
+            }
         }
         if !self.loaded {
             return false;
@@ -183,14 +229,36 @@ impl FrameVideo {
         self.wall_base = prepared.start;
         self.audio = prepared.audio;
         self.frames = Some(prepared.frames);
-        self.video_source = Some(prepared.video);
-        self.audio_source = prepared.audio_source;
-        self.cues = prepared.cues;
+        self.video_source = Some(Arc::new(prepared.video));
+        self.audio_source = prepared.audio_source.map(Arc::new);
+        let mut cues = prepared.cues;
+        cues.sort_by(|a, b| a.start.total_cmp(&b.start));
+        self.cues = cues;
         self.loaded = true;
         if std::mem::take(&mut self.want_play) {
             self.play()?;
         }
         Ok(())
+    }
+
+    /// Start the decoder and sound that a seek opened, and carry on from the target. Playback
+    /// resumes if it was running when the seek began.
+    fn finish_seek(
+        &mut self,
+        target: f64,
+        was_playing: bool,
+        frames: FramePlayer,
+        audio: Option<MovieAudio>,
+    ) -> Result<()> {
+        self.frames = Some(frames);
+        self.audio = audio;
+        self.audio_offset = target;
+        self.next = None;
+        self.sound_done = false;
+        self.ended = false;
+        self.wall_base = target;
+        self.wall_started = None;
+        if was_playing { self.play() } else { Ok(()) }
     }
 
     /// Load `path` to start at `start` seconds, on a worker thread. It plays once it is ready, if
@@ -223,7 +291,9 @@ impl FrameVideo {
 
     /// Whether anything is decoding or playing, so the window should keep redrawing.
     pub fn active(&self) -> bool {
-        self.loading.is_some() || (self.loaded && self.playing && !self.ended)
+        self.loading.is_some()
+            || self.seeking.is_some()
+            || (self.loaded && self.playing && !self.ended)
     }
 
     /// Where playback is, in seconds.
@@ -279,6 +349,10 @@ impl Player for FrameVideo {
             self.want_play = true;
             return Ok(());
         }
+        if let Some(pending) = self.seeking.as_mut() {
+            pending.was_playing = true;
+            return Ok(());
+        }
         if !self.loaded || self.ended {
             return Ok(());
         }
@@ -293,6 +367,10 @@ impl Player for FrameVideo {
     fn pause(&mut self) -> Result<()> {
         if self.loading.is_some() {
             self.want_play = false;
+            return Ok(());
+        }
+        if let Some(pending) = self.seeking.as_mut() {
+            pending.was_playing = false;
             return Ok(());
         }
         if !self.loaded {
@@ -312,30 +390,36 @@ impl Player for FrameVideo {
     }
 
     fn seek(&mut self, position: Duration) -> Result<()> {
-        let Some(video) = self.video_source.as_ref() else {
+        let Some(video) = self.video_source.clone() else {
             return Ok(());
         };
         let target = position.as_secs_f64();
-        let frames = video
-            .open_at(target)
-            .map_err(|error| PlaybackError::Open(error.to_string()))?;
-        let audio = match self.audio_source.as_ref() {
-            Some(source) => Some(source.open_at(target)?),
-            None => None,
+        // A seek that is already pending keeps the playing state it was started with.
+        let was_playing = match self.seeking.take() {
+            Some(pending) => pending.was_playing,
+            None => {
+                let playing = self.playing;
+                self.pause()?;
+                playing
+            }
         };
-        let was_playing = self.playing;
-        self.frames = Some(frames);
-        self.audio = audio;
-        self.audio_offset = target;
-        self.next = None;
-        self.sound_done = false;
-        self.ended = false;
-        self.wall_base = target;
-        self.wall_started = None;
-        if was_playing { self.play() } else { Ok(()) }
+        let audio_source = self.audio_source.clone();
+        let (sender, opened) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send(open_streams(&video, audio_source.as_deref(), target));
+        });
+        self.seeking = Some(PendingSeek {
+            target,
+            was_playing,
+            opened,
+        });
+        Ok(())
     }
 
     fn position(&self) -> Option<Duration> {
+        if let Some(pending) = self.seeking.as_ref() {
+            return Some(Duration::from_secs_f64(pending.target));
+        }
         self.loaded
             .then(|| Duration::from_secs_f64(self.clock().max(0.0)))
     }

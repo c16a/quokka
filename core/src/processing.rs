@@ -13,8 +13,8 @@ use crate::{Result, video};
 /// Read the format of every video that has not been processed since it last changed.
 pub(crate) fn process_pending(conn: &Connection) -> Result<()> {
     let pending: Vec<(i64, String)> = {
-        let mut stmt =
-            conn.prepare("SELECT id, path FROM media WHERE kind = 'video' AND processed = 0")?;
+        let mut stmt = conn
+            .prepare_cached("SELECT id, path FROM media WHERE kind = 'video' AND processed = 0")?;
         let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
         rows.collect::<rusqlite::Result<_>>()?
     };

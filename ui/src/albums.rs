@@ -1,13 +1,16 @@
 use crate::i18n;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
+use std::num::NonZeroUsize;
+use std::path::PathBuf;
 
 use eframe::egui;
+use lru::LruCache;
 use quokka_core::{
     AlbumFilter, AlbumSort, AlbumSummary, FavoriteKind, Library, MediaItem, PlaylistSummary,
 };
 
 use crate::colour::{self, Lab};
-use crate::covers::{self, COVER_MAX_SIDE, Cover, Worker, evict, upload};
+use crate::covers::{self, COVER_MAX_SIDE, Cover, Worker, upload};
 use crate::format;
 use crate::icons;
 use crate::playback::MenuRequest;
@@ -46,8 +49,10 @@ pub(crate) const TILE_TEXT: f32 = 44.0;
 /// corners about a quarter of the cover's width.
 const TILE_SQUIRCLE_RADIUS: f32 = 40.0;
 pub(crate) const TILE_GAP: f32 = 20.0;
+/// Height of a grid row: one tile, its cover and its text.
+const ROW_HEIGHT: f32 = TILE_COVER + TILE_TEXT;
 /// Most covers kept as textures. The least recently used are dropped beyond this.
-const COVER_CAP: usize = 300;
+const COVER_CAP: NonZeroUsize = NonZeroUsize::new(600).unwrap();
 
 /// A request to play `tracks`, starting at `index`.
 pub struct PlayRequest {
@@ -56,16 +61,16 @@ pub struct PlayRequest {
 }
 
 /// The album grid, or one album's detail view (cover, actions and tracks) when one is selected.
-#[derive(Default)]
 pub struct AlbumsView {
     albums: Vec<AlbumSummary>,
     selected: Option<usize>,
     tracks: Vec<MediaItem>,
-    /// Covers by album index, with the tick they were last used on.
-    covers: HashMap<usize, (u64, CoverSlot)>,
+    /// Covers by album index. The least recently used decoded cover is dropped when full.
+    covers: LruCache<usize, CoverSlot>,
     /// Decodes covers off the UI thread. Started on first use.
     cover_worker: Option<Worker<usize>>,
-    cover_tick: u64,
+    /// The library file the worker reads covers from. Without it, covers are read on the UI thread.
+    db: Option<PathBuf>,
     /// Keys of favourite tracks (file paths) and albums (album names).
     favorite_tracks: HashSet<String>,
     favorite_albums: HashSet<String>,
@@ -77,7 +82,33 @@ pub struct AlbumsView {
     years: Vec<i64>,
 }
 
+impl Default for AlbumsView {
+    fn default() -> Self {
+        Self {
+            albums: Vec::new(),
+            selected: None,
+            tracks: Vec::new(),
+            covers: LruCache::new(COVER_CAP),
+            cover_worker: None,
+            db: None,
+            favorite_tracks: HashSet::new(),
+            favorite_albums: HashSet::new(),
+            sort: AlbumSort::default(),
+            filter: AlbumFilter::default(),
+            genres: Vec::new(),
+            years: Vec::new(),
+        }
+    }
+}
+
 impl AlbumsView {
+    /// Read covers from the library at `db` on the worker thread, so the UI never waits on the disk.
+    pub fn set_db(&mut self, db: PathBuf) {
+        self.db = Some(db);
+        self.covers.clear();
+        self.cover_worker = None;
+    }
+
     /// All albums, in the order the grid shows them.
     pub fn albums(&self) -> &[AlbumSummary] {
         &self.albums
@@ -92,32 +123,57 @@ impl AlbumsView {
     /// first request queues the decoding, and the cover appears on a later frame.
     fn cover_for(&mut self, ctx: &egui::Context, library: &Library, index: usize) -> Option<Cover> {
         self.poll_covers(ctx);
-        self.cover_tick += 1;
-        let tick = self.cover_tick;
-        if let Some((used, slot)) = self.covers.get_mut(&index) {
-            *used = tick;
+        if let Some(slot) = self.covers.get(&index) {
             return match slot {
                 CoverSlot::Ready(cover) => cover.clone(),
                 CoverSlot::Loading => None,
             };
         }
         let name = self.albums.get(index)?.album.clone();
-        let slot = match library.album_cover(name.as_deref()).ok().flatten() {
-            None => CoverSlot::Ready(None),
-            Some(bytes) => {
+        let slot = match self.db.clone() {
+            Some(db) => {
                 let worker = self.cover_worker.get_or_insert_with(|| Worker::new(ctx));
                 worker.submit(
                     index,
-                    Box::new(move || covers::decode(&bytes, COVER_MAX_SIDE)),
+                    Box::new(move || {
+                        let library = Library::open(&db).ok()?;
+                        let bytes = library.album_cover(name.as_deref()).ok().flatten()?;
+                        covers::decode(&bytes, COVER_MAX_SIDE)
+                    }),
                 );
                 CoverSlot::Loading
             }
+            None => match library.album_cover(name.as_deref()).ok().flatten() {
+                None => CoverSlot::Ready(None),
+                Some(bytes) => {
+                    let worker = self.cover_worker.get_or_insert_with(|| Worker::new(ctx));
+                    worker.submit(
+                        index,
+                        Box::new(move || covers::decode(&bytes, COVER_MAX_SIDE)),
+                    );
+                    CoverSlot::Loading
+                }
+            },
         };
-        self.covers.insert(index, (tick, slot));
-        evict(&mut self.covers, COVER_CAP, |slot| {
-            matches!(slot, CoverSlot::Ready(_))
-        });
+        self.insert_cover(index, slot);
         None
+    }
+
+    /// Cache a cover's slot. When the cache is full, the least recently used decoded cover makes
+    /// room. Covers still loading are kept, so their results are not lost.
+    fn insert_cover(&mut self, index: usize, slot: CoverSlot) {
+        if self.covers.len() >= self.covers.cap().get() {
+            let ready = self
+                .covers
+                .iter()
+                .rev()
+                .find(|(_, slot)| matches!(slot, CoverSlot::Ready(_)))
+                .map(|(key, _)| *key);
+            if let Some(key) = ready {
+                self.covers.pop(&key);
+            }
+        }
+        self.covers.put(index, slot);
     }
 
     /// Take in the covers the worker has decoded, and upload them as textures.
@@ -128,7 +184,7 @@ impl AlbumsView {
         for (index, decoded) in worker.finished() {
             let cover =
                 decoded.map(|decoded| upload(ctx, &format!("album-cover-{index}"), decoded));
-            if let Some((_, slot)) = self.covers.get_mut(&index) {
+            if let Some(slot) = self.covers.get_mut(&index) {
                 *slot = CoverSlot::Ready(cover);
             }
         }
@@ -143,8 +199,8 @@ impl AlbumsView {
     /// The colour the open album's page is drawn on: the dominant colour of its cover, once known.
     pub fn page_background(&self) -> Option<egui::Color32> {
         let index = self.selected?;
-        match self.covers.get(&index) {
-            Some((_, CoverSlot::Ready(Some(cover)))) => cover.dominant,
+        match self.covers.peek(&index) {
+            Some(CoverSlot::Ready(Some(cover))) => cover.dominant,
             _ => None,
         }
     }
@@ -183,7 +239,9 @@ impl AlbumsView {
     }
 
     pub fn reload(&mut self, library: &Library) {
+        // Jobs in flight belong to the old album order, so their worker is dropped with its results.
         self.covers.clear();
+        self.cover_worker = None;
         self.favorite_tracks = library.favorites(FavoriteKind::Track).unwrap_or_default();
         self.favorite_albums = library.favorites(FavoriteKind::Album).unwrap_or_default();
         self.genres = library.genres().unwrap_or_default();
@@ -313,12 +371,21 @@ impl AlbumsView {
     /// The album grid, as rows of tiles. It sits inside the page's scroll area. Returns the album the user
     /// clicked, if any.
     fn grid(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, library: &Library) -> Option<usize> {
-        let columns = ((ui.available_width() + TILE_GAP) / (TILE_COVER + TILE_GAP))
+        let width = ui.available_width();
+        let columns = ((width + TILE_GAP) / (TILE_COVER + TILE_GAP))
             .floor()
             .max(1.0) as usize;
         let count = self.albums.len();
         let mut opened = None;
         for row in 0..count.div_ceil(columns) {
+            // A row off screen is only reserved, so the grid keeps its height and the rows on screen
+            // stay where they are.
+            let rect = egui::Rect::from_min_size(ui.cursor().min, egui::vec2(width, ROW_HEIGHT));
+            if !ui.is_rect_visible(rect) {
+                ui.allocate_exact_size(rect.size(), egui::Sense::hover());
+                ui.add_space(TILE_GAP);
+                continue;
+            }
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = TILE_GAP;
                 for column in 0..columns {
@@ -361,19 +428,23 @@ impl AlbumsView {
         if let Some(colour) = accent {
             // The background is a mesh gradient of the cover's dominant colour and its lighter and deeper shades,
             // drawn on the GPU. It asks for a redraw so the colours keep moving.
+            // The page's clip area is where the background is drawn, so it is only drawn and animated
+            // while that area is on screen.
             let area = ui.clip_rect();
-            let background = crate::mesh_background::MeshBackground {
-                base: colour,
-                seed: (i % 1000) as f32,
-                time: ui.input(|input| input.time) as f32,
-                aspect: area.width() / area.height().max(1.0),
-            };
-            ui.painter()
-                .add(eframe::egui_wgpu::Callback::new_paint_callback(
-                    area, background,
-                ));
-            ui.ctx()
-                .request_repaint_after(std::time::Duration::from_millis(33));
+            if ui.is_rect_visible(area) {
+                let background = crate::mesh_background::MeshBackground {
+                    base: colour,
+                    seed: (i % 1000) as f32,
+                    time: ui.input(|input| input.time) as f32,
+                    aspect: area.width() / area.height().max(1.0),
+                };
+                ui.painter()
+                    .add(eframe::egui_wgpu::Callback::new_paint_callback(
+                        area, background,
+                    ));
+                ui.ctx()
+                    .request_repaint_after(std::time::Duration::from_millis(33));
+            }
         }
         let album_key = album.album.clone().unwrap_or_default();
         let favorite_album = self.favorite_albums.contains(&album_key);

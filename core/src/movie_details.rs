@@ -50,7 +50,7 @@ impl Library {
     pub fn all_movie_details(&self) -> Result<HashMap<i64, MovieInfo>> {
         let mut stmt = self
             .conn
-            .prepare("SELECT media_id, details FROM movie_details")?;
+            .prepare_cached("SELECT media_id, details FROM movie_details")?;
         let rows = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?;
         let mut out = HashMap::new();
         for row in rows {
@@ -146,7 +146,7 @@ impl Library {
         F: FnMut(i64, &Path) -> Result<bool>,
     {
         let pending: Vec<(i64, String)> = {
-            let mut stmt = self.conn.prepare(
+            let mut stmt = self.conn.prepare_cached(
                 "SELECT id, path FROM media WHERE kind = 'video' AND lookup_pending = 1 ORDER BY id",
             )?;
             let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;

@@ -261,7 +261,7 @@ impl Library {
                      WHERE station_fts MATCH ?1 AND s.working = 1 \
                      ORDER BY s.votes DESC LIMIT ?2"
                 );
-                let mut stmt = self.conn.prepare(&sql)?;
+                let mut stmt = self.conn.prepare_cached(&sql)?;
                 let rows = stmt.query_map(params![fts, limit as i64], station_row)?;
                 rows.collect::<rusqlite::Result<_>>()?
             }
@@ -270,7 +270,7 @@ impl Library {
                     "SELECT {columns}, s.working, s.countrycode FROM station s \
                      WHERE s.working = 1 ORDER BY s.votes DESC LIMIT ?1"
                 );
-                let mut stmt = self.conn.prepare(&sql)?;
+                let mut stmt = self.conn.prepare_cached(&sql)?;
                 let rows = stmt.query_map([limit as i64], station_row)?;
                 rows.collect::<rusqlite::Result<_>>()?
             }
@@ -310,7 +310,7 @@ impl Library {
 
     /// Stations the user has tuned in to, in the order they were added.
     pub fn tuned_stations(&self) -> Result<Vec<Station>> {
-        let mut stmt = self.conn.prepare(
+        let mut stmt = self.conn.prepare_cached(
             "SELECT uuid, name, url, country, codec, bitrate FROM tuned ORDER BY added, name",
         )?;
         let rows = stmt.query_map([], tuned_from)?;

@@ -6,7 +6,13 @@ use std::path::Path;
 use rusqlite::params;
 use rusqlite::types::Value;
 
-use crate::{COLUMNS, Library, MediaItem, MediaKind, Result, row_to_item};
+use crate::{COLUMNS, Library, MediaItem, MediaKind, Result, fts_query, row_to_item};
+
+/// The tracks of one album, in track order with untagged tracks last. Without the column list,
+/// so tests can explain the same query. `COALESCE(album, '')` is the expression that
+/// `media_audio_album_track` indexes, so the two must stay the same.
+const ALBUM_TRACKS_SQL: &str = "kind = 'audio' AND COALESCE(album, '') = ?1 \
+     ORDER BY track IS NULL, track, path";
 
 /// How the album grid is ordered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -76,7 +82,7 @@ impl Library {
              GROUP BY COALESCE(album, '') {having_sql} \
              ORDER BY {order_sql}"
         );
-        let mut stmt = self.conn.prepare(&sql)?;
+        let mut stmt = self.conn.prepare_cached(&sql)?;
         let rows = stmt.query_map(rusqlite::params_from_iter(values.iter()), |r| {
             let album: String = r.get(0)?;
             Ok((album, r.get::<_, Option<i64>>(1)?, r.get::<_, i64>(2)?))
@@ -84,7 +90,7 @@ impl Library {
         let rows: Vec<(String, Option<i64>, i64)> = rows.collect::<rusqlite::Result<_>>()?;
 
         // Artists and composers per album name, from every distinct combination.
-        let mut stmt = self.conn.prepare(
+        let mut stmt = self.conn.prepare_cached(
             "SELECT DISTINCT COALESCE(album, ''), COALESCE(album_artist, artist, ''), \
                     COALESCE(composer, '') \
              FROM media WHERE kind = 'audio'",
@@ -125,7 +131,7 @@ impl Library {
 
     /// Every genre tagged on an audio file, sorted.
     pub fn genres(&self) -> Result<Vec<String>> {
-        let mut stmt = self.conn.prepare(
+        let mut stmt = self.conn.prepare_cached(
             "SELECT DISTINCT genre FROM media \
              WHERE kind = 'audio' AND genre IS NOT NULL AND genre <> '' \
              ORDER BY genre COLLATE NOCASE",
@@ -137,7 +143,7 @@ impl Library {
 
     /// Every year tagged on an audio file, newest first.
     pub fn years(&self) -> Result<Vec<i64>> {
-        let mut stmt = self.conn.prepare(
+        let mut stmt = self.conn.prepare_cached(
             "SELECT DISTINCT year FROM media WHERE kind = 'audio' AND year IS NOT NULL \
              ORDER BY year DESC",
         )?;
@@ -148,22 +154,16 @@ impl Library {
 
     /// Tracks of one album in track-number order. `None` matches untagged albums.
     pub fn album_tracks(&self, album: Option<&str>) -> Result<Vec<MediaItem>> {
-        let sql = format!(
-            "SELECT {COLUMNS} FROM media \
-             WHERE kind = 'audio' AND COALESCE(album, '') = ?1 \
-             ORDER BY track IS NULL, track, path"
-        );
-        let mut stmt = self.conn.prepare(&sql)?;
+        let sql = format!("SELECT {COLUMNS} FROM media WHERE {ALBUM_TRACKS_SQL}");
+        let mut stmt = self.conn.prepare_cached(&sql)?;
         let rows = stmt.query_map([album.unwrap_or("")], row_to_item)?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
     /// Embedded cover art for an album. Tries the first few tracks, since not all of them carry one.
     pub fn album_cover(&self, album: Option<&str>) -> Result<Option<Vec<u8>>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT path FROM media WHERE kind = 'audio' AND COALESCE(album, '') = ?1 \
-             ORDER BY track IS NULL, track, path LIMIT 5",
-        )?;
+        let sql = format!("SELECT path FROM media WHERE {ALBUM_TRACKS_SQL} LIMIT 5");
+        let mut stmt = self.conn.prepare_cached(&sql)?;
         let paths: Vec<String> = stmt
             .query_map([album.unwrap_or("")], |r| r.get(0))?
             .collect::<rusqlite::Result<_>>()?;
@@ -172,21 +172,21 @@ impl Library {
             .find_map(|p| crate::cover::read_cover(Path::new(p))))
     }
 
-    /// Audio tracks whose title contains `text` (case-insensitive), sorted by title.
+    /// Audio tracks whose title has a word starting with each word of `text`, sorted by title.
+    /// Blank text matches nothing.
     pub fn songs_matching(&self, text: &str, limit: usize) -> Result<Vec<MediaItem>> {
-        let escaped = text
-            .replace('\\', "\\\\")
-            .replace('%', "\\%")
-            .replace('_', "\\_");
-        let pattern = format!("%{escaped}%");
+        let Some(matching) = fts_query(text, Some("title")) else {
+            return Ok(Vec::new());
+        };
         let sql = format!(
             "SELECT {COLUMNS} FROM media \
-             WHERE kind = 'audio' AND title LIKE ?1 ESCAPE '\\' \
+             WHERE kind = 'audio' AND rowid IN \
+             (SELECT rowid FROM media_fts WHERE media_fts MATCH ?1) \
              ORDER BY title COLLATE NOCASE \
              LIMIT ?2"
         );
-        let mut stmt = self.conn.prepare(&sql)?;
-        let rows = stmt.query_map(params![pattern, limit as i64], row_to_item)?;
+        let mut stmt = self.conn.prepare_cached(&sql)?;
+        let rows = stmt.query_map(params![matching, limit as i64], row_to_item)?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
@@ -196,7 +196,7 @@ impl Library {
             "SELECT {COLUMNS} FROM media WHERE kind = ?1 \
              ORDER BY COALESCE(title, path) COLLATE NOCASE"
         );
-        let mut stmt = self.conn.prepare(&sql)?;
+        let mut stmt = self.conn.prepare_cached(&sql)?;
         let rows = stmt.query_map([MediaKind::Video.as_str()], row_to_item)?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
@@ -204,4 +204,78 @@ impl Library {
 
 fn non_empty(s: String) -> Option<String> {
     if s.is_empty() { None } else { Some(s) }
+}
+
+#[cfg(test)]
+mod tests {
+    use rusqlite::params;
+
+    use super::ALBUM_TRACKS_SQL;
+    use crate::Library;
+
+    fn insert_song(
+        lib: &Library,
+        path: &str,
+        title: &str,
+        album: Option<&str>,
+        track: Option<i64>,
+    ) {
+        lib.conn
+            .execute(
+                "INSERT INTO media (path, kind, size, mtime, title, album, track) \
+                 VALUES (?1, 'audio', 1, 1, ?2, ?3, ?4)",
+                params![path, title, album, track],
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn album_tracks_are_in_track_order_with_untagged_last() {
+        let lib = Library::open_in_memory().unwrap();
+        insert_song(&lib, "/m/live-untagged.mp3", "Untagged", Some("Live"), None);
+        insert_song(&lib, "/m/live-2.mp3", "Second", Some("Live"), Some(2));
+        insert_song(&lib, "/m/live-1.mp3", "First", Some("Live"), Some(1));
+        insert_song(&lib, "/m/other-1.mp3", "Elsewhere", Some("Other"), Some(1));
+
+        let titles: Vec<String> = lib
+            .album_tracks(Some("Live"))
+            .unwrap()
+            .into_iter()
+            .filter_map(|item| item.title)
+            .collect();
+        assert_eq!(titles, vec!["First", "Second", "Untagged"]);
+    }
+
+    #[test]
+    fn songs_matching_matches_title_word_prefixes() {
+        let lib = Library::open_in_memory().unwrap();
+        insert_song(&lib, "/m/a.mp3", "Love Story", None, None);
+        insert_song(&lib, "/m/b.mp3", "Glove", None, None);
+
+        let titles: Vec<String> = lib
+            .songs_matching("lov", 10)
+            .unwrap()
+            .into_iter()
+            .filter_map(|item| item.title)
+            .collect();
+        assert_eq!(titles, vec!["Love Story"]);
+    }
+
+    #[test]
+    fn album_tracks_query_uses_the_album_index() {
+        let lib = Library::open_in_memory().unwrap();
+        let sql = format!("EXPLAIN QUERY PLAN SELECT id FROM media WHERE {ALBUM_TRACKS_SQL}");
+        let mut stmt = lib.conn.prepare(&sql).unwrap();
+        let details: Vec<String> = stmt
+            .query_map([""], |r| r.get::<_, String>(3))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert!(
+            details
+                .iter()
+                .any(|d| d.contains("media_audio_album_track")),
+            "{details:?}"
+        );
+    }
 }

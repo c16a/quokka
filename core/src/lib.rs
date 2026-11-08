@@ -19,6 +19,7 @@ mod processing;
 mod progress;
 pub use movie_details::{CHOICE_LIMIT, MatchOutcome};
 mod playlist;
+pub mod poster_cache;
 mod radio;
 mod replaygain;
 mod scan;
@@ -231,7 +232,7 @@ impl Library {
              ORDER BY artist IS NULL, artist, album, track, path \
              LIMIT ?1 OFFSET ?2"
         );
-        let mut stmt = self.conn.prepare(&sql)?;
+        let mut stmt = self.conn.prepare_cached(&sql)?;
         let rows = stmt.query_map(params![limit as i64, offset as i64], row_to_item)?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
@@ -240,7 +241,7 @@ impl Library {
     /// separated word must match, and the last word also matches as a prefix,
     /// so results appear while typing.
     pub fn search(&self, query: &str, limit: usize) -> Result<Vec<MediaItem>> {
-        let Some(fts) = fts_query(query) else {
+        let Some(fts) = fts_query(query, None) else {
             return Ok(Vec::new());
         };
         let sql = format!(
@@ -250,7 +251,7 @@ impl Library {
              ORDER BY rank \
              LIMIT ?2"
         );
-        let mut stmt = self.conn.prepare(&sql)?;
+        let mut stmt = self.conn.prepare_cached(&sql)?;
         let rows = stmt.query_map(params![fts, limit as i64], row_to_item)?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
@@ -417,7 +418,7 @@ impl Library {
 
     /// Tags attached to an item, sorted by name.
     pub fn tags_of(&self, media_id: i64) -> Result<Vec<String>> {
-        let mut stmt = self.conn.prepare(
+        let mut stmt = self.conn.prepare_cached(
             "SELECT t.name FROM tag t JOIN media_tag mt ON mt.tag_id = t.id \
              WHERE mt.media_id = ?1 ORDER BY t.name",
         )?;
@@ -462,8 +463,9 @@ pub(crate) fn row_to_item(r: &rusqlite::Row<'_>) -> rusqlite::Result<MediaItem> 
     })
 }
 
-/// Turn free text into a safe FTS5 query: each word quoted, the last one a prefix match.
-fn fts_query(input: &str) -> Option<String> {
+/// Turn free text into a safe FTS5 query: each word quoted, the last one a prefix match. With a
+/// `column`, each word only matches inside that column.
+pub(crate) fn fts_query(input: &str, column: Option<&str>) -> Option<String> {
     let words: Vec<&str> = input.split_whitespace().collect();
     if words.is_empty() {
         return None;
@@ -474,10 +476,14 @@ fn fts_query(input: &str) -> Option<String> {
         .enumerate()
         .map(|(i, w)| {
             let quoted = format!("\"{}\"", w.replace('"', "\"\""));
-            if i == last {
+            let quoted = if i == last {
                 format!("{quoted} *")
             } else {
                 quoted
+            };
+            match column {
+                Some(column) => format!("{column} : {quoted}"),
+                None => quoted,
             }
         })
         .collect();

@@ -16,7 +16,7 @@ pub struct PlaylistSummary {
 impl Library {
     /// All playlists, sorted by name.
     pub fn playlists(&self) -> Result<Vec<PlaylistSummary>> {
-        let mut stmt = self.conn.prepare(
+        let mut stmt = self.conn.prepare_cached(
             "SELECT p.id, p.name, COUNT(pt.media_id) \
              FROM playlist p LEFT JOIN playlist_track pt ON pt.playlist_id = p.id \
              GROUP BY p.id ORDER BY p.name COLLATE NOCASE",
@@ -60,7 +60,7 @@ impl Library {
              JOIN media m ON m.id = pt.media_id \
              WHERE pt.playlist_id = ?1 ORDER BY pt.position"
         );
-        let mut stmt = self.conn.prepare(&sql)?;
+        let mut stmt = self.conn.prepare_cached(&sql)?;
         let rows = stmt.query_map([id], row_to_item)?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
@@ -92,7 +92,7 @@ impl Library {
     /// The stored positions of a playlist's entries, in playlist order. Pairs with
     /// [`Library::playlist_tracks`] when the UI needs to remove a row.
     pub fn playlist_positions(&self, id: i64) -> Result<Vec<i64>> {
-        let mut stmt = self.conn.prepare(
+        let mut stmt = self.conn.prepare_cached(
             "SELECT position FROM playlist_track WHERE playlist_id = ?1 ORDER BY position",
         )?;
         let rows = stmt.query_map([id], |r| r.get(0))?;

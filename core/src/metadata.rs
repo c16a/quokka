@@ -1,6 +1,8 @@
 use std::path::Path;
 
+use lofty::config::ParseOptions;
 use lofty::file::{AudioFile, FileType, TaggedFileExt};
+use lofty::probe::Probe;
 use lofty::tag::{Accessor, ItemKey};
 use symphonia::core::codecs::CodecParameters;
 use symphonia::core::codecs::video::{VideoCodecId, VideoCodecParameters};
@@ -50,17 +52,19 @@ pub(crate) struct VideoInfo {
 /// read, such as raw OBU streams, give nothing.
 pub(crate) fn probe_video(path: &Path) -> VideoInfo {
     let format = probe_format(path);
+    let moov = mp4_moov(path);
     let Some((track, params)) = format.as_deref().and_then(first_video_track) else {
         // Symphonia gives no video track for some MP4 codecs (HEVC, for one). The sample entry
         // still names the codec.
         return VideoInfo {
-            codec: mp4_codec(path),
+            codec: moov.as_deref().and_then(mp4_codec),
             ..VideoInfo::default()
         };
     };
-    let av1 = av1_config(path, params);
+    let av1 = av1_config(params, moov.as_deref());
     VideoInfo {
-        codec: video_codec_label(params, av1.is_some()).or_else(|| mp4_codec(path)),
+        codec: video_codec_label(params, av1.is_some())
+            .or_else(|| moov.as_deref().and_then(mp4_codec)),
         width: params.width.map(i64::from),
         height: params.height.map(i64::from),
         duration_ms: track
@@ -118,19 +122,14 @@ fn video_codec_label(params: &VideoCodecParameters, is_av1: bool) -> Option<Stri
 
 /// The AV1 codec configuration record (`av1C`) of the first video track, from the container's
 /// extra data or, for MP4 files, from the `moov` box.
-fn av1_config(path: &Path, params: &VideoCodecParameters) -> Option<Vec<u8>> {
+fn av1_config(params: &VideoCodecParameters, moov: Option<&[u8]>) -> Option<Vec<u8>> {
     params
         .extra_data
         .iter()
         .map(|extra| &*extra.data)
         .find(|data| is_av1_config(data))
         .map(<[u8]>::to_vec)
-        .or_else(|| match path.extension().and_then(|e| e.to_str()) {
-            Some(ext) if ext.eq_ignore_ascii_case("mp4") || ext.eq_ignore_ascii_case("m4v") => {
-                mp4_av1_config(path)
-            }
-            _ => None,
-        })
+        .or_else(|| moov.and_then(mp4_av1_config))
 }
 
 /// Whether `data` looks like an AV1 configuration record: version 1 with its marker bit set.
@@ -138,15 +137,19 @@ fn is_av1_config(data: &[u8]) -> bool {
     data.len() >= 4 && data[0] == 0x81
 }
 
-/// The codec of an MP4 file's sample entry, for the codecs symphonia does not name: H.264 and
-/// HEVC. `None` for other files, and for MP4 files without these.
-fn mp4_codec(path: &Path) -> Option<String> {
+/// The `moov` box of an MP4 file, read once per probe. `None` for other files.
+fn mp4_moov(path: &Path) -> Option<Vec<u8>> {
     let ext = path.extension().and_then(|e| e.to_str())?;
     if !(ext.eq_ignore_ascii_case("mp4") || ext.eq_ignore_ascii_case("m4v")) {
         return None;
     }
     let mut file = std::fs::File::open(path).ok()?;
-    let moov = read_top_level_box(&mut file, b"moov")?;
+    read_top_level_box(&mut file, b"moov")
+}
+
+/// The codec of an MP4 file's sample entry, for the codecs symphonia does not name: H.264 and
+/// HEVC. `None` when the `moov` box names neither.
+fn mp4_codec(moov: &[u8]) -> Option<String> {
     [
         (b"avc1", "H.264"),
         (b"avc3", "H.264"),
@@ -159,15 +162,13 @@ fn mp4_codec(path: &Path) -> Option<String> {
 }
 
 /// The `av1C` box inside the `moov` box of an MP4 file, if it has an AV1 track.
-fn mp4_av1_config(path: &Path) -> Option<Vec<u8>> {
-    mp4_config_after(path, b"av01", b"av1C").filter(|body| is_av1_config(body))
+fn mp4_av1_config(moov: &[u8]) -> Option<Vec<u8>> {
+    mp4_config_after(moov, b"av01", b"av1C").filter(|body| is_av1_config(body))
 }
 
 /// The body of the box named `config` that follows the first `entry` sample entry inside the
-/// `moov` box of an MP4 file, such as `av1C` after `av01`, or `avcC` after `avc1`.
-pub(crate) fn mp4_config_after(path: &Path, entry: &[u8; 4], config: &[u8; 4]) -> Option<Vec<u8>> {
-    let mut file = std::fs::File::open(path).ok()?;
-    let moov = read_top_level_box(&mut file, b"moov")?;
+/// `moov` box, such as `av1C` after `av01`, or `avcC` after `avc1`.
+fn mp4_config_after(moov: &[u8], entry: &[u8; 4], config: &[u8; 4]) -> Option<Vec<u8>> {
     let sample_entry = moov.windows(4).position(|w| w == entry)?;
     let at = sample_entry + moov[sample_entry..].windows(4).position(|w| w == config)?;
     let start = at.checked_sub(4)?;
@@ -220,7 +221,9 @@ fn read_top_level_box(file: &mut std::fs::File, wanted: &[u8; 4]) -> Option<Vec<
 /// Read tags and stream properties. `size` is the file size in bytes, used to
 /// estimate the bitrate when the format does not report one.
 pub(crate) fn read(path: &Path, size: i64) -> Metadata {
-    let Ok(tagged) = lofty::read_from_path(path) else {
+    // Cover art is never used here, and a large embedded picture makes the parse slow.
+    let options = ParseOptions::new().read_cover_art(false);
+    let Ok(tagged) = Probe::open(path).and_then(|probe| probe.options(options).read()) else {
         return Metadata::default();
     };
 
@@ -281,4 +284,39 @@ fn codec_label(file_type: FileType) -> String {
 /// Trim a tag value and drop it if nothing is left.
 fn clean(value: Option<&str>) -> Option<String> {
     value.map(|s| s.trim().to_owned()).filter(|s| !s.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A `moov`-like buffer: an `av01` entry, then an `av1C` box with a four-byte body.
+    fn av1_moov() -> Vec<u8> {
+        let mut moov = b"av01".to_vec();
+        moov.extend_from_slice(&[0; 4]);
+        moov.extend_from_slice(&12u32.to_be_bytes());
+        moov.extend_from_slice(b"av1C");
+        moov.extend_from_slice(&[0x81, 0x00, 0x0c, 0x00]);
+        moov
+    }
+
+    #[test]
+    fn av1_config_is_read_from_moov() {
+        assert_eq!(
+            mp4_av1_config(&av1_moov()),
+            Some(vec![0x81, 0x00, 0x0c, 0x00])
+        );
+    }
+
+    #[test]
+    fn av1_config_is_none_without_av01_entry() {
+        assert_eq!(mp4_av1_config(b"avc1 avcC"), None);
+    }
+
+    #[test]
+    fn mp4_codec_names_h264_and_hevc_sample_entries() {
+        assert_eq!(mp4_codec(b"....avc1...."), Some("H.264".to_owned()));
+        assert_eq!(mp4_codec(b"....hvc1...."), Some("HEVC".to_owned()));
+        assert_eq!(mp4_codec(b"....mp4a...."), None);
+    }
 }

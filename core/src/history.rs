@@ -36,7 +36,7 @@ impl Library {
                  GROUP BY COALESCE(m.album, '') ORDER BY MAX(p.played_at) DESC LIMIT ?1"
             }
         };
-        let mut stmt = self.conn.prepare(sql)?;
+        let mut stmt = self.conn.prepare_cached(sql)?;
         let rows = stmt.query_map([limit as i64], |r| r.get(0))?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }

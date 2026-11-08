@@ -2,6 +2,7 @@
 //! file's samples, decodes them, puts the pictures in order, and converts each to RGBA. The window
 //! takes frames as their times come up.
 
+use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -217,28 +218,34 @@ fn run(
     };
     let timescale = track.timescale as f64;
     let colour = stream.colour;
-    let mut pending: Vec<Picture> = Vec::new();
+    let mut pending: VecDeque<Picture> = VecDeque::new();
+    let mut data: Vec<u8> = Vec::new();
     for sample in &track.samples[first..] {
-        let mut data = vec![0u8; sample.size as usize];
+        data.resize(sample.size as usize, 0);
         if file.seek(SeekFrom::Start(sample.offset)).is_err() || file.read_exact(&mut data).is_err()
         {
             let _ = sender.send(Message::Failed("could not read a frame".into()));
             return;
         }
         let packet = Packet {
-            data,
+            data: std::mem::take(&mut data),
             decode_time: sample.decode_time,
             presentation_time: sample.presentation_time,
             sync: sample.sync,
         };
-        if let Err(error) = decoder.decode(&packet) {
+        let decoded = decoder.decode(&packet);
+        data = packet.data;
+        if let Err(error) = decoded {
             let _ = sender.send(Message::Failed(error.to_string()));
             return;
         }
-        pending.extend(decoder.take_pictures());
-        pending.sort_by_key(|picture| picture.presentation_time);
+        for picture in decoder.take_pictures() {
+            insert_in_order(&mut pending, picture);
+        }
         while pending.len() > REORDER_DEPTH {
-            if !emit(pending.remove(0), timescale, &sender, colour) {
+            if let Some(picture) = pending.pop_front()
+                && !emit(picture, timescale, &sender, colour)
+            {
                 return;
             }
         }
@@ -247,14 +254,23 @@ fn run(
         let _ = sender.send(Message::Failed(error.to_string()));
         return;
     }
-    pending.extend(decoder.take_pictures());
-    pending.sort_by_key(|picture| picture.presentation_time);
+    for picture in decoder.take_pictures() {
+        insert_in_order(&mut pending, picture);
+    }
     for picture in pending {
         if !emit(picture, timescale, &sender, colour) {
             return;
         }
     }
     let _ = sender.send(Message::End);
+}
+
+/// Add a picture to the queue, after any picture with the same time, so that equal times keep the
+/// order they were decoded in.
+fn insert_in_order(pending: &mut VecDeque<Picture>, picture: Picture) {
+    let position =
+        pending.partition_point(|queued| queued.presentation_time <= picture.presentation_time);
+    pending.insert(position, picture);
 }
 
 /// Convert one picture and send it. `false` means the window has gone and the worker should stop.

@@ -38,7 +38,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use eframe::egui;
 use notify::{RecursiveMode, Watcher};
 use quokka_core::tmdb::Tmdb;
-use quokka_core::{Library, MediaItem, ScanStats, Session, Settings, Theme};
+use quokka_core::{Library, MediaItem, Progress, ScanStats, Session, Settings, Theme};
 
 use playback::{MenuRequest, Panel, Playback};
 
@@ -122,6 +122,10 @@ struct App {
     /// The last position saved, so an unchanged position is not written again.
     progress_sent: Option<(PathBuf, f64)>,
     last_progress: Instant,
+    /// The movie whose saved progress is cached in `movie_progress`. The progress is read again
+    /// when the open movie changes or once a second.
+    movie_progress_for: Option<PathBuf>,
+    movie_progress: Option<Progress>,
     /// Whether the video window is open. A movie that starts opens it again.
     #[cfg(target_os = "macos")]
     video_window_open: bool,
@@ -199,6 +203,8 @@ impl App {
         playback.set_library(paths.db.clone());
         let progress = progress_writer::ProgressWriter::start(&paths.db);
         let movies = movies::MoviesView::new(paths.db.clone());
+        let mut albums = albums::AlbumsView::default();
+        albums.set_db(paths.db.clone());
         // Artist photos are cached beside the library database.
         let photo_dir = paths
             .db
@@ -245,7 +251,7 @@ impl App {
             settings,
             library,
             tab,
-            albums: Default::default(),
+            albums,
             search: Default::default(),
             movies,
             playback,
@@ -272,6 +278,8 @@ impl App {
             progress,
             progress_sent: None,
             last_progress: Instant::now(),
+            movie_progress_for: None,
+            movie_progress: None,
             #[cfg(target_os = "macos")]
             video_window_open: false,
             #[cfg(target_os = "macos")]
@@ -715,7 +723,8 @@ impl eframe::App for App {
             self.last_save = Instant::now();
             self.save_session();
         }
-        if self.last_progress.elapsed() >= Duration::from_secs(1) {
+        let progress_due = self.last_progress.elapsed() >= Duration::from_secs(1);
+        if progress_due {
             self.last_progress = Instant::now();
             self.save_progress();
         }
@@ -898,13 +907,18 @@ impl eframe::App for App {
         let mut radio_action = None;
         let mut play = None;
         let mut movie_play = None;
-        let movie_progress = if self.tab == Tab::Movies {
-            self.movies
-                .open_movie_path()
-                .and_then(|path| self.library.progress(&path).ok().flatten())
+        let movie_path = if self.tab == Tab::Movies {
+            self.movies.open_movie_path()
         } else {
             None
         };
+        if movie_path != self.movie_progress_for || (progress_due && movie_path.is_some()) {
+            self.movie_progress = movie_path
+                .as_deref()
+                .and_then(|path| self.library.progress(path).ok().flatten());
+            self.movie_progress_for = movie_path;
+        }
+        let movie_progress = self.movie_progress.clone();
         // The Radio page pads its own content, so its scrollbar can reach the window edge.
         // The album page scrolls with the window's right edge, so it keeps its own padding.
         let full_width = self.tab == Tab::Radio

@@ -87,10 +87,20 @@ pub(crate) struct Chain {
     /// Frames mixed so far in the crossfade, and the length of the crossfade in frames.
     fade_done: u64,
     fade_total: u64,
+    /// Length of the track now playing, in frames. `None` when its length is unknown.
+    total_frames: Option<u64>,
+}
+
+/// The length of `source` in frames at `rate`, when it is known.
+fn frames_in(source: &SymphoniaSource, rate: u32) -> Option<u64> {
+    source
+        .total_duration()
+        .map(|total| (total.as_secs_f64() * f64::from(rate)).round() as u64)
 }
 
 impl Chain {
     pub(crate) fn new(first: SymphoniaSource, shared: Arc<Shared>) -> Self {
+        let total_frames = frames_in(&first, shared.rate);
         Self {
             inner: first,
             shared,
@@ -98,6 +108,7 @@ impl Chain {
             outgoing: None,
             fade_done: 0,
             fade_total: 0,
+            total_frames,
         }
     }
 
@@ -121,6 +132,7 @@ impl Chain {
             return None;
         }
         self.inner = source;
+        self.total_frames = frames_in(&self.inner, self.shared.rate);
         self.in_frame = 0;
         self.shared.frames.store(0, Ordering::Relaxed);
         self.start_reported(path, duration);
@@ -142,10 +154,9 @@ impl Chain {
         if fade == 0 {
             return;
         }
-        let Some(total) = self.inner.total_duration() else {
+        let Some(total_frames) = self.total_frames else {
             return;
         };
-        let total_frames = (total.as_secs_f64() * f64::from(self.shared.rate)).round() as u64;
         // Never fade for longer than half the track, so a short track can't start fading at once.
         let fade = fade.min(total_frames / 2);
         let played = self.shared.frames.load(Ordering::Relaxed);
@@ -168,6 +179,7 @@ impl Chain {
             return;
         };
         self.outgoing = Some(std::mem::replace(&mut self.inner, source));
+        self.total_frames = frames_in(&self.inner, self.shared.rate);
         self.fade_done = 0;
         self.fade_total = fade;
         self.in_frame = 0;

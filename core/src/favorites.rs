@@ -45,7 +45,7 @@ impl Library {
     pub fn favorites(&self, kind: FavoriteKind) -> Result<HashSet<String>> {
         let mut stmt = self
             .conn
-            .prepare("SELECT key FROM favorite WHERE kind = ?1")?;
+            .prepare_cached("SELECT key FROM favorite WHERE kind = ?1")?;
         let keys = stmt
             .query_map([kind.as_str()], |r| r.get::<_, String>(0))?
             .collect::<rusqlite::Result<HashSet<_>>>()?;

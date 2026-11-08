@@ -10,6 +10,7 @@ publish.workspace = true
 eframe.workspace = true
 egui_system_font_provider.workspace = true
 image.workspace = true
+lru.workspace = true
 notify.workspace = true
 quokka-core.workspace = true
 quokka-playback.workspace = true

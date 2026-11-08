@@ -61,6 +61,8 @@ pub struct SidePanels {
     library_changed: bool,
     /// The track's library row, read again after a save.
     refreshed: Option<MediaItem>,
+    /// Whether the track has a tag snapshot to revert to. Read on load, then kept up to date by saves and reverts.
+    can_revert: bool,
 }
 
 /// What the user asked for in the tags section this frame.
@@ -87,6 +89,7 @@ impl SidePanels {
         self.drafts = draft_values(self.details.as_ref());
         self.tag_error = None;
         self.refreshed = None;
+        self.can_revert = library.has_tag_snapshot(&item.path).unwrap_or(false);
         self.sidecar = sidecar_lyrics(&item.path);
         self.cached = library.cached_lyrics(item.id).unwrap_or(None);
         self.lookup = Lookup::Idle;
@@ -327,7 +330,7 @@ impl SidePanels {
             .as_ref()
             .map(|d| d.tags.clone())
             .unwrap_or_default();
-        let can_revert = library.has_tag_snapshot(&item.path).unwrap_or(false);
+        let can_revert = self.can_revert;
         let error = self.tag_error.clone();
         let details = self.details.as_ref();
         let drafts = &mut self.drafts;
@@ -429,12 +432,15 @@ impl SidePanels {
 
         let path = item.path.clone();
         let id = item.id;
+        // A save leaves a snapshot to revert to, and a revert takes it away.
         let outcome = match action {
-            Some(TagAction::Save(values)) => Some(library.save_tags(&path, &lines, &values)),
-            Some(TagAction::Revert) => Some(library.revert_tags(&path).map(|_| ())),
+            Some(TagAction::Save(values)) => {
+                Some((library.save_tags(&path, &lines, &values), true))
+            }
+            Some(TagAction::Revert) => Some((library.revert_tags(&path).map(|_| ()), false)),
             None => None,
         };
-        if let Some(result) = outcome {
+        if let Some((result, has_snapshot)) = outcome {
             match result {
                 Ok(()) => {
                     self.details = track_details(&path);
@@ -442,6 +448,7 @@ impl SidePanels {
                     self.refreshed = library.get(id).ok().flatten();
                     self.tag_error = None;
                     self.library_changed = true;
+                    self.can_revert = has_snapshot;
                 }
                 Err(e) => self.tag_error = Some(e.to_string()),
             }

@@ -1,6 +1,7 @@
 use crate::i18n;
 use eframe::egui;
 use quokka_core::{AlbumSummary, Library, MediaItem, PlaylistSummary, SongQuery, Station};
+use std::time::Duration;
 
 use crate::albums::{self, AlbumsView, PlayRequest, TILE_GAP};
 use crate::format;
@@ -14,6 +15,10 @@ use crate::radio;
 const SONG_LIMIT: usize = 200;
 /// Most stations listed for one search.
 const STATION_LIMIT: usize = 60;
+/// How long the query must stay unchanged before the results are rebuilt.
+const SEARCH_DELAY: f64 = 0.15;
+/// How often the tuned stations are read again while station results are shown.
+const TUNED_REFRESH: f64 = 1.0;
 
 /// What the search screen asked for this frame.
 #[derive(Default)]
@@ -37,8 +42,15 @@ pub struct SearchView {
     playlist_hits: Vec<PlaylistSummary>,
     /// Radio stations whose name, tags or country match.
     station_hits: Vec<Station>,
+    /// The stations tuned in to, read when the results are built and again once a second.
+    tuned: Vec<Station>,
+    /// When `tuned` was last read, in seconds of input time.
+    tuned_at: f64,
     songs: Vec<MediaItem>,
     focus_pending: bool,
+    /// The query as typed last, and when it last changed. Results follow it after a short pause.
+    typed: String,
+    changed_at: f64,
 }
 
 impl SearchView {
@@ -81,10 +93,23 @@ impl SearchView {
             });
         ui.add_space(12.0);
 
+        let now = ctx.input(|i| i.time);
         let query = self.query.trim().to_owned();
+        if query != self.typed {
+            self.typed = query.clone();
+            self.changed_at = now;
+        }
         if query != self.searched {
-            self.refresh(albums, library, playlists, &query);
-            self.searched = query.clone();
+            // An empty query clears the results at once. Others wait until the typing pauses.
+            if query.is_empty() || now - self.changed_at >= SEARCH_DELAY {
+                self.refresh(albums, library, playlists, &query, now);
+                self.searched = query.clone();
+            } else {
+                ctx.request_repaint_after(Duration::from_secs_f64(SEARCH_DELAY));
+            }
+        }
+        if !self.station_hits.is_empty() && now - self.tuned_at >= TUNED_REFRESH {
+            self.read_tuned(library, now);
         }
         if query.is_empty() {
             ui.weak(i18n::search_for_an_album_a_song());
@@ -131,8 +156,8 @@ impl SearchView {
                 if !self.station_hits.is_empty() {
                     ui.heading(i18n::stations());
                     ui.add_space(8.0);
-                    let tuned = library.tuned_stations().unwrap_or_default();
-                    if let Some(action) = radio::station_cards(ui, &self.station_hits, &tuned) {
+                    if let Some(action) = radio::station_cards(ui, &self.station_hits, &self.tuned)
+                    {
                         outcome.radio = Some(action);
                     }
                     ui.add_space(24.0);
@@ -214,6 +239,12 @@ impl SearchView {
         outcome
     }
 
+    /// Read the tuned stations, and when they were read.
+    fn read_tuned(&mut self, library: &Library, now: f64) {
+        self.tuned = library.tuned_stations().unwrap_or_default();
+        self.tuned_at = now;
+    }
+
     /// Rebuild the results for `query`, which may contain filters such as `artist:`.
     fn refresh(
         &mut self,
@@ -221,11 +252,13 @@ impl SearchView {
         library: &Library,
         playlists: &[PlaylistSummary],
         query: &str,
+        now: f64,
     ) {
         self.album_hits.clear();
         self.playlist_hits.clear();
         self.station_hits.clear();
         self.songs.clear();
+        self.read_tuned(library, now);
         let parsed = SongQuery::parse(query);
         if parsed.is_empty() {
             return;

@@ -205,7 +205,8 @@ impl PixelBuffer {
     /// pairs.
     pub fn to_bytes(&self) -> Vec<u8> {
         // SAFETY: the buffer is retained by us, and locked for reading while its planes are read.
-        // Every plane's rows are inside its bytes-per-row span, as Core Video describes them.
+        // Every plane's rows are inside its bytes-per-row span, as Core Video describes them. When
+        // a plane's bytes-per-row is its row width, the plane is one span of `row * height` bytes.
         unsafe {
             let bytes_per_sample =
                 if EIGHT_BIT_FORMATS.contains(&CVPixelBufferGetPixelFormatType(self.0)) {
@@ -213,21 +214,37 @@ impl PixelBuffer {
                 } else {
                     2
                 };
+            // Chroma planes hold a pair of samples for each column.
+            let components = |plane: usize| -> usize { if plane == 0 { 1 } else { 2 } };
             CVPixelBufferLockBaseAddress(self.0, LOCK_READ_ONLY);
-            let mut out = Vec::new();
-            for plane in 0..CVPixelBufferGetPlaneCount(self.0) {
+            let planes = CVPixelBufferGetPlaneCount(self.0);
+            let total: usize = (0..planes)
+                .filter(|&plane| !CVPixelBufferGetBaseAddressOfPlane(self.0, plane).is_null())
+                .map(|plane| {
+                    let width = CVPixelBufferGetWidthOfPlane(self.0, plane);
+                    let height = CVPixelBufferGetHeightOfPlane(self.0, plane);
+                    width * height * components(plane) * bytes_per_sample
+                })
+                .sum();
+            let mut out = Vec::with_capacity(total);
+            for plane in 0..planes {
                 let width = CVPixelBufferGetWidthOfPlane(self.0, plane);
                 let height = CVPixelBufferGetHeightOfPlane(self.0, plane);
                 let base = CVPixelBufferGetBaseAddressOfPlane(self.0, plane);
                 let stride = CVPixelBufferGetBytesPerRowOfPlane(self.0, plane);
-                // Chroma planes hold a pair of samples for each column.
-                let components = if plane == 0 { 1 } else { 2 };
-                let row = width * components * bytes_per_sample;
+                let row = width * components(plane) * bytes_per_sample;
                 if base.is_null() {
                     continue;
                 }
-                for line in 0..height {
-                    out.extend_from_slice(std::slice::from_raw_parts(base.add(line * stride), row));
+                if stride == row {
+                    out.extend_from_slice(std::slice::from_raw_parts(base, row * height));
+                } else {
+                    for line in 0..height {
+                        out.extend_from_slice(std::slice::from_raw_parts(
+                            base.add(line * stride),
+                            row,
+                        ));
+                    }
                 }
             }
             CVPixelBufferUnlockBaseAddress(self.0, LOCK_READ_ONLY);

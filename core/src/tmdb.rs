@@ -3,6 +3,7 @@
 //! environment variable. TMDb's terms require attributing it in the app's About or Credits screen.
 
 use std::collections::BTreeMap;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -81,13 +82,9 @@ pub struct Tmdb {
 
 impl Tmdb {
     pub fn new(key: impl Into<String>) -> Self {
-        let agent = ureq::Agent::config_builder()
-            .timeout_global(Some(Duration::from_secs(15)))
-            .build()
-            .into();
         Self {
             key: key.into(),
-            agent,
+            agent: shared_agent().clone(),
         }
     }
 
@@ -152,6 +149,18 @@ impl Tmdb {
             .read_to_string()
             .map_err(|e| Error::Tmdb(e.to_string()))
     }
+}
+
+/// The HTTP agent every client shares, so its connection pool is reused across requests. Cloning
+/// an `Agent` only copies `Arc`s, so each client gets a handle to the same pool.
+fn shared_agent() -> &'static ureq::Agent {
+    static AGENT: OnceLock<ureq::Agent> = OnceLock::new();
+    AGENT.get_or_init(|| {
+        ureq::Agent::config_builder()
+            .timeout_global(Some(Duration::from_secs(15)))
+            .build()
+            .into()
+    })
 }
 
 /// The year in a `YYYY-MM-DD` release date.
