@@ -105,6 +105,8 @@ struct App {
     playlists: playlists::PlaylistsView,
     /// System media keys and now-playing display. `None` when the system has none.
     media: Option<media::Media>,
+    /// Keeps the system from napping the app while media plays.
+    activity: media::Activity,
     /// The folder being scanned now, and the channel its result arrives on.
     scan: Option<(PathBuf, Receiver<ScanResult>)>,
     /// Folders waiting to be scanned. Each folder is scanned on its own, one after another.
@@ -253,6 +255,7 @@ impl App {
         let (change_tx, changes) = mpsc::channel();
         let mut app = Self {
             paths,
+            activity: media::Activity::default(),
             settings,
             library,
             tab,
@@ -737,6 +740,7 @@ impl eframe::App for App {
             media.handle_events(&mut self.playback);
             media.publish(&self.playback);
         }
+        self.activity.set(self.playback.is_playing());
         if self.playback.is_playing() {
             // Keep the slider moving while audio plays.
             ctx.request_repaint_after(Duration::from_millis(200));

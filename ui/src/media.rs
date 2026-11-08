@@ -5,6 +5,12 @@ use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
 use eframe::egui;
+#[cfg(target_os = "macos")]
+use objc2::rc::Retained;
+#[cfg(target_os = "macos")]
+use objc2::runtime::ProtocolObject;
+#[cfg(target_os = "macos")]
+use objc2_foundation::{NSActivityOptions, NSObjectProtocol, NSProcessInfo, NSString};
 use quokka_playback::PlayerState;
 use souvlaki::{
     MediaControlEvent, MediaControls, MediaMetadata, MediaPlayback, MediaPosition, PlatformConfig,
@@ -143,4 +149,41 @@ fn cover_file(item: &MediaItem) -> Option<String> {
     let path = std::env::temp_dir().join(format!("quokka-cover-{}", item.id));
     std::fs::write(&path, bytes).ok()?;
     Some(format!("file://{}", path.display()))
+}
+
+/// Keeps the system from suspending the app while media plays. macOS naps a background app that is
+/// not doing user-initiated work, and a napped app handles the media keys and the now-playing
+/// controls late, or not until it is brought forward. Holding an activity while playing avoids that.
+#[derive(Default)]
+pub struct Activity {
+    #[cfg(target_os = "macos")]
+    token: Option<Retained<ProtocolObject<dyn NSObjectProtocol>>>,
+}
+
+impl Activity {
+    /// Hold the activity while `playing` is true, and release it when playback stops.
+    pub fn set(&mut self, playing: bool) {
+        #[cfg(target_os = "macos")]
+        {
+            match (playing, self.token.is_some()) {
+                (true, false) => {
+                    let reason = NSString::from_str("Playing media");
+                    let info = NSProcessInfo::processInfo();
+                    self.token = Some(info.beginActivityWithOptions_reason(
+                        NSActivityOptions::UserInitiatedAllowingIdleSystemSleep,
+                        &reason,
+                    ));
+                }
+                (false, true) => {
+                    if let Some(token) = self.token.take() {
+                        // SAFETY: the token came from `beginActivityWithOptions_reason` and is released once.
+                        unsafe { NSProcessInfo::processInfo().endActivity(&token) };
+                    }
+                }
+                _ => {}
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = playing;
+    }
 }
