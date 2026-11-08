@@ -112,7 +112,7 @@ impl MediaFoundation {
             unsafe { transform.ProcessMessage(message, 0) }.map_err(backend_error)?;
         }
 
-        Ok(MediaFoundation {
+        let mut decoder = MediaFoundation {
             transform,
             events,
             input_wanted: 0,
@@ -129,7 +129,12 @@ impl MediaFoundation {
             length_size,
             pictures: Vec::new(),
             _startup: startup,
-        })
+        };
+        // Some decoders refuse input until their output type is set, and the input type carries the
+        // parameter sets, so offer the output types now. When none is offered yet, the first call to
+        // `drain_outputs` agrees it.
+        decoder.negotiate_output()?;
+        Ok(decoder)
     }
 
     /// Wait until an asynchronous transform has asked for input. A synchronous one never waits.
@@ -184,14 +189,13 @@ impl MediaFoundation {
 
     /// Take every picture the transform can give now.
     fn drain_outputs(&mut self) -> Result<(), DecodeError> {
-        if !self.output_ready && !self.negotiate_output()? {
-            return Ok(());
-        }
+        // Asking for output is what makes the decoder report that it needs an output type, so this
+        // runs even before one is agreed.
         loop {
             let ours = if self.provides_samples {
                 None
             } else {
-                Some(output_sample(self.output_size)?)
+                Some(output_sample(self.output_size.max(1))?)
             };
             let mut buffers = [MFT_OUTPUT_DATA_BUFFER {
                 dwStreamID: 0,
@@ -209,14 +213,22 @@ impl MediaFoundation {
             let _events = unsafe { ManuallyDrop::take(&mut buffer.pEvents) };
             match result {
                 Ok(()) => {
+                    if !self.output_ready {
+                        return Err(failed(
+                            "the decoder produced a frame before its output type",
+                        ));
+                    }
                     if let Some(sample) = produced {
                         let picture = self.picture(&sample)?;
                         self.pictures.push(picture);
                     }
                 }
                 Err(error) if error.code() == MF_E_TRANSFORM_NEED_MORE_INPUT => return Ok(()),
-                // The frame size changed: agree the new output type, then go on.
-                Err(error) if error.code() == MF_E_TRANSFORM_STREAM_CHANGE => {
+                // The decoder needs an output type, or the frame size changed: agree one, then go on.
+                Err(error)
+                    if error.code() == MF_E_TRANSFORM_TYPE_NOT_SET
+                        || error.code() == MF_E_TRANSFORM_STREAM_CHANGE =>
+                {
                     self.output_ready = false;
                     if !self.negotiate_output()? {
                         return Ok(());
