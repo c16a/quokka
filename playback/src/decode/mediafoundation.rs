@@ -68,6 +68,13 @@ pub struct MediaFoundation {
     /// Whether the transform fills in its own output samples, rather than taking ours.
     provides_samples: bool,
     length_size: usize,
+    /// The parameter sets as Annex B. Containers keep them in the configuration record, not in the
+    /// packets, so they go in front of each keyframe.
+    parameter_sets: Vec<u8>,
+    /// Packets fed in, and pictures produced. A stream that gives no pictures is an error, not an
+    /// empty result.
+    packets_in: usize,
+    frames_out: usize,
     pictures: Vec<Picture>,
     /// Declared last, so Media Foundation is shut down only after the transform is released.
     _startup: Startup,
@@ -127,6 +134,9 @@ impl MediaFoundation {
             output_size: 0,
             provides_samples: false,
             length_size,
+            parameter_sets,
+            packets_in: 0,
+            frames_out: 0,
             pictures: Vec::new(),
             _startup: startup,
         };
@@ -220,6 +230,7 @@ impl MediaFoundation {
                     }
                     if let Some(sample) = produced {
                         let picture = self.picture(&sample)?;
+                        self.frames_out += 1;
                         self.pictures.push(picture);
                     }
                 }
@@ -366,11 +377,19 @@ impl VideoDecoder for MediaFoundation {
     }
 
     fn decode(&mut self, packet: &Packet) -> Result<(), DecodeError> {
-        let data = annexb::sample(&packet.data, self.length_size)
+        let frame = annexb::sample(&packet.data, self.length_size)
             .ok_or_else(|| failed("a packet's length prefixes run past its end"))?;
-        if data.is_empty() {
+        if frame.is_empty() {
             return self.drain_outputs();
         }
+        let data = if packet.sync {
+            let mut keyframe = self.parameter_sets.clone();
+            keyframe.extend_from_slice(&frame);
+            keyframe
+        } else {
+            frame
+        };
+        self.packets_in += 1;
         let sample = input_sample(&data, packet)?;
         self.wait_for_input()?;
         self.submit(&sample)?;
@@ -389,7 +408,14 @@ impl VideoDecoder for MediaFoundation {
         while self.events.is_some() && !self.drained {
             self.pump_event()?;
         }
-        self.drain_outputs()
+        self.drain_outputs()?;
+        if self.packets_in > 0 && self.frames_out == 0 {
+            return Err(failed(format!(
+                "the decoder gave no frames for {} packets",
+                self.packets_in
+            )));
+        }
+        Ok(())
     }
 
     fn take_pictures(&mut self) -> Vec<Picture> {
