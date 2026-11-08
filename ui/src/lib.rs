@@ -31,8 +31,10 @@ pub mod squircle;
 pub mod video_gpu;
 
 use i18n::Text;
+use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
@@ -90,7 +92,7 @@ struct App {
     albums: albums::AlbumsView,
     search: search::SearchView,
     movies: movies::MoviesView,
-    playback: Playback,
+    playback: Rc<RefCell<Playback>>,
     queue_view: queue::QueueView,
     artists: artists::ArtistsView,
     recent: recent::RecentView,
@@ -262,7 +264,7 @@ impl App {
             albums,
             search: Default::default(),
             movies,
-            playback,
+            playback: Rc::new(RefCell::new(playback)),
             queue_view: Default::default(),
             artists: artists::ArtistsView::new(photo_dir),
             recent: Default::default(),
@@ -299,7 +301,10 @@ impl App {
             narrow: false,
             folder_files: Vec::new(),
         };
-        app.playback.set_replay_gain(app.settings.replay_gain);
+        media::register(&app.playback);
+        app.playback
+            .borrow_mut()
+            .set_replay_gain(app.settings.replay_gain);
         app.reload_views();
         app.restore_session();
         if station_index_stale(&app.library) {
@@ -344,14 +349,14 @@ impl App {
             },
             None => 0.0,
         };
-        self.playback.restore(
+        self.playback.borrow_mut().restore(
             items,
             index.unwrap_or(0),
             position,
             session.shuffle,
             session.repeat,
         );
-        self.session_saved = Some(self.playback.session());
+        self.session_saved = Some(self.playback.borrow_mut().session());
     }
 
     /// Refresh the radio station index on a background thread. Does nothing while a sync runs.
@@ -401,8 +406,11 @@ impl App {
 
     /// Log each track as it starts playing, and refresh the recent lists when one does.
     fn record_plays(&mut self) {
-        let current = self.playback.current_id();
-        if current.is_none() || current == self.last_played || !self.playback.is_playing() {
+        let current = self.playback.borrow_mut().current_id();
+        if current.is_none()
+            || current == self.last_played
+            || !self.playback.borrow_mut().is_playing()
+        {
             return;
         }
         if let Some(id) = current
@@ -420,7 +428,8 @@ impl App {
         let Some(writer) = self.progress.as_ref() else {
             return;
         };
-        let Some((path, position, duration)) = self.playback.progress_snapshot() else {
+        let Some((path, position, duration)) = self.playback.borrow_mut().progress_snapshot()
+        else {
             return;
         };
         if let Some((sent_path, sent_position)) = &self.progress_sent
@@ -438,7 +447,7 @@ impl App {
     }
 
     fn save_session(&mut self) {
-        let session = self.playback.session();
+        let session = self.playback.borrow_mut().session();
         if self.session_saved.as_ref() == Some(&session) {
             return;
         }
@@ -643,8 +652,8 @@ impl App {
     /// starts again. Closing it pauses the movie and saves where it is, so playing again resumes there.
     #[cfg(target_os = "macos")]
     fn show_video_window(&mut self, ctx: &egui::Context) {
-        let showing = self.playback.video_showing();
-        let playing = self.playback.is_playing();
+        let showing = self.playback.borrow_mut().video_showing();
+        let playing = self.playback.borrow_mut().is_playing();
         if (showing && !self.video_was_showing) || (playing && !self.video_was_playing) {
             self.video_window_open = true;
         }
@@ -675,7 +684,7 @@ impl App {
                         .fill(egui::Color32::from_black_alpha(184))
                         .inner_margin(egui::Margin::symmetric(20, 12))
                 };
-                if let Some(title) = self.playback.video_title() {
+                if let Some(title) = self.playback.borrow_mut().video_title() {
                     egui::Panel::top("video_title")
                         .show_separator_line(false)
                         .frame(bar())
@@ -684,13 +693,19 @@ impl App {
                         });
                 }
                 // The keys (F, Escape) and the full-screen button both ask for a change.
-                let mut toggle_fullscreen =
-                    playback::handle_video_keys(ui.ctx(), &mut self.playback, fullscreen);
+                let mut toggle_fullscreen = playback::handle_video_keys(
+                    ui.ctx(),
+                    &mut self.playback.borrow_mut(),
+                    fullscreen,
+                );
                 egui::Panel::bottom("video_controls")
                     .show_separator_line(false)
                     .frame(bar())
                     .show(ui, |ui| {
-                        toggle_fullscreen |= self.playback.show_video_controls(ui, fullscreen);
+                        toggle_fullscreen |= self
+                            .playback
+                            .borrow_mut()
+                            .show_video_controls(ui, fullscreen);
                     });
                 if toggle_fullscreen {
                     ui.ctx().send_viewport_cmd_to(
@@ -700,13 +715,13 @@ impl App {
                 }
                 egui::CentralPanel::default()
                     .frame(egui::Frame::new().fill(egui::Color32::BLACK))
-                    .show(ui, |ui| self.playback.show_video(ui));
+                    .show(ui, |ui| self.playback.borrow_mut().show_video(ui));
             },
         );
         if closed {
             // Closing the window stops the movie and frees its decoders and sound output. Where it
             // was is kept, so playing it again resumes from there.
-            self.playback.close_video();
+            self.playback.borrow_mut().close_video();
             self.save_session();
         }
     }
@@ -714,18 +729,20 @@ impl App {
 
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        media::drain_events();
         self.poll_scan(ui.ctx());
         self.poll_station_sync();
-        if self.playback.video_active() {
+        if self.playback.borrow_mut().video_active() {
             ui.ctx()
                 .request_repaint_after(std::time::Duration::from_millis(16));
         }
         self.handle_changes(ui.ctx());
-        self.playback.advance_if_finished();
+        self.playback.borrow_mut().advance_if_finished();
         self.playback
+            .borrow_mut()
             .set_tempo(self.settings.playback_speed, self.settings.crossfade_secs);
         let ctx = ui.ctx().clone();
-        playback::handle_keys(&ctx, &mut self.playback);
+        playback::handle_keys(&ctx, &mut self.playback.borrow_mut());
         self.record_plays();
         if self.last_save.elapsed() >= Duration::from_secs(2) {
             self.last_save = Instant::now();
@@ -737,11 +754,10 @@ impl eframe::App for App {
             self.save_progress();
         }
         if let Some(media) = self.media.as_mut() {
-            media.handle_events(&mut self.playback);
-            media.publish(&self.playback);
+            media.publish(&self.playback.borrow());
         }
-        self.activity.set(self.playback.is_playing());
-        if self.playback.is_playing() {
+        self.activity.set(self.playback.borrow_mut().is_playing());
+        if self.playback.borrow_mut().is_playing() {
             // Keep the slider moving while audio plays.
             ctx.request_repaint_after(Duration::from_millis(200));
         }
@@ -755,7 +771,7 @@ impl eframe::App for App {
             self.sidebar_open = !narrow;
             // A side panel beside the main view leaves no room in a narrow window, so it closes too.
             if narrow {
-                self.playback.panel = Panel::Closed;
+                self.playback.borrow_mut().panel = Panel::Closed;
             }
         }
         let mut toggle_sidebar = false;
@@ -776,12 +792,12 @@ impl eframe::App for App {
         // above it. It has no top border.
         // The top edge of the playback bar, so the panels beside the main view can stop there.
         let mut bar_top = f32::INFINITY;
-        if self.playback.has_bar() {
+        if self.playback.borrow_mut().has_bar() {
             let bar = egui::Panel::bottom("now_playing")
                 .show_separator_line(false)
                 .frame(egui::Frame::side_top_panel(ui.style()).fill(bar_fill))
                 .show(ui, |ui| {
-                    self.playback.show(ui, narrow);
+                    self.playback.borrow_mut().show(ui, narrow);
                 });
             bar_top = bar.response.rect.top();
         }
@@ -852,7 +868,7 @@ impl eframe::App for App {
         self.tab = next_tab;
 
         // A speed chosen in the bar is kept in the settings, like the others.
-        if let Some(speed) = self.playback.take_speed_change() {
+        if let Some(speed) = self.playback.borrow_mut().take_speed_change() {
             self.settings.playback_speed = speed;
             if let Err(e) = self.settings.save(&self.paths.settings) {
                 self.status =
@@ -860,7 +876,7 @@ impl eframe::App for App {
             }
         }
         // An album clicked in the bar opens on the album page.
-        if let Some(name) = self.playback.take_album_request() {
+        if let Some(name) = self.playback.borrow_mut().take_album_request() {
             if self.albums.open_by_name(&self.library, &name) {
                 self.tab = Tab::Albums;
             } else {
@@ -868,9 +884,9 @@ impl eframe::App for App {
                     Text::filled(i18n::could_not_find_album, vec![name.to_string().into()]);
             }
         }
-        let panel = self.playback.panel;
+        let panel = self.playback.borrow_mut().panel;
         let mut lyrics_outcome = side::LyricsOutcome::default();
-        if self.playback.has_current() && panel != Panel::Closed {
+        if self.playback.borrow_mut().has_current() && panel != Panel::Closed {
             egui::Panel::right("side_panel")
                 .default_size(320.0)
                 .resizable(false)
@@ -879,18 +895,24 @@ impl eframe::App for App {
                 .show(ui, |ui| {
                     clip_above(ui, bar_top);
                     match panel {
-                        Panel::Queue => queue::show(ui, &mut self.queue_view, &mut self.playback),
+                        Panel::Queue => {
+                            queue::show(ui, &mut self.queue_view, &mut self.playback.borrow_mut())
+                        }
                         Panel::Lyrics => {
+                            // Each borrow ends with its statement; the two cannot overlap in one call.
+                            let current = self.playback.borrow_mut().current_item();
+                            let position =
+                                self.playback.borrow_mut().position().unwrap_or_default();
                             lyrics_outcome = self.side.lyrics(
                                 ui,
                                 &self.library,
-                                self.playback.current_item().as_deref(),
-                                self.playback.position().unwrap_or_default(),
+                                current.as_deref(),
+                                position,
                                 self.settings.lyrics_online,
                             );
                         }
                         Panel::Info => {
-                            let playing = self.playback.current_item();
+                            let playing = self.playback.borrow_mut().current_item();
                             let shown = self.info_track.as_ref().or(playing.as_deref());
                             self.side.info(ui, &self.library, shown)
                         }
@@ -903,7 +925,7 @@ impl eframe::App for App {
             self.reload_views();
         }
         if let Some(at) = lyrics_outcome.seek {
-            self.playback.seek(at.as_secs_f64());
+            self.playback.borrow_mut().seek(at.as_secs_f64());
         }
         if lyrics_outcome.enable {
             self.set_lyrics_online(true);
@@ -960,7 +982,7 @@ impl eframe::App for App {
                     play = self.albums.show(
                         ui,
                         &self.library,
-                        self.playback.current_id(),
+                        self.playback.borrow_mut().current_id(),
                         &mut queue_requests,
                         self.playlists.summaries(),
                     );
@@ -970,7 +992,7 @@ impl eframe::App for App {
                         ui,
                         &mut self.albums,
                         &self.library,
-                        self.playback.current_id(),
+                        self.playback.borrow_mut().current_id(),
                         &mut queue_requests,
                         self.playlists.summaries(),
                     ));
@@ -982,12 +1004,12 @@ impl eframe::App for App {
                     opened_album = self.artists.show(ui, &mut self.albums, &self.library);
                 }
                 Tab::Radio => {
-                    let on_air = self.playback.radio_station().cloned();
+                    let on_air = self.playback.borrow_mut().radio_station().cloned();
                     radio_action = self.radio.show(
                         ui,
                         &self.library,
                         on_air.as_ref(),
-                        !self.playback.is_playing(),
+                        !self.playback.borrow_mut().is_playing(),
                         self.station_sync.is_some(),
                     );
                 }
@@ -995,7 +1017,7 @@ impl eframe::App for App {
                     if let Some(request) = self.playlists.show(
                         ui,
                         &self.library,
-                        self.playback.current_id(),
+                        self.playback.borrow_mut().current_id(),
                         &mut queue_requests,
                         &playlist_summaries,
                     ) {
@@ -1044,14 +1066,14 @@ impl eframe::App for App {
             self.tab = Tab::Albums;
         }
         match radio_action {
-            Some(radio::RadioAction::Play(station)) => self.playback.tune(station),
-            Some(radio::RadioAction::TogglePlayback) => self.playback.toggle(),
+            Some(radio::RadioAction::Play(station)) => self.playback.borrow_mut().tune(station),
+            Some(radio::RadioAction::TogglePlayback) => self.playback.borrow_mut().toggle(),
             Some(radio::RadioAction::TuneInAndPlay(station)) => {
                 if let Err(e) = self.library.tune_in(&station) {
                     self.status = Text::filled(i18n::could_not_tune_in, vec![e.to_string().into()]);
                 }
                 self.radio.reload(&self.library);
-                self.playback.tune(station);
+                self.playback.borrow_mut().tune(station);
             }
             Some(radio::RadioAction::TuneOut(uuid)) => {
                 if let Err(e) = self.library.tune_out(&uuid) {
@@ -1064,19 +1086,22 @@ impl eframe::App for App {
             None => {}
         }
         if let Some(request) = play {
-            self.playback.play_queue(request.tracks, request.index);
+            self.playback
+                .borrow_mut()
+                .play_queue(request.tracks, request.index);
         }
         if let Some((request, start_secs)) = movie_play {
             self.playback
+                .borrow_mut()
                 .play_from(request.tracks, request.index, start_secs);
         }
         for request in queue_requests {
             match request {
-                MenuRequest::PlayNext(item) => self.playback.play_next(item),
-                MenuRequest::AddToQueue(item) => self.playback.add_to_queue(item),
+                MenuRequest::PlayNext(item) => self.playback.borrow_mut().play_next(item),
+                MenuRequest::AddToQueue(item) => self.playback.borrow_mut().add_to_queue(item),
                 MenuRequest::ShowInfo(item) => {
                     self.info_track = Some(item);
-                    self.playback.panel = Panel::Info;
+                    self.playback.borrow_mut().panel = Panel::Info;
                 }
                 MenuRequest::AddToPlaylist { playlist, media_id } => {
                     match self.library.add_to_playlist(playlist, &[media_id]) {
@@ -1166,7 +1191,7 @@ impl eframe::App for App {
             }
             Some(settings_view::Action::SetReplayGain(mode)) => {
                 self.settings.replay_gain = mode;
-                self.playback.set_replay_gain(mode);
+                self.playback.borrow_mut().set_replay_gain(mode);
                 if let Err(e) = self.settings.save(&self.paths.settings) {
                     self.status =
                         Text::filled(i18n::could_not_save_settings, vec![e.to_string().into()]);

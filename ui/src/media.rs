@@ -1,6 +1,8 @@
 //! Media keys and the system's now-playing display: macOS Now Playing, MPRIS on Linux, and
 //! System Media Transport Controls on Windows.
 
+use std::cell::RefCell;
+use std::rc::{Rc, Weak};
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
@@ -31,7 +33,6 @@ const REFRESH: Duration = Duration::from_secs(5);
 
 pub struct Media {
     controls: MediaControls,
-    events: Receiver<MediaControlEvent>,
     /// The track and state last published. The system is told again only when one changes.
     shown: Option<(Option<i64>, PlayerState)>,
     sent_at: Option<Instant>,
@@ -53,51 +54,20 @@ impl Media {
         };
         let mut controls = MediaControls::new(config).ok()?;
         let (tx, events) = mpsc::channel();
+        DRAIN.with(|drain| drain.borrow_mut().events = Some(events));
         let ctx = ctx.clone();
         controls
             .attach(move |event| {
                 let _ = tx.send(event);
+                post_drain();
                 ctx.request_repaint();
             })
             .ok()?;
         Some(Self {
             controls,
-            events,
             shown: None,
             sent_at: None,
         })
-    }
-
-    /// Apply the key presses and system requests received since the last frame.
-    pub fn handle_events(&mut self, playback: &mut Playback) {
-        while let Ok(event) = self.events.try_recv() {
-            match event {
-                MediaControlEvent::Play => playback.play(),
-                MediaControlEvent::Pause => playback.pause(),
-                MediaControlEvent::Toggle => playback.toggle(),
-                MediaControlEvent::Next => playback.next(),
-                MediaControlEvent::Previous => playback.previous(),
-                MediaControlEvent::Stop => playback.stop(),
-                MediaControlEvent::Seek(SeekDirection::Forward) => {
-                    playback.seek_relative(SEEK_STEP);
-                }
-                MediaControlEvent::Seek(SeekDirection::Backward) => {
-                    playback.seek_relative(-SEEK_STEP);
-                }
-                MediaControlEvent::SeekBy(direction, by) => {
-                    let secs = by.as_secs_f64();
-                    match direction {
-                        SeekDirection::Forward => playback.seek_relative(secs),
-                        SeekDirection::Backward => playback.seek_relative(-secs),
-                    }
-                }
-                MediaControlEvent::SetPosition(MediaPosition(at)) => {
-                    playback.seek(at.as_secs_f64());
-                }
-                MediaControlEvent::SetVolume(level) => playback.set_volume(level as f32),
-                _ => {}
-            }
-        }
     }
 
     /// Tell the system what is playing, when the track or the state changes, and now and then
@@ -141,6 +111,106 @@ impl Media {
         self.sent_at = Some(Instant::now());
     }
 }
+
+/// Apply one key press or system request to the playback.
+fn apply(event: MediaControlEvent, playback: &mut Playback) {
+    match event {
+        MediaControlEvent::Play => playback.play(),
+        MediaControlEvent::Pause => playback.pause(),
+        MediaControlEvent::Toggle => playback.toggle(),
+        MediaControlEvent::Next => playback.next(),
+        MediaControlEvent::Previous => playback.previous(),
+        MediaControlEvent::Stop => playback.stop(),
+        MediaControlEvent::Seek(SeekDirection::Forward) => {
+            playback.seek_relative(SEEK_STEP);
+        }
+        MediaControlEvent::Seek(SeekDirection::Backward) => {
+            playback.seek_relative(-SEEK_STEP);
+        }
+        MediaControlEvent::SeekBy(direction, by) => {
+            let secs = by.as_secs_f64();
+            match direction {
+                SeekDirection::Forward => playback.seek_relative(secs),
+                SeekDirection::Backward => playback.seek_relative(-secs),
+            }
+        }
+        MediaControlEvent::SetPosition(MediaPosition(at)) => {
+            playback.seek(at.as_secs_f64());
+        }
+        MediaControlEvent::SetVolume(level) => playback.set_volume(level as f32),
+        _ => {}
+    }
+}
+
+/// The state the event handler needs, kept on the main thread. The players stay there, so the
+/// playback is reached only from the main thread.
+#[derive(Default)]
+struct Drain {
+    playback: Option<Weak<RefCell<Playback>>>,
+    events: Option<Receiver<MediaControlEvent>>,
+}
+
+thread_local! {
+    static DRAIN: RefCell<Drain> = RefCell::new(Drain::default());
+}
+
+/// Let the media event handler reach the app's playback. The app calls this once it has made the
+/// playback shared.
+pub fn register(playback: &Rc<RefCell<Playback>>) {
+    DRAIN.with(|drain| drain.borrow_mut().playback = Some(Rc::downgrade(playback)));
+}
+
+/// Apply the key presses and system requests received so far. Runs on the main thread, both from
+/// the app's frames and from the main dispatch queue, so it works while the window is not drawn.
+/// Call it only when the app is not holding the playback.
+pub fn drain_events() {
+    let Some(playback) =
+        DRAIN.with(|drain| drain.borrow().playback.as_ref().and_then(Weak::upgrade))
+    else {
+        return;
+    };
+    let Ok(mut playback) = playback.try_borrow_mut() else {
+        // The app is using the playback right now. Try again once it has let go.
+        post_drain();
+        return;
+    };
+    DRAIN.with(|drain| {
+        let drain = drain.borrow();
+        if let Some(events) = drain.events.as_ref() {
+            while let Ok(event) = events.try_recv() {
+                apply(event, &mut playback);
+            }
+        }
+    });
+}
+
+/// Schedule `drain_events` on the main dispatch queue. That queue is served by the app's run loop,
+/// so it runs even when the window is covered and eframe is not drawing it.
+#[cfg(target_os = "macos")]
+fn post_drain() {
+    unsafe extern "C" {
+        static _dispatch_main_q: std::ffi::c_void;
+        fn dispatch_async_f(
+            queue: *const std::ffi::c_void,
+            context: *mut std::ffi::c_void,
+            work: extern "C" fn(*mut std::ffi::c_void),
+        );
+    }
+    extern "C" fn run(_context: *mut std::ffi::c_void) {
+        drain_events();
+    }
+    // SAFETY: the main queue is libdispatch's own static, and `run` ignores its context.
+    unsafe {
+        dispatch_async_f(
+            std::ptr::addr_of!(_dispatch_main_q),
+            std::ptr::null_mut(),
+            run,
+        );
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn post_drain() {}
 
 /// Write the track's embedded cover to a temporary file, and return its `file://` URL. The
 /// system reads the cover from there. `None` when the track has no cover or it can't be written.
