@@ -16,6 +16,9 @@ Cross-platform Rust media library and player (macOS, Linux, Windows). Layout: `c
 - Declare every third-party dependency once, in the root `Cargo.toml` under `[workspace.dependencies]`. Crates reference it with `dep.workspace = true`. Do not add a version to a crate's own `Cargo.toml`.
 - Default features are always disabled (`default-features = false`). Enable only the features you need, explicitly, in the root file.
 
+## Docs
+- `README.md` describes what the app does today. When a change adds, removes or alters a feature, a setting, a build command, a requirement or a network request, update the README in the same change. Check each claim against the code before writing it. Do not list a feature that is only partly built, and do not describe planned work.
+
 ## Code
 - Library code returns errors (`thiserror` enums); it does not panic on bad input.
 - Keep backend-specific types out of public APIs. The UI depends on the `Player` trait and the `core` types, not on libmpv, FFmpeg or SQLite types.
