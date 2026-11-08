@@ -32,8 +32,15 @@ use windows::Win32::System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoTaskMe
 use windows::core::{GUID, Interface};
 
 use super::annexb::{self, NalFormat};
+use super::d3d;
 use super::semiplanar;
 use super::{DecodeError, Packet, Picture, StreamConfig, Surface, VideoDecoder};
+use std::ffi::c_void;
+use windows::Win32::Graphics::Direct3D11::ID3D11Texture2D;
+use windows::Win32::Media::MediaFoundation::{
+    IMFDXGIBuffer, MF_SA_D3D11_AWARE, MFT_MESSAGE_SET_D3D_MANAGER,
+    MFT_OUTPUT_STREAM_CAN_PROVIDE_SAMPLES,
+};
 
 const BACKEND: &str = "Media Foundation";
 
@@ -67,6 +74,8 @@ pub struct MediaFoundation {
     output_size: u32,
     /// Whether the transform fills in its own output samples, rather than taking ours.
     provides_samples: bool,
+    /// The Direct3D device that a hardware decoder draws on. `None` for a software decoder.
+    d3d: Option<d3d::Device>,
     length_size: usize,
     /// The parameter sets as Annex B. Containers keep them in the configuration record, not in the
     /// packets, so they go in front of each keyframe.
@@ -107,6 +116,20 @@ impl MediaFoundation {
         let transform: IMFTransform = unsafe { activation.ActivateObject() }
             .map_err(|error| step_error("ActivateObject", error))?;
         let events = configure(&transform)?;
+
+        // A hardware decoder draws on a Direct3D device, which it must be given before its input type
+        // is set. Software decoders need none.
+        let d3d = if events.is_some() {
+            let device = d3d::Device::create()?;
+            // SAFETY: the transform is alive, and the manager stays alive as long as the device does.
+            unsafe {
+                transform.ProcessMessage(MFT_MESSAGE_SET_D3D_MANAGER, device.manager_pointer())
+            }
+            .map_err(|error| step_error("ProcessMessage(SET_D3D_MANAGER)", error))?;
+            Some(device)
+        } else {
+            None
+        };
 
         let input = input_type(subtype, stream.width, stream.height, &parameter_sets)?;
         // SAFETY: the transform and the media type are valid for the call.
@@ -152,6 +175,7 @@ impl MediaFoundation {
             stride: 0,
             output_size: 0,
             provides_samples: false,
+            d3d,
             length_size,
             parameter_sets,
             packets_in: 0,
@@ -324,8 +348,12 @@ impl MediaFoundation {
             // SAFETY: the transform is alive.
             let info = unsafe { self.transform.GetOutputStreamInfo(0) }
                 .map_err(|error| step_error("GetOutputStreamInfo", error))?;
-            self.provides_samples =
-                (info.dwFlags & MFT_OUTPUT_STREAM_PROVIDES_SAMPLES.0 as u32) != 0;
+            // A transform that provides its own samples, or can, is given none: a hardware decoder's
+            // samples are GPU textures that only it can allocate.
+            self.provides_samples = (info.dwFlags
+                & (MFT_OUTPUT_STREAM_PROVIDES_SAMPLES.0 | MFT_OUTPUT_STREAM_CAN_PROVIDE_SAMPLES.0)
+                    as u32)
+                != 0;
             // A frame holds its luma and half as much chroma again, so one and a half times the
             // stride times the height. The transform's own figure is used when it is larger.
             let frame_bytes =
@@ -337,10 +365,66 @@ impl MediaFoundation {
     }
 
     /// Copy one decoded frame out of its sample into a picture, cropped to the stream's size.
-    fn picture(&self, sample: &IMFSample) -> Result<Picture, DecodeError> {
+    fn picture(&mut self, sample: &IMFSample) -> Result<Picture, DecodeError> {
         // SAFETY: the sample is alive for the call.
         let presentation_time = unsafe { sample.GetSampleTime() }.map_err(backend_error)?;
-        // SAFETY: as above. The buffer is one contiguous block, even if the transform returned several.
+        let samples = match self.gpu_frame(sample)? {
+            Some(samples) => samples,
+            None => self.cpu_frame(sample)?,
+        };
+        let width = self.stream_width.min(self.frame_width);
+        let height = self.stream_height.min(self.frame_height);
+        let pixel_format = if self.bit_depth > 8 {
+            *b"I010"
+        } else {
+            *b"I420"
+        };
+        Ok(Picture {
+            width: width as u32,
+            height: height as u32,
+            presentation_time,
+            pixel_format,
+            surface: Surface::Cpu(samples),
+        })
+    }
+
+    /// The frame's samples when the decoder gave a GPU texture: copied to system memory with Direct3D,
+    /// then repacked. `None` when the sample is in system memory instead.
+    fn gpu_frame(&mut self, sample: &IMFSample) -> Result<Option<Vec<u8>>, DecodeError> {
+        if self.d3d.is_none() {
+            return Ok(None);
+        }
+        // SAFETY: the sample is alive for the call.
+        let buffer = unsafe { sample.GetBufferByIndex(0) }.map_err(backend_error)?;
+        let Ok(dxgi) = buffer.cast::<IMFDXGIBuffer>() else {
+            return Ok(None);
+        };
+        // SAFETY: the buffer is alive for the call.
+        let subresource = unsafe { dxgi.GetSubresourceIndex() }.map_err(backend_error)?;
+        let mut raw: *mut c_void = ptr::null_mut();
+        // SAFETY: the interface ID names the texture type, and the pointer receives one reference.
+        unsafe { dxgi.GetResource(&ID3D11Texture2D::IID, &mut raw as *mut *mut c_void) }
+            .map_err(backend_error)?;
+        if raw.is_null() {
+            return Err(failed("the decoder gave a frame with no texture"));
+        }
+        // SAFETY: `raw` is the texture the call returned, and the reference it carries is taken over here.
+        let texture = unsafe { ID3D11Texture2D::from_raw(raw) };
+        let device = self
+            .d3d
+            .as_mut()
+            .ok_or_else(|| failed("no Direct3D device for a GPU frame"))?;
+        let (bytes, pitch, rows) = device.read(&texture, subresource)?;
+        let samples = self
+            .repack_rows(&bytes, pitch, rows)
+            .ok_or_else(|| failed("a decoded frame is shorter than its size"))?;
+        Ok(Some(samples))
+    }
+
+    /// The frame's samples when the decoder wrote them to system memory.
+    fn cpu_frame(&self, sample: &IMFSample) -> Result<Vec<u8>, DecodeError> {
+        // SAFETY: the sample is alive for the call. The buffer is one contiguous block, even if the
+        // transform returned several.
         let buffer = unsafe { sample.ConvertToContiguousBuffer() }.map_err(backend_error)?;
         let mut data: *mut u8 = ptr::null_mut();
         let mut length = 0u32;
@@ -359,37 +443,22 @@ impl MediaFoundation {
         } else {
             // SAFETY: `length` bytes at `data` are readable while the buffer is locked.
             let bytes = unsafe { std::slice::from_raw_parts(data, length as usize) };
-            self.repack(bytes)
+            self.repack_rows(bytes, self.stride, self.frame_height)
         };
         // SAFETY: the buffer was locked above.
         unsafe { buffer.Unlock() }.map_err(backend_error)?;
-
-        let samples =
-            converted.ok_or_else(|| failed("a decoded frame is shorter than its size"))?;
-        let width = self.stream_width.min(self.frame_width);
-        let height = self.stream_height.min(self.frame_height);
-        let pixel_format = if self.bit_depth > 8 {
-            *b"I010"
-        } else {
-            *b"I420"
-        };
-        Ok(Picture {
-            width: width as u32,
-            height: height as u32,
-            presentation_time,
-            pixel_format,
-            surface: Surface::Cpu(samples),
-        })
+        converted.ok_or_else(|| failed("a decoded frame is shorter than its size"))
     }
 
-    /// Repack the frame's bytes into planar samples, cropped to the stream's size.
-    fn repack(&self, bytes: &[u8]) -> Option<Vec<u8>> {
+    /// Repack a frame's bytes into planar samples, cropped to the stream's size. `stride` is the bytes
+    /// in a row of the frame, and `frame_height` the rows of luma, where the chroma starts.
+    fn repack_rows(&self, bytes: &[u8], stride: usize, frame_height: usize) -> Option<Vec<u8>> {
         let width = self.stream_width.min(self.frame_width);
         let height = self.stream_height.min(self.frame_height);
         if self.bit_depth > 8 {
-            semiplanar::p010_to_i010(bytes, self.stride, self.frame_height, width, height)
+            semiplanar::p010_to_i010(bytes, stride, frame_height, width, height)
         } else {
-            semiplanar::nv12_to_i420(bytes, self.stride, self.frame_height, width, height)
+            semiplanar::nv12_to_i420(bytes, stride, frame_height, width, height)
         }
     }
 }
@@ -519,6 +588,9 @@ fn configure(transform: &IMFTransform) -> Result<Option<IMFMediaEventGenerator>,
             if asynchronous {
                 unsafe { attributes.SetUINT32(&MF_TRANSFORM_ASYNC_UNLOCK, 1) }
                     .map_err(backend_error)?;
+                // Tells the decoder that its frames may be Direct3D textures, which it needs before it
+                // offers output types.
+                unsafe { attributes.SetUINT32(&MF_SA_D3D11_AWARE, 1) }.map_err(backend_error)?;
             }
             asynchronous
         }

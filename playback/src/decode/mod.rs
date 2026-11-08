@@ -5,6 +5,8 @@
 
 pub mod audio;
 pub mod av1;
+#[cfg(windows)]
+mod d3d;
 pub mod frames;
 #[cfg(not(any(target_os = "macos", windows)))]
 pub mod libav;
