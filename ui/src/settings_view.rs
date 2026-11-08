@@ -132,10 +132,8 @@ fn segmented<T: Copy + PartialEq>(
     } else {
         22.0
     };
-    egui::Frame::new()
+    squircle::PillFrame::default()
         .fill(colours.segment)
-        .corner_radius(999.0)
-        .inner_margin(egui::Margin::symmetric(3, 3))
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.spacing_mut().button_padding.x = padding;
@@ -172,10 +170,9 @@ fn switch(ui: &mut egui::Ui, colours: &LibraryColours, on: bool) -> bool {
 
 /// A small outlined label, such as a kind's name.
 fn chip(ui: &mut egui::Ui, label: &str, text: egui::Color32, stroke: egui::Color32) {
-    egui::Frame::new()
+    squircle::PillFrame::default()
         .stroke(egui::Stroke::new(1.0, stroke))
-        .corner_radius(999.0)
-        .inner_margin(egui::Margin::symmetric(10, 3))
+        .margin(egui::Margin::symmetric(10, 3))
         .show(ui, |ui| {
             ui.label(
                 egui::RichText::new(label.to_uppercase())
@@ -380,10 +377,9 @@ pub fn show(
         );
         if processing {
             ui.add_space(4.0);
-            egui::Frame::new()
+            squircle::PillFrame::default()
                 .fill(colours.amber_fill)
-                .corner_radius(999.0)
-                .inner_margin(egui::Margin::symmetric(10, 3))
+                .margin(egui::Margin::symmetric(10, 3))
                 .show(ui, |ui| {
                     ui.label(
                         egui::RichText::new("Processing")
@@ -487,10 +483,8 @@ pub fn show(
             ui.horizontal_wrapped(|ui| {
                 // The same wider padding as "Rescan all", tightened when the window is narrow.
                 ui.spacing_mut().button_padding.x = if ui.available_width() < 420.0 { 12.0 } else { 22.0 };
-                egui::Frame::new()
+                squircle::PillFrame::default()
                     .fill(colours.segment)
-                    .corner_radius(999.0)
-                    .inner_margin(egui::Margin::symmetric(3, 3))
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
                             for (k, label) in KINDS {

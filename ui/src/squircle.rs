@@ -207,6 +207,9 @@ impl<W: egui::Widget> SquircleButton<W> {
         // The child's own response gives its size. The region's minimum rectangle does not, because
         // a right-to-left region can report the whole height it was given.
         let mut content = ui.new_child(egui::UiBuilder::new().max_rect(bounds));
+        // Labels in a button are not selectable, so hovering them keeps the arrow cursor instead of
+        // changing to the text cursor.
+        content.style_mut().interaction.selectable_labels = false;
         let used = self.child.ui(&mut content).rect;
 
         let outer = egui::Rect::from_min_max(
@@ -377,6 +380,68 @@ impl<'t> SquircleTextField<'t> {
 impl<W: egui::Widget> egui::Widget for SquircleButton<W> {
     fn ui(self, ui: &mut egui::Ui) -> egui::Response {
         self.show(ui)
+    }
+}
+
+/// A pill-shaped frame with continuous corners around its contents, the same shape as a squircle
+/// button: an optional fill and outline, with the contents inset by `margin`. Its corners are as round
+/// as its box allows. Use it for any container that should match the buttons.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PillFrame {
+    fill: egui::Color32,
+    stroke: Option<egui::Stroke>,
+    margin: egui::Margin,
+}
+
+impl Default for PillFrame {
+    /// No fill or outline, and the contents 3 points in from the edge.
+    fn default() -> Self {
+        Self {
+            fill: egui::Color32::TRANSPARENT,
+            stroke: None,
+            margin: egui::Margin::symmetric(3, 3),
+        }
+    }
+}
+
+impl PillFrame {
+    /// The fill colour. Without one, the frame is transparent.
+    #[must_use]
+    pub fn fill(mut self, colour: egui::Color32) -> Self {
+        self.fill = colour;
+        self
+    }
+
+    /// An outline drawn round the frame. Without one, there is none.
+    #[must_use]
+    pub fn stroke(mut self, stroke: egui::Stroke) -> Self {
+        self.stroke = Some(stroke);
+        self
+    }
+
+    /// The space between the edge of the frame and its contents.
+    #[must_use]
+    pub fn margin(mut self, margin: egui::Margin) -> Self {
+        self.margin = margin;
+        self
+    }
+
+    /// Lay the contents out inside the frame, then paint the frame behind them.
+    pub fn show<R>(
+        self,
+        ui: &mut egui::Ui,
+        contents: impl FnOnce(&mut egui::Ui) -> R,
+    ) -> egui::InnerResponse<R> {
+        // The frame is painted behind the contents, in a slot reserved before they are laid out.
+        let background = ui.painter().add(egui::Shape::Noop);
+        let framed = egui::Frame::new()
+            .inner_margin(self.margin)
+            .show(ui, contents);
+        if ui.is_rect_visible(framed.response.rect) {
+            let shapes = squircle_shapes(framed.response.rect, None, self.fill, self.stroke);
+            ui.painter().set(background, egui::Shape::Vec(shapes));
+        }
+        framed
     }
 }
 
