@@ -1,4 +1,4 @@
-use crate::strings;
+use crate::i18n;
 use std::collections::{HashMap, HashSet};
 
 use eframe::egui;
@@ -25,9 +25,9 @@ const FAVORITE_COLOR: egui::Color32 = egui::Color32::from_rgb(255, 196, 64);
 /// The name of a sort order, as shown in the grid's menu.
 fn sort_label(sort: AlbumSort) -> &'static str {
     match sort {
-        AlbumSort::Name => strings::NAME,
-        AlbumSort::Year => strings::YEAR,
-        AlbumSort::Added => strings::DATE_ADDED,
+        AlbumSort::Name => i18n::name(),
+        AlbumSort::Year => i18n::year(),
+        AlbumSort::Added => i18n::date_added(),
     }
 }
 
@@ -37,16 +37,9 @@ const COVER_DETAIL: f32 = 220.0;
 /// The album cover on a narrow page, and the width below which the page is laid out as a phone column.
 const COVER_PHONE: f32 = 220.0;
 const NARROW_DETAIL: f32 = 560.0;
-/// Codecs that are lossless. Their details show the codec alone, with no bitrate.
-const LOSSLESS: [&str; 7] = [
-    strings::FLAC,
-    strings::ALAC,
-    strings::WAV,
-    strings::AIFF,
-    strings::APE,
-    strings::WAVPACK,
-    strings::PCM,
-];
+/// Codecs that are lossless. Their details show the codec alone, with no bitrate. These are codec
+/// names as files report them, matched without case, not text to translate.
+const LOSSLESS: [&str; 7] = ["FLAC", "ALAC", "WAV", "AIFF", "APE", "WAVPACK", "PCM"];
 /// Space under a grid tile's cover for its title and composer, and the gap between tiles.
 pub(crate) const TILE_TEXT: f32 = 44.0;
 /// The corner radius of album covers, which are squircles. A squircle only reads as one with
@@ -235,13 +228,13 @@ impl AlbumsView {
         match self.selected {
             None => {
                 open = crate::page(ui, egui::Margin::symmetric(0, 0), |ui| {
-                    crate::fonts::page_title(ui, strings::ALBUMS);
+                    crate::fonts::page_title(ui, i18n::albums());
                     self.toolbar(ui, library);
                     if self.albums.is_empty() {
                         if self.filter_active() {
-                            ui.label(strings::NO_ALBUMS_MATCH_THESE_FILTERS);
+                            ui.label(i18n::no_albums_match_these_filters());
                         } else {
-                            ui.label(strings::NO_ALBUMS_YET_CHOOSE_YOUR_LIBRARY);
+                            ui.label(i18n::no_albums_yet_choose_your_library());
                         }
                         return None;
                     }
@@ -289,18 +282,18 @@ impl AlbumsView {
                 .selected_text(
                     genre_to
                         .clone()
-                        .unwrap_or_else(|| strings::ALL_GENRES.into()),
+                        .unwrap_or_else(|| i18n::all_genres().into()),
                 )
                 .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut genre_to, None, strings::ALL_GENRES);
+                    ui.selectable_value(&mut genre_to, None, i18n::all_genres());
                     for name in &self.genres {
                         ui.selectable_value(&mut genre_to, Some(name.clone()), name.as_str());
                     }
                 });
             egui::ComboBox::from_id_salt("album_year")
-                .selected_text(year_to.map_or(strings::ALL_YEARS.to_owned(), |y| y.to_string()))
+                .selected_text(year_to.map_or(i18n::all_years().to_owned(), |y| y.to_string()))
                 .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut year_to, None, strings::ALL_YEARS);
+                    ui.selectable_value(&mut year_to, None, i18n::all_years());
                     for &y in &self.years {
                         ui.selectable_value(&mut year_to, Some(y), y.to_string());
                     }
@@ -397,7 +390,7 @@ impl AlbumsView {
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
                             if album_back_button(ui)
-                                .on_hover_text(strings::ALL_ALBUMS)
+                                .on_hover_text(i18n::all_albums())
                                 .clicked()
                             {
                                 back = true;
@@ -409,7 +402,7 @@ impl AlbumsView {
                         let title = album
                             .album
                             .clone()
-                            .unwrap_or_else(|| strings::UNKNOWN_ALBUM.into());
+                            .unwrap_or_else(|| i18n::unknown_album().into());
                         let artist = album.artists.join(", ");
                         let total_ms: i64 = self.tracks.iter().filter_map(|t| t.duration_ms).sum();
                         let first = self.tracks.first();
@@ -446,7 +439,7 @@ impl AlbumsView {
                         // The actions: Play, Shuffle and the favourite star.
                         let mut actions = |ui: &mut egui::Ui| {
                             ui.horizontal(|ui| {
-                                if pill(ui, &palette, strings::PLAY, PillIcon::Play, true).clicked()
+                                if pill(ui, &palette, i18n::play(), PillIcon::Play, true).clicked()
                                 {
                                     play = Some(PlayRequest {
                                         tracks: self.tracks.clone(),
@@ -454,7 +447,7 @@ impl AlbumsView {
                                     });
                                 }
                                 ui.add_space(10.0);
-                                if pill(ui, &palette, strings::SHUFFLE, PillIcon::Shuffle, false)
+                                if pill(ui, &palette, i18n::shuffle(), PillIcon::Shuffle, false)
                                     .clicked()
                                 {
                                     play = Some(PlayRequest {
@@ -464,9 +457,9 @@ impl AlbumsView {
                                 }
                                 ui.add_space(10.0);
                                 let tip = if favorite_album {
-                                    strings::REMOVE_FROM_FAVOURITES
+                                    i18n::remove_from_favourites()
                                 } else {
-                                    strings::ADD_TO_FAVOURITES
+                                    i18n::add_to_favourites()
                                 };
                                 if star_circle(ui, &palette, favorite_album)
                                     .on_hover_text(tip)
@@ -482,7 +475,7 @@ impl AlbumsView {
                                 cover_image(ui, cover.as_ref(), COVER_PHONE);
                                 ui.add_space(22.0);
                                 ui.label(
-                                    egui::RichText::new(strings::ALBUM)
+                                    egui::RichText::new(i18n::album())
                                         .size(11.0)
                                         .color(palette.weak),
                                 );
@@ -527,7 +520,7 @@ impl AlbumsView {
                                                 .color(palette.text),
                                         );
                                         ui.label(
-                                            egui::RichText::new(strings::ALBUM)
+                                            egui::RichText::new(i18n::album())
                                                 .size(11.0)
                                                 .color(palette.weak),
                                         );
@@ -1065,7 +1058,7 @@ pub(crate) fn album_tile(
         album
             .album
             .as_deref()
-            .unwrap_or(strings::UNKNOWN_ALBUM)
+            .unwrap_or(i18n::unknown_album())
             .to_owned(),
         (egui::FontId::proportional(14.0), name_colour),
         offset,

@@ -1,6 +1,6 @@
 //! The lyrics and track info panels, beside the main view.
 
-use crate::strings;
+use crate::i18n;
 use std::path::Path;
 use std::process::Command;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
@@ -137,7 +137,7 @@ impl SidePanels {
             }
             Err(TryRecvError::Empty) => self.results = Some(rx),
             Err(TryRecvError::Disconnected) => {
-                self.lookup = Lookup::Failed(strings::THE_LOOKUP_STOPPED_UNEXPECTEDLY.into());
+                self.lookup = Lookup::Failed(i18n::the_lookup_stopped_unexpectedly().into());
             }
         }
     }
@@ -192,10 +192,10 @@ impl SidePanels {
         online: bool,
     ) -> LyricsOutcome {
         let mut outcome = LyricsOutcome::default();
-        heading(ui, strings::LYRICS);
+        heading(ui, i18n::lyrics());
         let Some(item) = item else {
             indented(ui, |ui| {
-                ui.weak(strings::NOTHING_PLAYING_2);
+                ui.weak(i18n::nothing_playing_2());
             });
             return outcome;
         };
@@ -224,7 +224,7 @@ impl SidePanels {
                         }),
                         None => indented(ui, |ui| {
                             if !online {
-                                ui.label(strings::THIS_TRACK_HAS_NO_LYRICS_IN);
+                                ui.label(i18n::this_track_has_no_lyrics_in());
                                 ui.add_space(4.0);
                                 offer(ui, &mut outcome);
                             } else {
@@ -232,21 +232,21 @@ impl SidePanels {
                                     Lookup::Idle | Lookup::Pending => {
                                         ui.horizontal(|ui| {
                                             ui.spinner();
-                                            ui.weak(strings::LOOKING_UP_LYRICS_ON_LRCLIB_NET);
+                                            ui.weak(i18n::looking_up_lyrics_on_lrclib_net());
                                         });
                                     }
                                     Lookup::Done => {
-                                        ui.weak(strings::NO_LYRICS_WERE_FOUND_ON_LRCLIB);
+                                        ui.weak(i18n::no_lyrics_were_found_on_lrclib());
                                     }
                                     Lookup::Failed(e) => {
                                         ui.colored_label(
                                             ui.visuals().error_fg_color,
-                                            strings::fill(
-                                                strings::COULDNT_REACH_LRCLIB,
+                                            i18n::fill(
+                                                i18n::couldnt_reach_lrclib(),
                                                 &[&e.to_string()],
                                             ),
                                         );
-                                        if squircle::text_button(ui, strings::TRY_AGAIN).clicked() {
+                                        if squircle::text_button(ui, i18n::try_again()).clicked() {
                                             self.lookup = Lookup::Idle;
                                         }
                                     }
@@ -309,10 +309,10 @@ impl SidePanels {
     }
 
     pub fn info(&mut self, ui: &mut egui::Ui, library: &Library, item: Option<&MediaItem>) {
-        heading(ui, strings::TRACK_INFO);
+        heading(ui, i18n::track_info());
         let Some(item) = item else {
             indented(ui, |ui| {
-                ui.weak(strings::NOTHING_PLAYING_2);
+                ui.weak(i18n::nothing_playing_2());
             });
             return;
         };
@@ -340,44 +340,44 @@ impl SidePanels {
                         .num_columns(2)
                         .spacing([12.0, 6.0])
                         .show(ui, |ui| {
-                            row(ui, strings::TITLE, &format::title(item));
+                            row(ui, i18n::title(), &format::title(item));
                             row(
                                 ui,
-                                strings::ARTIST,
+                                i18n::artist(),
                                 item.artist
                                     .as_deref()
                                     .or(item.album_artist.as_deref())
                                     .unwrap_or("—"),
                             );
-                            row(ui, strings::ALBUM_2, item.album.as_deref().unwrap_or("—"));
-                            row(ui, strings::CODEC, item.codec.as_deref().unwrap_or("—"));
-                            row(ui, strings::DURATION, &format::duration(item.duration_ms));
-                            row(ui, strings::SIZE, &format::size(item.size));
+                            row(ui, i18n::album_2(), item.album.as_deref().unwrap_or("—"));
+                            row(ui, i18n::codec(), item.codec.as_deref().unwrap_or("—"));
+                            row(ui, i18n::duration(), &format::duration(item.duration_ms));
+                            row(ui, i18n::size(), &format::size(item.size));
                             if let Some(kbps) = item.bitrate_kbps {
-                                row(ui, strings::BITRATE, &format::kbps(kbps));
+                                row(ui, i18n::bitrate(), &format::kbps(kbps));
                             }
                             if let Some(sample) =
                                 format::sample_format(item.bit_depth, item.sample_rate)
                             {
-                                row(ui, strings::FORMAT, &sample);
+                                row(ui, i18n::format(), &sample);
                             }
                             if let Some(channels) = item.channels {
-                                row(ui, strings::CHANNELS, &format::channels(channels));
+                                row(ui, i18n::channels(), &format::channels(channels));
                             }
                             if let Some(details) = details {
-                                row(ui, strings::PICTURES, &details.pictures.to_string());
+                                row(ui, i18n::pictures(), &details.pictures.to_string());
                             }
-                            row(ui, strings::FILE, &item.path.display().to_string());
+                            row(ui, i18n::file(), &item.path.display().to_string());
                         });
                     ui.add_space(10.0);
-                    if squircle::text_button(ui, strings::REVEAL_IN_FINDER).clicked() {
+                    if squircle::text_button(ui, i18n::reveal_in_finder()).clicked() {
                         reveal(&item.path);
                     }
                 });
                 if let Some(details) = details {
                     ui.add_space(16.0);
                     indented(ui, |ui| {
-                        ui.label(crate::fonts::bold(strings::TAGS));
+                        ui.label(crate::fonts::bold(i18n::tags()));
                         ui.add_space(4.0);
                         egui::Grid::new("track_tags")
                             .num_columns(2)
@@ -403,9 +403,7 @@ impl SidePanels {
                             .any(|(line, draft)| line.editable && &line.value != draft);
                         ui.horizontal(|ui| {
                             if ui
-                                .add_enabled_ui(dirty, |ui| {
-                                    squircle::text_button(ui, strings::SAVE)
-                                })
+                                .add_enabled_ui(dirty, |ui| squircle::text_button(ui, i18n::save()))
                                 .inner
                                 .clicked()
                             {
@@ -413,10 +411,10 @@ impl SidePanels {
                             }
                             if ui
                                 .add_enabled_ui(can_revert, |ui| {
-                                    squircle::text_button(ui, strings::REVERT)
+                                    squircle::text_button(ui, i18n::revert())
                                 })
                                 .inner
-                                .on_hover_text(strings::PUT_BACK_THE_TAGS_THE_FILE)
+                                .on_hover_text(i18n::put_back_the_tags_the_file())
                                 .clicked()
                             {
                                 action = Some(TagAction::Revert);
@@ -507,8 +505,8 @@ fn store(library: &Library, id: i64, text: Option<&str>) {
 
 /// The prompt that asks for permission before lyrics are looked up online.
 fn offer(ui: &mut egui::Ui, outcome: &mut LyricsOutcome) {
-    ui.label(strings::LOOK_UP_SYNCED_LYRICS_ON_LRCLIB_2);
-    if squircle::text_button(ui, strings::TURN_ON_LYRICS_LOOKUP).clicked() {
+    ui.label(i18n::look_up_synced_lyrics_on_lrclib_2());
+    if squircle::text_button(ui, i18n::turn_on_lyrics_lookup()).clicked() {
         outcome.enable = true;
     }
 }

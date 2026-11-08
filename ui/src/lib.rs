@@ -6,6 +6,7 @@ mod colour;
 mod covers;
 mod fonts;
 mod format;
+mod i18n;
 mod icons;
 mod media;
 mod mesh_background;
@@ -21,7 +22,6 @@ mod settings_view;
 mod side;
 mod slider;
 pub mod squircle;
-mod strings;
 #[cfg(target_os = "macos")]
 pub mod video_gpu;
 
@@ -287,7 +287,7 @@ impl App {
             app.start_station_sync(&ctx);
         }
         if app.settings.library_roots.is_empty() {
-            app.status = strings::ADD_A_FOLDER_TO_GET_STARTED.into();
+            app.status = i18n::add_a_folder_to_get_started().into();
         } else {
             app.watch(&ctx);
             let roots = app.settings.library_roots.clone();
@@ -348,7 +348,7 @@ impl App {
             ctx.request_repaint();
         });
         self.station_sync = Some(rx);
-        self.status = strings::SYNCING_THE_RADIO_STATION_LIST.into();
+        self.status = i18n::syncing_the_radio_station_list().into();
     }
 
     /// Collect a finished station sync, if there is one.
@@ -361,12 +361,10 @@ impl App {
                 self.status = format!("Radio: {count} stations.");
                 self.radio.reload(&self.library);
             }
-            Ok(Err(e)) => {
-                self.status = strings::fill(strings::RADIO_SYNC_FAILED, &[&e.to_string()])
-            }
+            Ok(Err(e)) => self.status = i18n::fill(i18n::radio_sync_failed(), &[&e.to_string()]),
             Err(TryRecvError::Empty) => self.station_sync = Some(rx),
             Err(TryRecvError::Disconnected) => {
-                self.status = strings::RADIO_STATION_SYNC_STOPPED_UNEXPECTEDLY.into();
+                self.status = i18n::radio_station_sync_stopped_unexpectedly().into();
             }
         }
     }
@@ -571,7 +569,7 @@ impl App {
             Ok(result) => result,
             Err(TryRecvError::Empty) => return,
             Err(TryRecvError::Disconnected) => {
-                Err(strings::THE_SCAN_STOPPED_UNEXPECTEDLY.to_string())
+                Err(i18n::the_scan_stopped_unexpectedly().to_string())
             }
         };
         let name = root.display().to_string();
@@ -594,8 +592,8 @@ impl App {
                 line
             }
             // One unreadable folder (for example an unplugged drive) doesn't stop the others.
-            Err(e) => strings::fill(
-                strings::COULD_NOT_BE_SCANNED,
+            Err(e) => i18n::fill(
+                i18n::could_not_be_scanned(),
                 &[&name.to_string(), &e.to_string()],
             ),
         };
@@ -627,7 +625,7 @@ impl App {
         ctx.show_viewport_immediate(
             egui::ViewportId::from_hash_of("quokka-video"),
             egui::ViewportBuilder::default()
-                .with_title(strings::VIDEO)
+                .with_title(i18n::video())
                 .with_inner_size([960.0, 540.0]),
             |ui, _class| {
                 if ui.ctx().input(|input| input.viewport().close_requested()) {
@@ -778,14 +776,14 @@ impl eframe::App for App {
                 widgets.hovered.expansion = 0.0;
                 widgets.active.expansion = 0.0;
                 for (tab, icon, label) in [
-                    (Tab::Search, icons::MAGNIFYING_GLASS, strings::SEARCH),
-                    (Tab::Albums, icons::VINYL_RECORD, strings::ALBUMS),
-                    (Tab::Recent, icons::CLOCK_COUNTER_CLOCKWISE, strings::RECENT),
-                    (Tab::Artists, icons::MICROPHONE_STAGE, strings::ARTISTS),
-                    (Tab::Playlists, icons::PLAYLIST, strings::PLAYLISTS),
-                    (Tab::Radio, icons::RADIO, strings::RADIO),
-                    (Tab::Movies, icons::FILM_STRIP, strings::MOVIES),
-                    (Tab::Settings, icons::GEAR, strings::SETTINGS),
+                    (Tab::Search, icons::MAGNIFYING_GLASS, i18n::search()),
+                    (Tab::Albums, icons::VINYL_RECORD, i18n::albums()),
+                    (Tab::Recent, icons::CLOCK_COUNTER_CLOCKWISE, i18n::recent()),
+                    (Tab::Artists, icons::MICROPHONE_STAGE, i18n::artists()),
+                    (Tab::Playlists, icons::PLAYLIST, i18n::playlists()),
+                    (Tab::Radio, icons::RADIO, i18n::radio()),
+                    (Tab::Movies, icons::FILM_STRIP, i18n::movies()),
+                    (Tab::Settings, icons::GEAR, i18n::settings()),
                 ] {
                     let selected = self.tab == tab;
                     let width = ui.available_width();
@@ -805,7 +803,7 @@ impl eframe::App for App {
                 ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
                     if self.scan.is_some() {
                         if self.sidebar_open {
-                            ui.weak(strings::SCANNING);
+                            ui.weak(i18n::scanning());
                         }
                         ui.spinner();
                     }
@@ -1098,7 +1096,7 @@ impl eframe::App for App {
             Some(settings_view::Action::SetTmdbKey(key)) => {
                 self.settings.tmdb_api_key = (!key.is_empty()).then_some(key);
                 match self.settings.save(&self.paths.settings) {
-                    Ok(()) => self.status = strings::SAVED_THE_TMDB_KEY.into(),
+                    Ok(()) => self.status = i18n::saved_the_tmdb_key().into(),
                     Err(e) => self.status = format!("Could not save settings: {e}"),
                 }
             }
@@ -1162,9 +1160,9 @@ fn sidebar_toggle(ui: &mut egui::Ui, open: bool) -> egui::Response {
         ui.allocate_exact_size(egui::vec2(ui.available_width(), 34.0), egui::Sense::click());
     let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
     let response = response.on_hover_text(if open {
-        strings::HIDE_SIDEBAR
+        i18n::hide_sidebar()
     } else {
-        strings::SHOW_SIDEBAR
+        i18n::show_sidebar()
     });
     let painter = ui.painter();
     if response.hovered() {

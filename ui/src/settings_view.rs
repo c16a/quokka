@@ -1,4 +1,4 @@
-use crate::strings;
+use crate::i18n;
 use std::path::{Path, PathBuf};
 
 use eframe::egui;
@@ -32,10 +32,12 @@ pub enum Action {
 }
 
 /// The kinds of folder, in the order the Library section lists them, with their names.
-const KINDS: [(LibraryKind, &str); 2] = [
-    (LibraryKind::Music, strings::MUSIC),
-    (LibraryKind::Movies, strings::MOVIES),
-];
+fn kinds() -> [(LibraryKind, &'static str); 2] {
+    [
+        (LibraryKind::Music, i18n::music()),
+        (LibraryKind::Movies, i18n::movies()),
+    ]
+}
 
 /// The colours of the Library section for the current theme.
 struct LibraryColours {
@@ -46,7 +48,7 @@ struct LibraryColours {
     text: egui::Color32,
     weak: egui::Color32,
     red: egui::Color32,
-    /// The amber strings::PROCESSING flag: its text and its tinted background.
+    /// The amber i18n::processing() flag: its text and its tinted background.
     amber: egui::Color32,
     amber_fill: egui::Color32,
 }
@@ -220,11 +222,11 @@ fn kind_header(
 ) {
     ui.horizontal(|ui| {
         chip(ui, label, colours.text, colours.text);
-        let folders_text = strings::folders(folders);
+        let folders_text = i18n::folder_count(folders);
         ui.label(
             egui::RichText::new(format!(
                 "{folders_text} · {}",
-                strings::files(files as usize)
+                i18n::file_count(files as usize)
             ))
             .size(13.0)
             .color(colours.weak),
@@ -256,10 +258,10 @@ fn folder_row(
                     ui.allocate_exact_size(egui::vec2(20.0, 20.0), egui::Sense::hover());
                 folder_icon(ui.painter(), icon, colours.text);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if row_button(ui, strings::REMOVE, egui::Color32::TRANSPARENT, colours.red) {
+                    if row_button(ui, i18n::remove(), egui::Color32::TRANSPARENT, colours.red) {
                         action = Some(Action::RemoveFolder(index));
                     }
-                    if row_button(ui, strings::RESCAN, colours.button, colours.text) {
+                    if row_button(ui, i18n::rescan(), colours.button, colours.text) {
                         action = Some(Action::RescanFolder(index));
                     }
                     ui.vertical(|ui| {
@@ -273,7 +275,7 @@ fn folder_row(
                             .truncate(),
                         );
                         ui.label(
-                            egui::RichText::new(strings::files(files as usize))
+                            egui::RichText::new(i18n::file_count(files as usize))
                                 .size(13.0)
                                 .color(colours.weak),
                         );
@@ -284,11 +286,11 @@ fn folder_row(
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     ui.label(
-                        egui::RichText::new(strings::HOLDS)
+                        egui::RichText::new(i18n::holds())
                             .size(13.0)
                             .color(colours.weak),
                     );
-                    for (kind, label) in KINDS {
+                    for (kind, label) in kinds() {
                         if pill(ui, label, colours.button, colours.text) {
                             action = Some(Action::SetFolderKind { index, kind });
                         }
@@ -341,7 +343,7 @@ pub fn show(
             egui::Frame::new()
                 .inner_margin(egui::Margin::symmetric(32, 32))
                 .show(ui, |ui| {
-                    crate::fonts::page_title(ui, strings::SETTINGS);
+                    crate::fonts::page_title(ui, i18n::settings());
                     ui.add_space(12.0);
                     let colours = LibraryColours::of(ui.visuals().dark_mode);
                     let folders = settings.library_roots.len();
@@ -356,13 +358,13 @@ pub fn show(
                             ui,
                             egui::Align::Center,
                             |ui| {
-                                ui.heading(strings::LIBRARY);
+                                ui.heading(i18n::library());
                                 let summary = match folders {
-                                    0 => strings::NO_FOLDERS_YET.to_owned(),
+                                    0 => i18n::no_folders_yet().to_owned(),
                                     n => format!(
                                         "{} · {}",
-                                        strings::folders(n),
-                                        strings::files(files as usize)
+                                        i18n::folder_count(n),
+                                        i18n::file_count(files as usize)
                                     ),
                                 };
                                 ui.label(
@@ -377,7 +379,7 @@ pub fn show(
                                             ui.spacing_mut().button_padding.x = 22.0;
                                             pill(
                                                 ui,
-                                                strings::RESCAN_ALL,
+                                                i18n::rescan_all(),
                                                 colours.button,
                                                 colours.text,
                                             )
@@ -396,7 +398,7 @@ pub fn show(
                                 .margin(egui::Margin::symmetric(10, 3))
                                 .show(ui, |ui| {
                                     ui.label(
-                                        egui::RichText::new(strings::PROCESSING)
+                                        egui::RichText::new(i18n::processing())
                                             .size(12.0)
                                             .color(colours.amber),
                                     );
@@ -409,7 +411,7 @@ pub fn show(
                         ui.add_space(20.0);
 
                         // One card per kind of folder. A folder with no kind yet gets its own card, listed after them.
-                        for (kind_value, label) in KINDS {
+                        for (kind_value, label) in kinds() {
                             let rows: Vec<usize> = (0..folders)
                                 .filter(|&i| {
                                     settings.library_kind(&settings.library_roots[i])
@@ -451,10 +453,10 @@ pub fn show(
                         if !unset.is_empty() {
                             card(ui, &colours, |ui| {
                                 ui.horizontal(|ui| {
-                                    chip(ui, strings::KIND_NOT_SET, colours.text, colours.text);
+                                    chip(ui, i18n::kind_not_set(), colours.text, colours.text);
                                     ui.label(
                                         egui::RichText::new(
-                                            strings::CHOOSE_WHAT_EACH_OF_THESE_FOLDERS,
+                                            i18n::choose_what_each_of_these_folders(),
                                         )
                                         .size(13.0)
                                         .color(colours.weak),
@@ -481,9 +483,9 @@ pub fn show(
                         // TV shows are not supported yet.
                         card(ui, &colours, |ui| {
                             ui.horizontal(|ui| {
-                                chip(ui, strings::TV_SHOWS, colours.weak, colours.weak);
+                                chip(ui, i18n::tv_shows(), colours.weak, colours.weak);
                                 ui.label(
-                                    egui::RichText::new(strings::COMING_SOON)
+                                    egui::RichText::new(i18n::coming_soon())
                                         .size(13.0)
                                         .color(colours.weak),
                                 );
@@ -493,18 +495,18 @@ pub fn show(
 
                         card(ui, &colours, |ui| {
                             ui.label(
-                                egui::RichText::new(strings::ADD_A_FOLDER)
+                                egui::RichText::new(i18n::add_a_folder())
                                     .size(16.0)
                                     .strong(),
                             );
                             ui.label(
-                                egui::RichText::new(strings::EACH_FOLDER_HOLDS_ONE_KIND_OF)
+                                egui::RichText::new(i18n::each_folder_holds_one_kind_of())
                                     .size(13.0)
                                     .color(colours.weak),
                             );
                             ui.add_space(12.0);
                             ui.horizontal_wrapped(|ui| {
-                                // The same wider padding as strings::RESCAN_ALL, tightened when the window is narrow.
+                                // The same wider padding as i18n::rescan_all(), tightened when the window is narrow.
                                 ui.spacing_mut().button_padding.x = if ui.available_width() < 420.0
                                 {
                                     12.0
@@ -515,7 +517,7 @@ pub fn show(
                                     ui,
                                     |ui| {
                                         ui.horizontal(|ui| {
-                                            for (k, label) in KINDS {
+                                            for (k, label) in kinds() {
                                                 let selected = kind == k;
                                                 let (fill, text) = if selected {
                                                     (colours.text, colours.card)
@@ -529,7 +531,7 @@ pub fn show(
                                             ui.add_enabled_ui(false, |ui| {
                                                 squircle_label(
                                                     ui,
-                                                    strings::TV_SHOWS_SOON,
+                                                    i18n::tv_shows_soon(),
                                                     egui::Color32::TRANSPARENT,
                                                     colours.weak,
                                                     Padding::symmetric(14.0, 6.0),
@@ -539,9 +541,9 @@ pub fn show(
                                     },
                                 );
                                 ui.add_space(8.0);
-                                if pill(ui, strings::CHOOSE_FOLDER, colours.text, colours.card)
+                                if pill(ui, i18n::choose_folder(), colours.text, colours.card)
                                     && let Some(path) = rfd::FileDialog::new()
-                                        .set_title(strings::CHOOSE_A_FOLDER_FOR_YOUR_LIBRARY)
+                                        .set_title(i18n::choose_a_folder_for_your_library())
                                         .pick_folder()
                                 {
                                     action = Some(Action::AddFolder { path, kind });
@@ -553,14 +555,14 @@ pub fn show(
 
                     ui.add_space(14.0);
                     card(ui, &colours, |ui| {
-                        ui.label(egui::RichText::new(strings::APPEARANCE).size(16.0).strong());
+                        ui.label(egui::RichText::new(i18n::appearance()).size(16.0).strong());
                         ui.add_space(14.0);
                         setting_row(
                             ui,
                             egui::Align::Center,
                             |ui| {
                                 ui.label(
-                                    egui::RichText::new(strings::THEME)
+                                    egui::RichText::new(i18n::theme())
                                         .size(14.0)
                                         .color(colours.weak),
                                 );
@@ -568,9 +570,9 @@ pub fn show(
                             |ui| {
                                 // Listed in reverse: the row is right-to-left, so the first option ends up rightmost.
                                 let themes = [
-                                    (Theme::Dark, strings::DARK),
-                                    (Theme::Light, strings::LIGHT),
-                                    (Theme::System, strings::SYSTEM),
+                                    (Theme::Dark, i18n::dark()),
+                                    (Theme::Light, i18n::light()),
+                                    (Theme::System, i18n::system()),
                                 ];
                                 if let Some(theme) =
                                     segmented(ui, &colours, &themes, settings.theme)
@@ -583,7 +585,7 @@ pub fn show(
 
                     ui.add_space(14.0);
                     card(ui, &colours, |ui| {
-                        ui.label(egui::RichText::new(strings::PLAYBACK).size(16.0).strong());
+                        ui.label(egui::RichText::new(i18n::playback()).size(16.0).strong());
                         ui.add_space(14.0);
                         setting_row(
                             ui,
@@ -591,24 +593,22 @@ pub fn show(
                             |ui| {
                                 ui.set_max_width(ui.available_width().min(420.0));
                                 ui.label(
-                                    egui::RichText::new(strings::LOUDNESS)
+                                    egui::RichText::new(i18n::loudness())
                                         .size(14.0)
                                         .color(colours.text),
                                 );
                                 ui.label(
-                                    egui::RichText::new(
-                                        strings::LEVELS_TRACKS_TO_THE_SAME_LOUDNESS,
-                                    )
-                                    .size(13.0)
-                                    .color(colours.weak),
+                                    egui::RichText::new(i18n::levels_tracks_to_the_same_loudness())
+                                        .size(13.0)
+                                        .color(colours.weak),
                                 );
                             },
                             |ui| {
                                 // Listed in reverse, as above.
                                 let modes = [
-                                    (ReplayGainMode::Album, strings::ALBUM_2),
-                                    (ReplayGainMode::Track, strings::TRACK),
-                                    (ReplayGainMode::Off, strings::OFF),
+                                    (ReplayGainMode::Album, i18n::album_2()),
+                                    (ReplayGainMode::Track, i18n::track()),
+                                    (ReplayGainMode::Off, i18n::off()),
                                 ];
                                 if let Some(mode) =
                                     segmented(ui, &colours, &modes, settings.replay_gain)
@@ -621,12 +621,12 @@ pub fn show(
                         ui.separator();
                         ui.add_space(16.0);
                         ui.label(
-                            egui::RichText::new(strings::CROSSFADE)
+                            egui::RichText::new(i18n::crossfade())
                                 .size(14.0)
                                 .color(colours.text),
                         );
                         ui.label(
-                            egui::RichText::new(strings::EACH_TRACK_FADES_INTO_THE_NEXT)
+                            egui::RichText::new(i18n::each_track_fades_into_the_next())
                                 .size(13.0)
                                 .color(colours.weak),
                         );
@@ -651,14 +651,14 @@ pub fn show(
 
                     ui.add_space(14.0);
                     card(ui, &colours, |ui| {
-                        ui.label(egui::RichText::new(strings::LYRICS).size(16.0).strong());
+                        ui.label(egui::RichText::new(i18n::lyrics()).size(16.0).strong());
                         ui.add_space(14.0);
                         setting_row(
                             ui,
                             egui::Align::Center,
                             |ui| {
                                 ui.label(
-                                    egui::RichText::new(strings::LOOK_UP_SYNCED_LYRICS_ON_LRCLIB)
+                                    egui::RichText::new(i18n::look_up_synced_lyrics_on_lrclib())
                                         .size(14.0)
                                         .color(colours.text),
                                 );
@@ -671,7 +671,7 @@ pub fn show(
                         );
                         ui.add_space(8.0);
                         ui.label(
-                            egui::RichText::new(strings::FOR_TRACKS_WITH_NO_LRC_FILE)
+                            egui::RichText::new(i18n::for_tracks_with_no_lrc_file())
                                 .size(13.0)
                                 .color(colours.weak),
                         );
@@ -680,13 +680,13 @@ pub fn show(
                     ui.add_space(14.0);
                     card(ui, &colours, |ui| {
                         ui.label(
-                            egui::RichText::new(strings::MOVIE_DETAILS)
+                            egui::RichText::new(i18n::movie_details())
                                 .size(16.0)
                                 .strong(),
                         );
                         ui.add_space(8.0);
                         ui.label(
-                            egui::RichText::new(strings::DESCRIPTIONS_AND_CAST_FOR_MOVIES_COME)
+                            egui::RichText::new(i18n::descriptions_and_cast_for_movies_come())
                                 .size(13.0)
                                 .color(colours.weak),
                         );
@@ -697,14 +697,14 @@ pub fn show(
                         ui.horizontal(|ui| {
                             crate::squircle::SquircleTextField::singleline(&mut draft)
                                 .password(true)
-                                .hint_text(strings::TMDB_API_KEY)
+                                .hint_text(i18n::tmdb_api_key())
                                 .desired_width(280.0)
                                 .show(ui);
-                            if squircle::text_button(ui, strings::SAVE_KEY).clicked() {
+                            if squircle::text_button(ui, i18n::save_key()).clicked() {
                                 action = Some(Action::SetTmdbKey(draft.trim().to_owned()));
                             }
                             if settings.tmdb_api_key.is_some()
-                                && squircle::text_button(ui, strings::REMOVE_KEY).clicked()
+                                && squircle::text_button(ui, i18n::remove_key()).clicked()
                             {
                                 action = Some(Action::SetTmdbKey(String::new()));
                             }
@@ -714,15 +714,15 @@ pub fn show(
                             ui.data_mut(|d| d.insert_temp(draft_id, String::new()));
                         }
                         let state = if settings.tmdb_api_key.is_some() {
-                            strings::A_KEY_IS_SAVED
+                            i18n::a_key_is_saved()
                         } else {
-                            strings::NO_KEY_SAVED_MOVIES_SHOW_NO
+                            i18n::no_key_saved_movies_show_no()
                         };
                         ui.add_space(6.0);
                         ui.label(egui::RichText::new(state).size(13.0).color(colours.weak));
                         ui.add_space(10.0);
                         ui.label(
-                            egui::RichText::new(strings::THIS_PRODUCT_USES_THE_TMDB_API)
+                            egui::RichText::new(i18n::this_product_uses_the_tmdb_api())
                                 .size(12.0)
                                 .color(colours.weak),
                         );

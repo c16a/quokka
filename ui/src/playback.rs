@@ -1,4 +1,4 @@
-use crate::strings;
+use crate::i18n;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
@@ -55,7 +55,7 @@ fn new_video() -> Result<VideoPlayer, String> {
 /// A video player for this platform: the decoders on macOS, libmpv elsewhere.
 #[cfg(not(target_os = "macos"))]
 fn new_video() -> Result<VideoPlayer, String> {
-    VideoPlayer::new().map_err(|e| strings::fill(strings::VIDEO_NEEDS_LIBMPV, &[&e.to_string()]))
+    VideoPlayer::new().map_err(|e| i18n::fill(i18n::video_needs_libmpv(), &[&e.to_string()]))
 }
 
 pub struct Playback {
@@ -141,10 +141,7 @@ impl Playback {
             Ok(player) => (Some(player), None),
             Err(e) => (
                 None,
-                Some(strings::fill(
-                    strings::NO_AUDIO_OUTPUT_ERROR,
-                    &[&e.to_string()],
-                )),
+                Some(i18n::fill(i18n::no_audio_output_error(), &[&e.to_string()])),
             ),
         };
         Self {
@@ -315,24 +312,24 @@ impl Playback {
                 let outcome = match self.player.as_mut() {
                     Some(player) => player.load_stream(source).and_then(|_| player.play()),
                     None => Err(quokka_playback::PlaybackError::Backend(
-                        strings::NO_AUDIO_OUTPUT_DEVICE_AVAILABLE.into(),
+                        i18n::no_audio_output_device_available().into(),
                     )),
                 };
                 self.error = outcome
                     .err()
-                    .map(|e| strings::fill(strings::COULD_NOT_PLAY_STATION, &[&e.to_string()]));
+                    .map(|e| i18n::fill(i18n::could_not_play_station(), &[&e.to_string()]));
             }
             Ok(Err(e)) => {
                 self.radio_paused = true;
-                self.error = Some(strings::fill(
-                    strings::COULD_NOT_CONNECT_STATION_ERROR,
+                self.error = Some(i18n::fill(
+                    i18n::could_not_connect_station_error(),
                     &[&e.to_string()],
                 ));
             }
             Err(TryRecvError::Empty) => self.radio_loading = Some(rx),
             Err(TryRecvError::Disconnected) => {
                 self.radio_paused = true;
-                self.error = Some(strings::COULD_NOT_CONNECT_TO_THE_STATION.into());
+                self.error = Some(i18n::could_not_connect_to_the_station().into());
             }
         }
     }
@@ -345,7 +342,7 @@ impl Playback {
         self.radio_reconnects += 1;
         if self.radio_reconnects > RADIO_RECONNECTS {
             self.radio_paused = true;
-            self.error = Some(strings::THE_STATION_KEEPS_DROPPING_THE_CONNECTION.into());
+            self.error = Some(i18n::the_station_keeps_dropping_the_connection().into());
             return;
         }
         self.connect_radio();
@@ -365,11 +362,7 @@ impl Playback {
                 ui.vertical_centered(|ui| {
                     centred_row(ui, &mut self.row_widths[0], |ui| {
                         let icon = if playing { Icon::Pause } else { Icon::Play };
-                        let tip = if playing {
-                            strings::PAUSE
-                        } else {
-                            strings::PLAY
-                        };
+                        let tip = if playing { i18n::pause() } else { i18n::play() };
                         if transport_button(ui, icon, 36.0)
                             .on_hover_text(tip)
                             .clicked()
@@ -380,11 +373,11 @@ impl Playback {
                         ui.vertical(|ui| {
                             ui.label(crate::fonts::bold(&station.name));
                             let status = if connecting {
-                                strings::CONNECTING
+                                i18n::connecting()
                             } else if self.radio_paused {
-                                strings::PAUSED
+                                i18n::paused()
                             } else {
-                                strings::LIVE
+                                i18n::live()
                             };
                             ui.weak(status);
                         });
@@ -578,8 +571,8 @@ impl Playback {
                 self.error = None;
             }
             Err(e) => {
-                self.error = Some(strings::fill(
-                    strings::COULD_NOT_SWITCH_OUTPUT,
+                self.error = Some(i18n::fill(
+                    i18n::could_not_switch_output(),
                     &[&e.to_string()],
                 ));
                 return;
@@ -633,7 +626,7 @@ impl Playback {
             if self.error.is_none()
                 && let Some(reason) = video.failure()
             {
-                self.error = Some(strings::fill(strings::COULD_NOT_PLAY_VIDEO, &[reason]));
+                self.error = Some(i18n::fill(i18n::could_not_play_video(), &[reason]));
             }
         }
         self.sync_gapless();
@@ -652,8 +645,8 @@ impl Playback {
             _ => self.next(),
         }
         if let Some(message) = stopped_early {
-            self.error = Some(strings::fill(
-                strings::PLAYBACK_STOPPED_EARLY,
+            self.error = Some(i18n::fill(
+                i18n::playback_stopped_early(),
                 &[&message.to_string()],
             ));
         }
@@ -1052,8 +1045,8 @@ impl Playback {
             .and_then(|_| if autoplay { video.play() } else { Ok(()) });
         self.error = match loaded {
             Ok(()) => None,
-            Err(e) => Some(strings::fill(
-                strings::COULD_NOT_PLAY_ITEM,
+            Err(e) => Some(i18n::fill(
+                i18n::could_not_play_item(),
                 &[format::title(item).as_str(), &e.to_string()],
             )),
         };
@@ -1086,14 +1079,14 @@ impl Playback {
             self.apply_volume();
         }
         let Some(player) = self.player.as_mut() else {
-            self.error = Some(strings::NO_AUDIO_OUTPUT_DEVICE_AVAILABLE_2.into());
+            self.error = Some(i18n::no_audio_output_device_available_2().into());
             return;
         };
         let loaded = player.load(&item.path);
         self.error = match loaded.and_then(|_| if autoplay { player.play() } else { Ok(()) }) {
             Ok(()) => None,
-            Err(e) => Some(strings::fill(
-                strings::COULD_NOT_PLAY_ITEM,
+            Err(e) => Some(i18n::fill(
+                i18n::could_not_play_item(),
                 &[format::title(&item).as_str(), &e.to_string()],
             )),
         };
@@ -1153,7 +1146,7 @@ impl Playback {
 
         ui.horizontal(|ui| {
             if transport_button(ui, Icon::Previous, 36.0)
-                .on_hover_text(strings::BACK_10_SECONDS_LEFT_ARROW)
+                .on_hover_text(i18n::back_10_seconds_left_arrow())
                 .clicked()
             {
                 self.seek_relative(-10.0);
@@ -1174,9 +1167,9 @@ impl Playback {
             icons::paint(painter, rect.center(), glyph, 20.0, egui::Color32::BLACK);
             if response
                 .on_hover_text(if playing {
-                    strings::PAUSE_SPACE
+                    i18n::pause_space()
                 } else {
-                    strings::PLAY_SPACE
+                    i18n::play_space()
                 })
                 .clicked()
             {
@@ -1184,7 +1177,7 @@ impl Playback {
             }
 
             if transport_button(ui, Icon::Next, 36.0)
-                .on_hover_text(strings::FORWARD_10_SECONDS_RIGHT_ARROW)
+                .on_hover_text(i18n::forward_10_seconds_right_arrow())
                 .clicked()
             {
                 self.seek_relative(10.0);
@@ -1202,9 +1195,9 @@ impl Playback {
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let label = if fullscreen {
-                    strings::EXIT_FULL_SCREEN_ESCAPE
+                    i18n::exit_full_screen_escape()
                 } else {
-                    strings::FULL_SCREEN_F
+                    i18n::full_screen_f()
                 };
                 if fullscreen_button(ui, fullscreen)
                     .on_hover_text(label)
@@ -1218,9 +1211,9 @@ impl Playback {
                 }
                 if speaker_button(ui, self.muted)
                     .on_hover_text(if self.muted {
-                        strings::UNMUTE
+                        i18n::unmute()
                     } else {
-                        strings::MUTE
+                        i18n::mute()
                     })
                     .clicked()
                 {
@@ -1264,7 +1257,7 @@ impl Playback {
                 });
             }
             None => {
-                ui.label(strings::LOADING_VIDEO);
+                ui.label(i18n::loading_video());
             }
         }
         if let Some(text) = caption {
@@ -1337,21 +1330,21 @@ impl Playback {
                         |ui| {
                             ui.spacing_mut().item_spacing.x = 8.0;
                             if mode_button(ui, ModeIcon::Shuffle, self.shuffle)
-                                .on_hover_text(strings::SHUFFLE)
+                                .on_hover_text(i18n::shuffle())
                                 .clicked()
                             {
                                 command = Some(Command::ToggleShuffle);
                             }
                             if transport_button(ui, Icon::Previous, 32.0)
-                                .on_hover_text(strings::PREVIOUS_TRACK)
+                                .on_hover_text(i18n::previous_track())
                                 .clicked()
                             {
                                 command = Some(Command::Previous);
                             }
                             let (icon, tip) = if state == PlayerState::Playing {
-                                (Icon::Pause, strings::PAUSE)
+                                (Icon::Pause, i18n::pause())
                             } else {
-                                (Icon::Play, strings::PLAY)
+                                (Icon::Play, i18n::play())
                             };
                             if transport_button(ui, icon, 36.0)
                                 .on_hover_text(tip)
@@ -1360,7 +1353,7 @@ impl Playback {
                                 command = Some(Command::Toggle);
                             }
                             if transport_button(ui, Icon::Next, 32.0)
-                                .on_hover_text(strings::NEXT_TRACK)
+                                .on_hover_text(i18n::next_track())
                                 .clicked()
                             {
                                 command = Some(Command::Next);
@@ -1370,7 +1363,7 @@ impl Playback {
                                 ModeIcon::Repeat(self.repeat),
                                 self.repeat != Repeat::Off,
                             )
-                            .on_hover_text(strings::REPEAT)
+                            .on_hover_text(i18n::repeat())
                             .clicked()
                             {
                                 command = Some(Command::CycleRepeat);
@@ -1481,7 +1474,7 @@ impl Playback {
                                         });
                                     }
                                     None => {
-                                        ui.weak(strings::NOTHING_PLAYING);
+                                        ui.weak(i18n::nothing_playing());
                                     }
                                 });
                             },
@@ -1552,9 +1545,9 @@ impl Playback {
                             }
                             if speaker_button(ui, self.muted)
                                 .on_hover_text(if self.muted {
-                                    strings::UNMUTE
+                                    i18n::unmute()
                                 } else {
-                                    strings::MUTE
+                                    i18n::mute()
                                 })
                                 .clicked()
                             {
@@ -1562,7 +1555,7 @@ impl Playback {
                             }
                             // Output: a button that opens a list of audio outputs.
                             let output =
-                                output_button(ui, self.output_menu).on_hover_text(strings::OUTPUT);
+                                output_button(ui, self.output_menu).on_hover_text(i18n::output());
                             if output.clicked() {
                                 self.output_menu = !self.output_menu;
                                 // Refresh the device list whenever the list opens.
@@ -1580,11 +1573,11 @@ impl Playback {
                                     .show(ui.ctx(), |ui| {
                                         egui::Frame::popup(ui.style()).show(ui, |ui| {
                                             ui.set_width(240.0);
-                                            ui.weak(strings::OUTPUT);
+                                            ui.weak(i18n::output());
                                             if ui
                                                 .selectable_label(
                                                     self.output.is_none(),
-                                                    strings::SYSTEM_DEFAULT,
+                                                    i18n::system_default(),
                                                 )
                                                 .clicked()
                                             {
@@ -1614,13 +1607,13 @@ impl Playback {
                                 }
                             }
                             if panel_button(ui, Panel::Queue, self.panel == Panel::Queue)
-                                .on_hover_text(strings::UP_NEXT)
+                                .on_hover_text(i18n::up_next())
                                 .clicked()
                             {
                                 command = Some(Command::TogglePanel(Panel::Queue));
                             }
                             if panel_button(ui, Panel::Lyrics, self.panel == Panel::Lyrics)
-                                .on_hover_text(strings::LYRICS)
+                                .on_hover_text(i18n::lyrics())
                                 .clicked()
                             {
                                 command = Some(Command::TogglePanel(Panel::Lyrics));
@@ -1628,13 +1621,13 @@ impl Playback {
                             // Playback speed: each click steps to the next preset.
                             let speed_label = speed_text(self.speed);
                             if speed_button(ui, &speed_label)
-                                .on_hover_text(strings::PLAYBACK_SPEED_CLICK_TO_CHANGE_SPEEDS)
+                                .on_hover_text(i18n::playback_speed_click_to_change_speeds())
                                 .clicked()
                             {
                                 self.speed_change = Some(next_speed(self.speed));
                             }
                             let info = panel_button(ui, Panel::Info, self.panel == Panel::Info)
-                                .on_hover_text(strings::TRACK_INFO);
+                                .on_hover_text(i18n::track_info());
                             left_edge = info.rect.left();
                             if info.clicked() {
                                 command = Some(Command::TogglePanel(Panel::Info));
@@ -1818,16 +1811,16 @@ fn show_compact(
 
             if ui
                 .put(next, |ui: &mut egui::Ui| {
-                    transport_button(ui, Icon::Next, 32.0).on_hover_text(strings::NEXT_TRACK)
+                    transport_button(ui, Icon::Next, 32.0).on_hover_text(i18n::next_track())
                 })
                 .clicked()
             {
                 command = Some(Command::Next);
             }
             let (icon, tip) = if state == PlayerState::Playing {
-                (Icon::Pause, strings::PAUSE)
+                (Icon::Pause, i18n::pause())
             } else {
-                (Icon::Play, strings::PLAY)
+                (Icon::Play, i18n::play())
             };
             if ui
                 .put(play, |ui: &mut egui::Ui| {
@@ -1868,7 +1861,7 @@ fn show_compact(
                             );
                         }
                         None => {
-                            ui.weak(strings::NOTHING_PLAYING);
+                            ui.weak(i18n::nothing_playing());
                         }
                     }
                 })

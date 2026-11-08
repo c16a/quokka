@@ -19,3 +19,7 @@ souvlaki.workspace = true
 [target.'cfg(target_os = "linux")'.dependencies]
 eframe = { workspace = true, features = ["wayland", "x11"] }
 rfd = { workspace = true, features = ["xdg-portal"] }
+
+# The preferred-language list, for choosing the UI's language.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-foundation.workspace = true

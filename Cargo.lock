@@ -3326,6 +3326,7 @@ dependencies = [
  "eframe",
  "image",
  "notify",
+ "objc2-foundation 0.3.2",
  "quokka-core",
  "quokka-playback",
  "rfd",
