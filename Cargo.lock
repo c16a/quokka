@@ -3324,6 +3324,7 @@ name = "quokka-ui"
 version = "0.1.0"
 dependencies = [
  "eframe",
+ "egui_system_font_provider",
  "image",
  "notify",
  "objc2-foundation 0.3.2",

@@ -10,6 +10,10 @@ impl Translation for EnUs {
         &["en-US", "en"]
     }
 
+    fn native_name(&self) -> &'static str {
+        "English (US)"
+    }
+
     // albums.rs
     fn name(&self) -> Option<&'static str> {
         Some("Name")
@@ -112,6 +116,48 @@ impl Translation for EnUs {
     }
     fn saved_the_tmdb_key(&self) -> Option<&'static str> {
         Some("Saved the TMDb key.")
+    }
+    fn could_not_save_settings(&self) -> Option<&'static str> {
+        Some("Could not save settings: {0}")
+    }
+    fn radio_station_count(&self) -> Option<&'static str> {
+        Some("Radio: {0} stations.")
+    }
+    fn scanning_folder(&self) -> Option<&'static str> {
+        Some("Scanning {0}…")
+    }
+    fn scanning_folder_queued(&self) -> Option<&'static str> {
+        Some("Scanning {0} ({1} more queued)…")
+    }
+    fn scan_summary(&self) -> Option<&'static str> {
+        Some("{0}: {1} added or changed, {2} unchanged, {3} removed.")
+    }
+    fn matched_on_tmdb(&self) -> Option<&'static str> {
+        Some("{0} matched on TMDb.")
+    }
+    fn tmdb_lookup_stopped(&self) -> Option<&'static str> {
+        Some("TMDb lookup stopped ({0}); it will be tried again on the next scan.")
+    }
+    fn could_not_find_album(&self) -> Option<&'static str> {
+        Some("Could not find the album {0}")
+    }
+    fn could_not_tune_in(&self) -> Option<&'static str> {
+        Some("Could not tune in: {0}")
+    }
+    fn could_not_tune_out(&self) -> Option<&'static str> {
+        Some("Could not tune out: {0}")
+    }
+    fn could_not_add_to_playlist(&self) -> Option<&'static str> {
+        Some("Could not add to playlist: {0}")
+    }
+    fn already_in_library(&self) -> Option<&'static str> {
+        Some("{0} is already in the library.")
+    }
+    fn removed_folder(&self) -> Option<&'static str> {
+        Some("Removed {0} ({1}).")
+    }
+    fn could_not_remove_folder(&self) -> Option<&'static str> {
+        Some("Could not remove {0}: {1}")
     }
     fn hide_sidebar(&self) -> Option<&'static str> {
         Some("Hide sidebar")
@@ -552,6 +598,12 @@ impl Translation for EnUs {
     fn theme(&self) -> Option<&'static str> {
         Some("Theme")
     }
+    fn language(&self) -> Option<&'static str> {
+        Some("Language")
+    }
+    fn language_system(&self) -> Option<&'static str> {
+        Some("System ({0})")
+    }
     fn dark(&self) -> Option<&'static str> {
         Some("Dark")
     }
@@ -766,31 +818,31 @@ impl Translation for EnUs {
     }
     // Counts, with the singular for one.
     fn one_movie(&self) -> Option<&'static str> {
-        Some("1 movie")
+        Some("{0} movie")
     }
     fn many_movies(&self) -> Option<&'static str> {
         Some("{0} movies")
     }
     fn one_album(&self) -> Option<&'static str> {
-        Some("1 album")
+        Some("{0} album")
     }
     fn many_albums(&self) -> Option<&'static str> {
         Some("{0} albums")
     }
     fn one_track(&self) -> Option<&'static str> {
-        Some("1 track")
+        Some("{0} track")
     }
     fn many_tracks(&self) -> Option<&'static str> {
         Some("{0} tracks")
     }
     fn one_folder(&self) -> Option<&'static str> {
-        Some("1 folder")
+        Some("{0} folder")
     }
     fn many_folders(&self) -> Option<&'static str> {
         Some("{0} folders")
     }
     fn one_file(&self) -> Option<&'static str> {
-        Some("1 file")
+        Some("{0} file")
     }
     fn many_files(&self) -> Option<&'static str> {
         Some("{0} files")

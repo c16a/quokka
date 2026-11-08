@@ -3,14 +3,37 @@
 //! a string it has no translation for, and the UI shows the American English text instead.
 //!
 //! The UI reads a string through the free function of the same name, such as [`play`], which
-//! resolves it in the user's language. The language is chosen once, from the operating system's
-//! preferred languages, the first time a string is read.
+//! resolves it in the current language. That is the operating system's preferred language until
+//! the user picks one in Settings, which [`set_language`] applies.
 
+#[path = "de-DE.rs"]
+mod de_de;
 mod detect;
 #[path = "en-US.rs"]
 mod en_us;
+#[path = "es-ES.rs"]
+mod es_es;
+#[path = "fr-FR.rs"]
+mod fr_fr;
+#[path = "it-IT.rs"]
+mod it_it;
+#[path = "ja-JP.rs"]
+mod ja_jp;
+#[path = "ko-KR.rs"]
+mod ko_kr;
+#[path = "nl-NL.rs"]
+mod nl_nl;
+#[path = "pt-BR.rs"]
+mod pt_br;
+#[path = "pt-PT.rs"]
+mod pt_pt;
+#[path = "zh-Hans.rs"]
+mod zh_hans;
+#[path = "zh-Hant.rs"]
+mod zh_hant;
 
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Declares the strings: a method on [`Translation`] for each one, and a free function that
 /// resolves it in the current language with the English fallback.
@@ -24,6 +47,15 @@ macro_rules! strings {
             /// The BCP 47 tags this translation serves, most specific first, such as `["en-US", "en"]`.
             /// A bare language (`en`) matches any region of it the user prefers.
             fn language_tags(&self) -> &'static [&'static str];
+
+            /// The language's name in itself, for the language menu: `Deutsch`, `日本語`.
+            fn native_name(&self) -> &'static str;
+
+            /// Whether `count` takes the singular form, as in `{0} album`. English uses it for one
+            /// alone; French uses it for zero too. Languages without plurals use the same text in both.
+            fn is_singular(&self, count: usize) -> bool {
+                count == 1
+            }
 
             $(
                 $(#[$meta])*
@@ -99,6 +131,20 @@ strings! {
     settings,
     scanning,
     saved_the_tmdb_key,
+    could_not_save_settings,
+    radio_station_count,
+    scanning_folder,
+    scanning_folder_queued,
+    scan_summary,
+    matched_on_tmdb,
+    tmdb_lookup_stopped,
+    could_not_find_album,
+    could_not_tune_in,
+    could_not_tune_out,
+    could_not_add_to_playlist,
+    already_in_library,
+    removed_folder,
+    could_not_remove_folder,
     hide_sidebar,
     show_sidebar,
     // movies.rs
@@ -250,6 +296,8 @@ strings! {
     choose_a_folder_for_your_library,
     appearance,
     theme,
+    language,
+    language_system,
     dark,
     light,
     system,
@@ -333,37 +381,112 @@ strings! {
     many_files,
 }
 
-/// Every translation the UI ships, in no particular order.
-const LANGUAGES: &[&dyn Translation] = &[&en_us::EnUs];
+/// Every translation the UI ships, in the order the language menu lists them. When a user's
+/// language matches two only by its base language, the first wins.
+const LANGUAGES: &[&dyn Translation] = &[
+    &en_us::EnUs,
+    &de_de::DeDe,
+    &es_es::EsEs,
+    &fr_fr::FrFr,
+    &it_it::ItIt,
+    &nl_nl::NlNl,
+    &pt_br::PtBr,
+    &pt_pt::PtPt,
+    &ja_jp::JaJp,
+    &ko_kr::KoKr,
+    &zh_hans::ZhHans,
+    &zh_hant::ZhHant,
+];
 
-/// The translation for the user's language, chosen on first use.
+/// The index into [`LANGUAGES`] of the current translation, or [`UNSET`] before the first string
+/// is read.
+static CURRENT: AtomicUsize = AtomicUsize::new(UNSET);
+const UNSET: usize = usize::MAX;
+
+/// The current translation. Until [`set_language`] is called, the system's.
 fn current() -> &'static dyn Translation {
-    static CURRENT: OnceLock<&'static dyn Translation> = OnceLock::new();
-    *CURRENT.get_or_init(|| select(&detect::preferred_languages()))
+    let mut index = CURRENT.load(Ordering::Relaxed);
+    if index == UNSET {
+        index = system_index();
+        CURRENT.store(index, Ordering::Relaxed);
+    }
+    LANGUAGES[index]
 }
 
-/// The translation for the first of `preferred` that one serves: a tag the translation lists, or
-/// failing that the same language in another region. English when none matches.
-fn select(preferred: &[String]) -> &'static dyn Translation {
-    for tag in preferred {
-        let exact = LANGUAGES.iter().find(|l| {
+/// The index of the translation for the operating system's preferred languages, read once.
+fn system_index() -> usize {
+    static SYSTEM: OnceLock<usize> = OnceLock::new();
+    *SYSTEM.get_or_init(|| select(&detect::preferred_languages()))
+}
+
+/// Show the UI in the language `tag` names, as saved from the language menu, or in the system's
+/// language when `tag` is `None`. A tag no translation serves falls back as a system language does.
+pub fn set_language(tag: Option<&str>) {
+    let index = match tag {
+        Some(tag) => select(&[tag.to_owned()]),
+        None => system_index(),
+    };
+    CURRENT.store(index, Ordering::Relaxed);
+}
+
+/// The tag of the current translation, such as `ja-JP`, for choosing fonts that suit it.
+pub fn current_tag() -> &'static str {
+    current().language_tags()[0]
+}
+
+/// The name of the language the system prefers, in that language, for the menu's System option.
+pub fn system_language_name() -> &'static str {
+    LANGUAGES[system_index()].native_name()
+}
+
+/// Every language the UI ships, as the tag saved in settings and the name the menu shows.
+pub fn languages() -> impl Iterator<Item = (&'static str, &'static str)> {
+    LANGUAGES
+        .iter()
+        .map(|language| (language.language_tags()[0], language.native_name()))
+}
+
+/// The index of the translation for the first of `preferred` that one serves, by BCP 47 lookup:
+/// `zh-Hant-TW` tries `zh-Hant-TW`, `zh-TW`, `zh-Hant`, then any translation of `zh`. English when
+/// none matches.
+fn select(preferred: &[String]) -> usize {
+    let serves = |tag: &str| {
+        LANGUAGES.iter().position(|l| {
             l.language_tags()
                 .iter()
-                .any(|t| t.eq_ignore_ascii_case(tag))
-        });
+                .any(|served| served.eq_ignore_ascii_case(tag))
+        })
+    };
+    for tag in preferred {
+        if let Some(index) = lookup_candidates(tag).iter().find_map(|c| serves(c)) {
+            return index;
+        }
         let language = primary(tag);
-        let same_language = || {
-            LANGUAGES.iter().find(|l| {
-                l.language_tags()
-                    .iter()
-                    .any(|t| primary(t).eq_ignore_ascii_case(language))
-            })
-        };
-        if let Some(translation) = exact.or_else(same_language) {
-            return *translation;
+        let same_language = LANGUAGES.iter().position(|l| {
+            l.language_tags()
+                .iter()
+                .any(|served| primary(served).eq_ignore_ascii_case(language))
+        });
+        if let Some(index) = same_language {
+            return index;
         }
     }
-    &en_us::EnUs
+    0
+}
+
+/// The tags to try for `tag`, most specific first: the tag, the language with its region but no
+/// script, then the tag with its last subtag removed, again and again.
+fn lookup_candidates(tag: &str) -> Vec<String> {
+    let parts: Vec<&str> = tag.split('-').collect();
+    let mut candidates = vec![tag.to_owned()];
+    // A script is four letters: `zh-Hant-TW` also tries `zh-TW`, as Windows and Linux name it.
+    if parts.len() >= 3 && parts[1].len() == 4 {
+        candidates.push(format!("{}-{}", parts[0], parts[2]));
+    }
+    for end in (1..parts.len()).rev() {
+        candidates.push(parts[..end].join("-"));
+    }
+    candidates
 }
 
 /// The language subtag of a tag: `en` of `en-US`.
@@ -381,11 +504,12 @@ pub fn fill(template: &str, values: &[&str]) -> String {
 }
 
 fn counted(count: usize, one: &str, many: &str) -> String {
-    if count == 1 {
-        one.to_owned()
+    let template = if current().is_singular(count) {
+        one
     } else {
-        fill(many, &[&count.to_string()])
-    }
+        many
+    };
+    fill(template, &[&count.to_string()])
 }
 
 pub fn movie_count(count: usize) -> String {
@@ -412,6 +536,15 @@ pub fn file_count(count: usize) -> String {
 mod tests {
     use super::*;
 
+    fn tag(index: usize) -> &'static str {
+        LANGUAGES[index].language_tags()[0]
+    }
+
+    fn pick(preferred: &[&str]) -> &'static str {
+        let preferred: Vec<String> = preferred.iter().map(|t| (*t).to_owned()).collect();
+        tag(select(&preferred))
+    }
+
     #[test]
     fn english_has_every_string() {
         let missing: Vec<_> = all(&en_us::EnUs)
@@ -423,14 +556,70 @@ mod tests {
     }
 
     #[test]
+    fn translations_keep_every_placeholder() {
+        for language in LANGUAGES {
+            for ((name, english), (_, text)) in all(&en_us::EnUs).into_iter().zip(all(*language)) {
+                let (Some(english), Some(text)) = (english, text) else {
+                    continue;
+                };
+                for index in 0..4 {
+                    let placeholder = format!("{{{index}}}");
+                    assert_eq!(
+                        english.contains(&placeholder),
+                        text.contains(&placeholder),
+                        "{} {name} has a different {placeholder}",
+                        language.language_tags()[0],
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn tags_are_unique() {
+        let mut seen = Vec::new();
+        for language in LANGUAGES {
+            for served in language.language_tags() {
+                assert!(!seen.contains(served), "{served} is served twice");
+                seen.push(served);
+            }
+        }
+    }
+
+    #[test]
     fn falls_back_to_english() {
-        assert_eq!(select(&[]).language_tags()[0], "en-US");
-        assert_eq!(select(&["xx-YY".into()]).language_tags()[0], "en-US");
+        assert_eq!(pick(&[]), "en-US");
+        assert_eq!(pick(&["xx-YY"]), "en-US");
+    }
+
+    #[test]
+    fn takes_the_first_language_served() {
+        assert_eq!(pick(&["xx-YY", "fr-CA", "de-DE"]), "fr-FR");
     }
 
     #[test]
     fn matches_another_region_of_a_language() {
-        assert_eq!(select(&["en-GB".into()]).language_tags()[0], "en-US");
+        assert_eq!(pick(&["en-GB"]), "en-US");
+        assert_eq!(pick(&["nl-BE"]), "nl-NL");
+        assert_eq!(pick(&["es-419"]), "es-ES");
+    }
+
+    #[test]
+    fn tells_chinese_scripts_apart() {
+        assert_eq!(pick(&["zh-Hans-CN"]), "zh-Hans");
+        assert_eq!(pick(&["zh-Hant-TW"]), "zh-Hant");
+        assert_eq!(pick(&["zh-TW"]), "zh-Hant");
+        assert_eq!(pick(&["zh-HK"]), "zh-Hant");
+        assert_eq!(pick(&["zh-CN"]), "zh-Hans");
+        assert_eq!(pick(&["zh"]), "zh-Hans");
+    }
+
+    #[test]
+    fn tells_portuguese_regions_apart() {
+        assert_eq!(pick(&["pt-BR"]), "pt-BR");
+        assert_eq!(pick(&["pt-PT"]), "pt-PT");
+        assert_eq!(pick(&["pt-AO"]), "pt-PT");
+        assert_eq!(pick(&["pt"]), "pt-BR");
     }
 
     #[test]
@@ -439,8 +628,9 @@ mod tests {
     }
 
     #[test]
-    fn counts_use_the_singular_for_one() {
-        assert_eq!(album_count(1), "1 album");
-        assert_eq!(album_count(3), "3 albums");
+    fn french_counts_zero_as_singular() {
+        assert!(fr_fr::FrFr.is_singular(0));
+        assert!(!en_us::EnUs.is_singular(0));
+        assert!(!fr_fr::FrFr.is_singular(2));
     }
 }

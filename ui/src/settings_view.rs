@@ -24,6 +24,8 @@ pub enum Action {
     RescanFolder(usize),
     RescanAll,
     SetTheme(Theme),
+    /// The language tag to show the UI in, or `None` to follow the system.
+    SetLanguage(Option<String>),
     SetReplayGain(ReplayGainMode),
     SetCrossfade(f32),
     SetLyricsOnline(bool),
@@ -37,6 +39,30 @@ fn kinds() -> [(LibraryKind, &'static str); 2] {
         (LibraryKind::Music, i18n::music()),
         (LibraryKind::Movies, i18n::movies()),
     ]
+}
+
+/// The language menu: the system's language first, then every translation by its own name. Returns
+/// the choice when the user makes a new one.
+fn language_menu(ui: &mut egui::Ui, settings: &Settings) -> Option<Option<String>> {
+    let system = i18n::fill(i18n::language_system(), &[i18n::system_language_name()]);
+    let saved = settings.language.as_deref();
+    let selected = saved
+        .and_then(|tag| {
+            i18n::languages()
+                .find(|(served, _)| served.eq_ignore_ascii_case(tag))
+                .map(|(_, name)| name.to_owned())
+        })
+        .unwrap_or_else(|| system.clone());
+    let mut choice = settings.language.clone();
+    egui::ComboBox::from_id_salt("settings_language")
+        .selected_text(selected)
+        .show_ui(ui, |ui| {
+            ui.selectable_value(&mut choice, None, system);
+            for (tag, name) in i18n::languages() {
+                ui.selectable_value(&mut choice, Some(tag.to_owned()), name);
+            }
+        });
+    (choice != settings.language).then_some(choice)
 }
 
 /// The colours of the Library section for the current theme.
@@ -578,6 +604,23 @@ pub fn show(
                                     segmented(ui, &colours, &themes, settings.theme)
                                 {
                                     action = Some(Action::SetTheme(theme));
+                                }
+                            },
+                        );
+                        ui.add_space(14.0);
+                        setting_row(
+                            ui,
+                            egui::Align::Center,
+                            |ui| {
+                                ui.label(
+                                    egui::RichText::new(i18n::language())
+                                        .size(14.0)
+                                        .color(colours.weak),
+                                );
+                            },
+                            |ui| {
+                                if let Some(language) = language_menu(ui, settings) {
+                                    action = Some(Action::SetLanguage(language));
                                 }
                             },
                         );

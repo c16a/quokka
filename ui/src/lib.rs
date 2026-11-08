@@ -204,7 +204,9 @@ impl App {
             .parent()
             .unwrap_or(std::path::Path::new("."))
             .join("artist-photos");
+        i18n::set_language(settings.language.as_deref());
         fonts::install(&ctx);
+        fonts::use_language(&ctx, i18n::current_tag());
         // Buttons grow a little when hovered, which made them flicker under the pointer.
         ctx.all_styles_mut(|style| {
             // Hovering only changes colour: size, expansion and stroke width stay the same in every
@@ -358,7 +360,7 @@ impl App {
         };
         match rx.try_recv() {
             Ok(Ok(count)) => {
-                self.status = format!("Radio: {count} stations.");
+                self.status = i18n::fill(i18n::radio_station_count(), &[&count.to_string()]);
                 self.radio.reload(&self.library);
             }
             Ok(Err(e)) => self.status = i18n::fill(i18n::radio_sync_failed(), &[&e.to_string()]),
@@ -373,7 +375,7 @@ impl App {
     fn set_lyrics_online(&mut self, on: bool) {
         self.settings.lyrics_online = on;
         if let Err(e) = self.settings.save(&self.paths.settings) {
-            self.status = format!("Could not save settings: {e}");
+            self.status = i18n::fill(i18n::could_not_save_settings(), &[&e.to_string()]);
         }
     }
 
@@ -501,18 +503,18 @@ impl App {
             let _ = tx.send(result);
             ctx.request_repaint();
         });
-        let more = match self.queue.len() {
-            0 => String::new(),
-            n => format!(" ({n} more queued)"),
+        let folder = root.display().to_string();
+        self.status = match self.queue.len() {
+            0 => i18n::fill(i18n::scanning_folder(), &[&folder]),
+            n => i18n::fill(i18n::scanning_folder_queued(), &[&folder, &n.to_string()]),
         };
-        self.status = format!("Scanning {}{more}…", root.display());
         self.scan = Some((root, rx));
     }
 
     /// Save the folder list and watch all of its folders again.
     fn save_and_watch(&mut self, ctx: &egui::Context) {
         if let Err(e) = self.settings.save(&self.paths.settings) {
-            self.status = format!("Could not save settings: {e}");
+            self.status = i18n::fill(i18n::could_not_save_settings(), &[&e.to_string()]);
         }
         self.watch(ctx);
     }
@@ -577,19 +579,25 @@ impl App {
         let line = match result {
             Ok(scanned) => {
                 let stats = scanned.stats;
-                let mut line = format!(
-                    "{name}: {} added or changed, {} unchanged, {} removed.",
-                    stats.indexed, stats.unchanged, stats.removed
-                );
+                let mut sentences = vec![i18n::fill(
+                    i18n::scan_summary(),
+                    &[
+                        &name,
+                        &stats.indexed.to_string(),
+                        &stats.unchanged.to_string(),
+                        &stats.removed.to_string(),
+                    ],
+                )];
                 if scanned.matched > 0 {
-                    line.push_str(&format!(" {} matched on TMDb.", scanned.matched));
-                }
-                if let Some(e) = scanned.lookup_error {
-                    line.push_str(&format!(
-                        " TMDb lookup stopped ({e}); it will be tried again on the next scan."
+                    sentences.push(i18n::fill(
+                        i18n::matched_on_tmdb(),
+                        &[&scanned.matched.to_string()],
                     ));
                 }
-                line
+                if let Some(e) = scanned.lookup_error {
+                    sentences.push(i18n::fill(i18n::tmdb_lookup_stopped(), &[&e.to_string()]));
+                }
+                sentences.join(" ")
             }
             // One unreadable folder (for example an unplugged drive) doesn't stop the others.
             Err(e) => i18n::fill(
@@ -821,7 +829,7 @@ impl eframe::App for App {
         if let Some(speed) = self.playback.take_speed_change() {
             self.settings.playback_speed = speed;
             if let Err(e) = self.settings.save(&self.paths.settings) {
-                self.status = format!("Could not save settings: {e}");
+                self.status = i18n::fill(i18n::could_not_save_settings(), &[&e.to_string()]);
             }
         }
         // An album clicked in the bar opens on the album page.
@@ -829,7 +837,7 @@ impl eframe::App for App {
             if self.albums.open_by_name(&self.library, &name) {
                 self.tab = Tab::Albums;
             } else {
-                self.status = format!("Could not find the album {name}");
+                self.status = i18n::fill(i18n::could_not_find_album(), &[&name]);
             }
         }
         let panel = self.playback.panel;
@@ -1007,14 +1015,14 @@ impl eframe::App for App {
             Some(radio::RadioAction::TogglePlayback) => self.playback.toggle(),
             Some(radio::RadioAction::TuneInAndPlay(station)) => {
                 if let Err(e) = self.library.tune_in(&station) {
-                    self.status = format!("Could not tune in: {e}");
+                    self.status = i18n::fill(i18n::could_not_tune_in(), &[&e.to_string()]);
                 }
                 self.radio.reload(&self.library);
                 self.playback.tune(station);
             }
             Some(radio::RadioAction::TuneOut(uuid)) => {
                 if let Err(e) = self.library.tune_out(&uuid) {
-                    self.status = format!("Could not tune out: {e}");
+                    self.status = i18n::fill(i18n::could_not_tune_out(), &[&e.to_string()]);
                 }
                 self.radio.reload(&self.library);
             }
@@ -1039,7 +1047,10 @@ impl eframe::App for App {
                 MenuRequest::AddToPlaylist { playlist, media_id } => {
                     match self.library.add_to_playlist(playlist, &[media_id]) {
                         Ok(()) => self.playlists.reload(&self.library),
-                        Err(e) => self.status = format!("Could not add to playlist: {e}"),
+                        Err(e) => {
+                            self.status =
+                                i18n::fill(i18n::could_not_add_to_playlist(), &[&e.to_string()])
+                        }
                     }
                 }
             }
@@ -1048,7 +1059,8 @@ impl eframe::App for App {
         match action {
             Some(settings_view::Action::AddFolder { path, kind }) => {
                 if self.settings.library_roots.contains(&path) {
-                    self.status = format!("{} is already in the library.", path.display());
+                    self.status =
+                        i18n::fill(i18n::already_in_library(), &[&path.display().to_string()]);
                 } else {
                     self.settings.library_roots.push(path.clone());
                     self.settings.set_library_kind(&path, kind);
@@ -1060,7 +1072,8 @@ impl eframe::App for App {
                 if let Some(root) = self.settings.library_roots.get(index).cloned() {
                     self.settings.set_library_kind(&root, kind);
                     if let Err(e) = self.settings.save(&self.paths.settings) {
-                        self.status = format!("Could not save settings: {e}");
+                        self.status =
+                            i18n::fill(i18n::could_not_save_settings(), &[&e.to_string()]);
                     }
                 }
             }
@@ -1070,8 +1083,14 @@ impl eframe::App for App {
                     self.settings.forget_library_kind(&root);
                     self.queue.retain(|queued| *queued != root);
                     self.status = match self.library.forget_root(&root) {
-                        Ok(removed) => format!("Removed {} ({removed} files).", root.display()),
-                        Err(e) => format!("Could not remove {}: {e}", root.display()),
+                        Ok(removed) => i18n::fill(
+                            i18n::removed_folder(),
+                            &[&root.display().to_string(), &i18n::file_count(removed)],
+                        ),
+                        Err(e) => i18n::fill(
+                            i18n::could_not_remove_folder(),
+                            &[&root.display().to_string(), &e.to_string()],
+                        ),
                     };
                     self.reload_views();
                     self.save_and_watch(&ctx);
@@ -1090,28 +1109,38 @@ impl eframe::App for App {
             Some(settings_view::Action::SetCrossfade(secs)) => {
                 self.settings.crossfade_secs = secs;
                 if let Err(e) = self.settings.save(&self.paths.settings) {
-                    self.status = format!("Could not save settings: {e}");
+                    self.status = i18n::fill(i18n::could_not_save_settings(), &[&e.to_string()]);
                 }
             }
             Some(settings_view::Action::SetTmdbKey(key)) => {
                 self.settings.tmdb_api_key = (!key.is_empty()).then_some(key);
                 match self.settings.save(&self.paths.settings) {
                     Ok(()) => self.status = i18n::saved_the_tmdb_key().into(),
-                    Err(e) => self.status = format!("Could not save settings: {e}"),
+                    Err(e) => {
+                        self.status = i18n::fill(i18n::could_not_save_settings(), &[&e.to_string()])
+                    }
                 }
             }
             Some(settings_view::Action::SetReplayGain(mode)) => {
                 self.settings.replay_gain = mode;
                 self.playback.set_replay_gain(mode);
                 if let Err(e) = self.settings.save(&self.paths.settings) {
-                    self.status = format!("Could not save settings: {e}");
+                    self.status = i18n::fill(i18n::could_not_save_settings(), &[&e.to_string()]);
+                }
+            }
+            Some(settings_view::Action::SetLanguage(language)) => {
+                i18n::set_language(language.as_deref());
+                fonts::use_language(&ctx, i18n::current_tag());
+                self.settings.language = language;
+                if let Err(e) = self.settings.save(&self.paths.settings) {
+                    self.status = i18n::fill(i18n::could_not_save_settings(), &[&e.to_string()]);
                 }
             }
             Some(settings_view::Action::SetTheme(theme)) => {
                 self.settings.theme = theme;
                 ctx.set_theme(preference(theme));
                 if let Err(e) = self.settings.save(&self.paths.settings) {
-                    self.status = format!("Could not save settings: {e}");
+                    self.status = i18n::fill(i18n::could_not_save_settings(), &[&e.to_string()]);
                 }
             }
             None => {}

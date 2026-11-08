@@ -67,6 +67,10 @@ pub struct Settings {
     /// Left out of the file when unset.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tmdb_api_key: Option<String>,
+    /// The language tag the UI is shown in, such as `de-DE`, or `None` to follow the operating
+    /// system. Left out of the file when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
 }
 
 fn default_speed() -> f32 {
@@ -85,6 +89,7 @@ impl Default for Settings {
             crossfade_secs: 0.0,
             playback_speed: 1.0,
             tmdb_api_key: None,
+            language: None,
         }
     }
 }

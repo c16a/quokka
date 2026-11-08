@@ -210,13 +210,17 @@ impl<W: egui::Widget> SquircleButton<W> {
         // Labels in a button are not selectable, so hovering them keeps the arrow cursor instead of
         // changing to the text cursor.
         content.style_mut().interaction.selectable_labels = false;
+        let layer = content.layer_id();
+        let first_shape = next_shape(ui.ctx(), layer);
         let used = self.child.ui(&mut content).rect;
+        let shapes = first_shape..next_shape(ui.ctx(), layer);
 
         let outer = egui::Rect::from_min_max(
             used.min - egui::vec2(padding.left, padding.top),
             used.max + egui::vec2(padding.right, padding.bottom),
         );
         let outer = grow_to_height(outer, self.min_height);
+        centre_ink_vertically(ui.ctx(), layer, shapes, outer.center().y);
         let response = ui.allocate_rect(outer, egui::Sense::click());
         let hover = ui.ctx().animate_bool_with_time(
             response.id.with("squircle_hover"),
@@ -235,6 +239,68 @@ impl<W: egui::Widget> SquircleButton<W> {
         }
         response
     }
+}
+
+/// The index the next shape painted on `layer` will take.
+fn next_shape(ctx: &egui::Context, layer: egui::LayerId) -> usize {
+    ctx.graphics_mut(|graphics| graphics.entry(layer).next_idx().0)
+}
+
+/// Move the shapes in `range` on `layer` up or down together, so the ink of their text is centred on
+/// `centre_y`. The ink is what the glyphs actually cover, so text sits in the middle whatever its
+/// font: a font's line height can include space above or below its letters, and fonts that fill in
+/// for characters Inter lacks (Hiragino, PingFang) have different line heights from Inter's.
+/// Nothing moves when the shapes hold no text.
+fn centre_ink_vertically(
+    ctx: &egui::Context,
+    layer: egui::LayerId,
+    range: std::ops::Range<usize>,
+    centre_y: f32,
+) {
+    let pixels_per_point = ctx.pixels_per_point();
+    ctx.graphics_mut(|graphics| {
+        let list = graphics.entry(layer);
+        let ink = list
+            .all_entries()
+            .skip(range.start)
+            .take(range.len())
+            .filter_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(text) => text_ink(text),
+                _ => None,
+            })
+            .reduce(egui::Rect::union);
+        let Some(ink) = ink else {
+            return;
+        };
+        // Whole pixels, so the glyphs stay sharp.
+        let dy = ((centre_y - ink.center().y) * pixels_per_point).round() / pixels_per_point;
+        if dy != 0.0 {
+            list.transform_range(
+                egui::layers::ShapeIdx(range.start),
+                egui::layers::ShapeIdx(range.end),
+                egui::emath::TSTransform::from_translation(egui::vec2(0.0, dy)),
+            );
+        }
+    });
+}
+
+/// The rectangle the glyphs of `text` cover when painted, or `None` for text with no visible glyphs.
+fn text_ink(text: &egui::epaint::TextShape) -> Option<egui::Rect> {
+    text.galley
+        .rows
+        .iter()
+        .flat_map(|placed| {
+            placed.row.glyphs.iter().filter_map(move |glyph| {
+                let uv = glyph.uv_rect;
+                (!uv.is_nothing()).then(|| {
+                    egui::Rect::from_min_size(
+                        text.pos + placed.pos.to_vec2() + glyph.pos.to_vec2() + uv.offset,
+                        uv.size,
+                    )
+                })
+            })
+        })
+        .reduce(egui::Rect::union)
 }
 
 /// `rect` made taller about its centre, if it is shorter than `height`.
@@ -714,6 +780,34 @@ mod tests {
         });
         assert!((button_size.x - (child_size.x + padding.horizontal())).abs() < 1e-3);
         assert!((button_size.y - (child_size.y + padding.vertical())).abs() < 1e-3);
+    }
+
+    #[test]
+    fn a_button_centres_the_ink_of_its_text() {
+        let ctx = egui::Context::default();
+        let mut button_rect = egui::Rect::NOTHING;
+        // Two frames, so the fonts are loaded and the glyphs have their real sizes.
+        let mut output = None;
+        for _ in 0..2 {
+            output = Some(ctx.run_ui(egui::RawInput::default(), |ui| {
+                button_rect = text_button(ui, "Rescan").rect;
+            }));
+        }
+        let ink = output
+            .expect("a frame ran")
+            .shapes
+            .iter()
+            .find_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(shape) if shape.galley.text() == "Rescan" => text_ink(shape),
+                _ => None,
+            })
+            .expect("the button's text is painted");
+        assert!(
+            (ink.center().y - button_rect.center().y).abs() <= 0.5,
+            "ink centred at {} in a button centred at {}",
+            ink.center().y,
+            button_rect.center().y
+        );
     }
 
     #[test]

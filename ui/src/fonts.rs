@@ -7,6 +7,9 @@ use std::sync::Arc;
 
 use eframe::egui::{self, FontData, FontDefinitions, FontFamily, TextStyle};
 
+/// Inter's regular weight.
+const INTER_REGULAR: &[u8] = include_bytes!("../assets/fonts/Inter-Regular.ttf");
+
 /// The bold weight, for emphasis.
 const BOLD: &str = "Inter Bold";
 /// The semibold weight, for headings.
@@ -19,10 +22,7 @@ const ICONS_FILLED: &str = "Phosphor Fill";
 pub fn install(ctx: &egui::Context) {
     let mut fonts = FontDefinitions::default();
     let faces: [(&str, &'static [u8]); 3] = [
-        (
-            "Inter",
-            &include_bytes!("../assets/fonts/Inter-Regular.ttf")[..],
-        ),
+        ("Inter", INTER_REGULAR),
         (
             SEMIBOLD,
             &include_bytes!("../assets/fonts/Inter-SemiBold.ttf")[..],
@@ -72,6 +72,15 @@ pub fn install(ctx: &egui::Context) {
             heading.family = FontFamily::Name(SEMIBOLD.into());
         }
     });
+}
+
+/// Find characters Inter lacks, such as kana and Han, in the system's fonts, choosing between fonts
+/// of one script by `language`, a BCP 47 tag. Japanese and Chinese share Han characters but draw
+/// them differently, so a Japanese UI asks for a Japanese font even on an English system.
+pub fn use_language(ctx: &egui::Context, language: &str) {
+    ctx.set_font_providers(vec![Arc::new(
+        egui_system_font_provider::SystemFontProvider::new().with_locale(Some(language)),
+    )]);
 }
 
 /// The family of the Phosphor icon font.
