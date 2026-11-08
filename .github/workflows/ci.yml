@@ -21,7 +21,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-26, ubuntu-24.04]
+        os: [macos-26, ubuntu-26.04, ubuntu-26.04-arm]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:
@@ -64,8 +64,10 @@ jobs:
         include:
           - os: macos-26
             category: /language:rust
-          - os: ubuntu-24.04
+          - os: ubuntu-26.04
             category: /language:rust/linux
+          - os: ubuntu-26.04-arm
+            category: /language:rust/linux-arm
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     permissions:
