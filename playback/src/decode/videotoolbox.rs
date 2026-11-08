@@ -20,6 +20,7 @@ const UTF8: u32 = 0x0800_0100;
 const TIME_FLAG_VALID: u32 = 1;
 const CODEC_H264: u32 = u32::from_be_bytes(*b"avc1");
 const CODEC_HEVC: u32 = u32::from_be_bytes(*b"hvc1");
+const CODEC_AV1: u32 = u32::from_be_bytes(*b"av01");
 
 /// A Core Media time: a count of ticks, and how many ticks make a second.
 #[repr(C)]
@@ -303,6 +304,9 @@ impl VideoToolbox {
         let (codec, record_key) = match stream.codec {
             Codec::H264 => (CODEC_H264, "avcC"),
             Codec::Hevc => (CODEC_HEVC, "hvcC"),
+            // AV1 only on machines whose hardware decodes it. Elsewhere VideoToolbox would decode in
+            // software, which the software decoder does already.
+            Codec::Av1 if Self::hardware_supported(Codec::Av1) => (CODEC_AV1, "av1C"),
             other => {
                 return Err(refused(format!("{} is not decoded here", other.name())));
             }
@@ -365,6 +369,7 @@ impl VideoToolbox {
         let codec = match codec {
             Codec::H264 => CODEC_H264,
             Codec::Hevc => CODEC_HEVC,
+            Codec::Av1 => CODEC_AV1,
             _ => return false,
         };
         // SAFETY: the function takes a codec type and returns a flag.
