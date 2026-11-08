@@ -42,20 +42,16 @@ pub fn show(
     update(ui, rect, response, value, range, step)
 }
 
-/// A slider in `rect`, which the caller places. `salt` tells it apart from the other widgets of the ui.
+/// A slider in `rect`, which the caller places. `id` tells it apart from the other widgets of the ui.
 pub fn show_in(
     ui: &mut egui::Ui,
     rect: egui::Rect,
-    salt: &str,
+    id: &str,
     value: &mut f64,
     range: RangeInclusive<f64>,
     step: f64,
 ) -> egui::Response {
-    let response = ui.interact(
-        rect,
-        ui.scope_id().with(salt),
-        egui::Sense::click_and_drag(),
-    );
+    let response = ui.interact(rect, ui.scope_id().with(id), egui::Sense::click_and_drag());
     update(ui, rect, response, value, range, step)
 }
 
