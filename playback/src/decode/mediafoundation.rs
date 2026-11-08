@@ -104,19 +104,27 @@ impl MediaFoundation {
         let activation =
             find_decoder(subtype)?.ok_or_else(|| unsupported(missing_decoder(stream.codec)))?;
         // SAFETY: the activation object is alive, and the transform it creates is owned by the result.
-        let transform: IMFTransform =
-            unsafe { activation.ActivateObject() }.map_err(backend_error)?;
+        let transform: IMFTransform = unsafe { activation.ActivateObject() }
+            .map_err(|error| step_error("ActivateObject", error))?;
         let events = configure(&transform)?;
 
         let input = input_type(subtype, stream.width, stream.height, &parameter_sets)?;
         // SAFETY: the transform and the media type are valid for the call.
-        unsafe { transform.SetInputType(0, &input, 0) }.map_err(backend_error)?;
-        for message in [
-            MFT_MESSAGE_NOTIFY_BEGIN_STREAMING,
-            MFT_MESSAGE_NOTIFY_START_OF_STREAM,
+        unsafe { transform.SetInputType(0, &input, 0) }
+            .map_err(|error| step_error("SetInputType", error))?;
+        for (name, message) in [
+            (
+                "ProcessMessage(BEGIN_STREAMING)",
+                MFT_MESSAGE_NOTIFY_BEGIN_STREAMING,
+            ),
+            (
+                "ProcessMessage(START_OF_STREAM)",
+                MFT_MESSAGE_NOTIFY_START_OF_STREAM,
+            ),
         ] {
             // SAFETY: the transform is valid, and the message takes no parameter.
-            unsafe { transform.ProcessMessage(message, 0) }.map_err(backend_error)?;
+            unsafe { transform.ProcessMessage(message, 0) }
+                .map_err(|error| step_error(name, error))?;
         }
 
         let mut decoder = MediaFoundation {
@@ -274,20 +282,23 @@ impl MediaFoundation {
                         }
                     )));
                 }
-                Err(error) => return Err(backend_error(error)),
+                Err(error) => return Err(step_error("GetOutputAvailableType", error)),
             };
             index += 1;
             // SAFETY: the media type is alive, and the key is a constant.
-            let subtype = unsafe { media.GetGUID(&MF_MT_SUBTYPE) }.map_err(backend_error)?;
+            let subtype = unsafe { media.GetGUID(&MF_MT_SUBTYPE) }
+                .map_err(|error| step_error("GetGUID(SUBTYPE)", error))?;
             if subtype != wanted {
                 continue;
             }
             // SAFETY: the transform and the offered type are valid for the call.
-            unsafe { self.transform.SetOutputType(0, &media, 0) }.map_err(backend_error)?;
+            unsafe { self.transform.SetOutputType(0, &media, 0) }
+                .map_err(|error| step_error("SetOutputType", error))?;
 
             // The frame size is packed as width in the high 32 bits and height in the low 32.
             // SAFETY: the media type is alive, and the key is a constant.
-            let packed = unsafe { media.GetUINT64(&MF_MT_FRAME_SIZE) }.map_err(backend_error)?;
+            let packed = unsafe { media.GetUINT64(&MF_MT_FRAME_SIZE) }
+                .map_err(|error| step_error("GetUINT64(FRAME_SIZE)", error))?;
             self.frame_width = (packed >> 32) as usize;
             self.frame_height = (packed & 0xFFFF_FFFF) as usize;
             let bytes = if self.bit_depth > 8 { 2 } else { 1 };
@@ -300,7 +311,8 @@ impl MediaFoundation {
                 Err(_) => self.frame_width * bytes,
             };
             // SAFETY: the transform is alive.
-            let info = unsafe { self.transform.GetOutputStreamInfo(0) }.map_err(backend_error)?;
+            let info = unsafe { self.transform.GetOutputStreamInfo(0) }
+                .map_err(|error| step_error("GetOutputStreamInfo", error))?;
             self.provides_samples =
                 (info.dwFlags & MFT_OUTPUT_STREAM_PROVIDES_SAMPLES.0 as u32) != 0;
             // A frame holds its luma and half as much chroma again, so one and a half times the
@@ -586,6 +598,14 @@ fn missing_decoder(codec: Codec) -> String {
                 .into()
         }
         other => format!("Windows has no decoder for {}", other.name()),
+    }
+}
+
+/// A failure from one named Media Foundation call, with its HRESULT, so a log says which call failed.
+fn step_error(step: &str, error: windows::core::Error) -> DecodeError {
+    DecodeError::Failed {
+        backend: BACKEND,
+        reason: format!("{step} returned {:#010X}", error.code().0 as u32),
     }
 }
 
