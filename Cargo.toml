@@ -67,3 +67,8 @@ lto = "fat"
 codegen-units = 1
 panic = "abort"
 strip = "symbols"
+
+# `block` 0.1.6 has a future-incompatibility error (an uninhabited static). souvlaki (macOS media
+# controls) pins it, so use a patched copy until souvlaki stops depending on it. See vendor/block/PATCH.md.
+[patch.crates-io]
+block = { path = "vendor/block" }
